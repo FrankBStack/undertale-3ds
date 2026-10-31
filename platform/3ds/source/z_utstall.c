@@ -321,7 +321,7 @@ static UTSTALL_TEXT bool usMayDrop(const CtrTextureCache* cache, uint32_t i, con
 // Drops copies item 4 may drop, least recently used first, until `size` bytes more fit the packed budget and leave
 // `reserve` of the heap free. First proves that enough can go, so a page that can't fit drops nothing. Returns whether
 // it fits; *dropped gets what went, *needed and *eligible what was needed and what could go.
-static UTSTALL_TEXT bool usMakeRoom(CtrTextureCache* cache, const uint32_t* pages, uint32_t count, uint32_t size, uint32_t reserve,
+static UTSTALL_TEXT CTR_COLD_OS bool usMakeRoom(CtrTextureCache* cache, const uint32_t* pages, uint32_t count, uint32_t size, uint32_t reserve,
                                     uint32_t* dropped, uint32_t* needed, uint32_t* eligible) {
     *dropped = 0;
     *needed = 0;
@@ -430,7 +430,7 @@ static UTFLCUT_TEXT void utflCutOrder(uint32_t* pages, uint32_t count, const uin
 //    same pages in this frame), so its read-ahead and first-frame loads take the tiles from RAM.
 //    Item 5 (whole set): the set's pages are looked at too, after the record's, and a page is read whole when a fifth
 //    of its tiles are wanted by the record or set and missing, as many pages as fit.
-static UTSTALL_TEXT void usKeepPlanned(CtrTextureCache* cache, uint32_t room) {
+static UTSTALL_TEXT CTR_COLD_OS void usKeepPlanned(CtrTextureCache* cache, uint32_t room) {
     if (cache->worker == nullptr || cache->packedBudgetBytes == 0 || cache->roomTiles == nullptr) return;
     const uint32_t* entries = cache->roomTiles[room];
     uint32_t pages[UTSTALL_KEEP_PAGES];
@@ -532,7 +532,7 @@ static UTSTALL_TEXT void usKeepPlanned(CtrTextureCache* cache, uint32_t room) {
 //    (usDemandPages: most missing bytes first) get copies, as item 4 gives them, until the limit. A copy of a page with
 //    a scene tile still missing (one the room load didn't reach in time, say) is never dropped for them.
 #define UTSTALL_KEEP_SMALL (256u * 1024u)
-static UTSTALL_TEXT void usKeepDemand(CtrTextureCache* cache, uint64_t limit) {
+static UTSTALL_TEXT CTR_COLD_OS void usKeepDemand(CtrTextureCache* cache, uint64_t limit) {
     if (cache->worker == nullptr || cache->packedBudgetBytes == 0 || us.scene == nullptr) return;
     RoomPlanScene s;
     memcpy(&s, us.scene, sizeof(s));
@@ -630,7 +630,7 @@ static UTSTALL_TEXT void usKeepDemand(CtrTextureCache* cache, uint64_t limit) {
 
 // 1. A battle room's record: its battle group's planned tiles of the first ROOMPLAN_SEED_FRAMES frames, in place of
 //    the last fight's (or the plan's tiles common to every fight), before the original marks the remembered tiles.
-UTSTALL_TEXT void __wrap_CtrRoomload_prefetchRoom(CtrTextureCache* cache, Runner* runner) {
+UTSTALL_TEXT CTR_COLD_OS void __wrap_CtrRoomload_prefetchRoom(CtrTextureCache* cache, Runner* runner) {
     memset(&us, 0, sizeof(us));
     us.room = -1;
     us.group = -1;
@@ -689,7 +689,7 @@ UTSTALL_TEXT void __wrap_CtrRoomload_prefetchRoom(CtrTextureCache* cache, Runner
 // (not drawn first) and the room load's passes run again for them, so they never take time or budget from the room's
 // own tiles (review F3). Marked tiles it didn't load are no longer wanted. Only pages whose layout is known are marked:
 // learning one opens its cache file or loads its image (review F1), and the room load's passes skip such pages anyway.
-UTSTALL_TEXT void usRoomLoadFinish(CtrTextureCache* cache, uint64_t deadline, uint32_t* nowTiles, uint32_t* otherTiles) {
+UTSTALL_TEXT CTR_COLD_OS void usRoomLoadFinish(CtrTextureCache* cache, uint64_t deadline, uint32_t* nowTiles, uint32_t* otherTiles) {
     uint64_t start = nowNanos();
     bool ours = us.cache == cache && cache != nullptr && us.runner != nullptr && 0 <= us.room;
     uint64_t limit = ours && us.battleTiles > 0 ? deadline + UTSTALL_EXTRA_NANOS : deadline;

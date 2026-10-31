@@ -9,11 +9,16 @@
 #include "ctr_data_version.h"
 #include <stdint.h>
 
-// CtrAudioSystem_shedSfx (UNDERTALE): flowend -> flowburst -> utflowey2 (Old only, CTRPORT_PKLIN) -> real.
+// CtrAudioSystem_shedSfx (UNDERTALE): flowend -> flowhitch -> flowburst -> utflowey2 (Old only, CTRPORT_PKLIN) ->
+// real.
 //   flowend (ctr_audio_system.c's end): the room's planned sounds count as just played during the shed.
+//   flowhitch (ctr_audio_system.c, before flowend's beginSfxPlan wrap): the sounds this shed frees play as streams
+//   until the next room change.
 //   flowburst (ctr_audio_system.c's end): the step's deferred voices start before the shed picks its victims.
 //   utflowey2 (z_utstall.c's end): after the sound effects' shed, idle linear copies go before any tile.
-#define CTR_SHEDSFX_AFTER_FLOWEND CtrAudioSystem_chainFlowburst
+#define CTR_SHEDSFX_AFTER_FLOWEND CtrAudioSystem_chainFlowhitch
+uint32_t CtrAudioSystem_chainFlowhitch(uint32_t bytes);
+#define CTR_SHEDSFX_AFTER_FLOWHITCH CtrAudioSystem_chainFlowburst
 uint32_t CtrAudioSystem_chainFlowburst(uint32_t bytes);
 #ifdef CTRPORT_PKLIN
 #define CTR_SHEDSFX_AFTER_FLOWBURST CtrAudioSystem_chainPklin
@@ -21,6 +26,11 @@ uint32_t CtrAudioSystem_chainPklin(uint32_t bytes);
 #else
 #define CTR_SHEDSFX_AFTER_FLOWBURST __real_CtrAudioSystem_shedSfx
 #endif
+
+// CtrAudioSystem_beginSfxPlan (UNDERTALE): flowend -> flowhitch -> real.
+//   flowhitch (ctr_audio_system.c, before flowend's wrap): the sounds the last room shed may be decoded into the cache again.
+#define CTR_BEGINSFXPLAN_AFTER_FLOWEND CtrAudioSystem_chainPlanFlowhitch
+void CtrAudioSystem_chainPlanFlowhitch(void);
 
 // UNDERTALE's bench-only alternate root precedes the ordinary argument parser.
 #ifdef CTRPORT_GOG_COMPAT
@@ -89,8 +99,8 @@ CtrDataVersionResult CTR_DATAVERSION_CRISPART(CTR_DATAVERSION_CHAIN_PARAMS);
 CtrDataVersionResult CTR_DATAVERSION_UTSFX(CTR_DATAVERSION_CHAIN_PARAMS);
 #endif
 
-// CtrRenderer_prefetchRoom: roomplan -> [textfront -> (writerfront -> trailfront -> itemfront) -> dodgefront, UNDERTALE Old
-// 3DS only] -> real.
+// CtrRenderer_prefetchRoom: roomplan -> [flowhitch, UNDERTALE] -> [textfront -> (writerfront -> trailfront ->
+// itemfront) -> dodgefront, UNDERTALE Old 3DS only] -> real.
 //   roomplan (z_roomplan.c): reads the room's planned code entries back.
 //   textfront (z_textfront.c): binds the centred-text scripts' hand fronts first, then calls the next link.
 //   writerfront (z_writerfront.c; not in build.sh's nowriterfront builds): binds the dialogue writer's Draw front.
@@ -101,7 +111,7 @@ CtrDataVersionResult CTR_DATAVERSION_UTSFX(CTR_DATAVERSION_CHAIN_PARAMS);
 #ifdef CTRPORT_DODGEFRONT
 #define CTR_PREFETCHROOM_TEXTFRONT CtrRenderer_chainTextfront
 #define CTR_PREFETCHROOM_DODGEFRONT CtrRenderer_chainDodgefront
-#define CTR_PREFETCHROOM_AFTER_ROOMPLAN CTR_PREFETCHROOM_TEXTFRONT
+#define CTR_PREFETCHROOM_AFTER_FLOWHITCH CTR_PREFETCHROOM_TEXTFRONT
 #ifdef CTRPORT_WRITERFRONT
 #define CTR_PREFETCHROOM_WRITERFRONT CtrRenderer_chainWriterfront
 #define CTR_PREFETCHROOM_AFTER_TEXTFRONT CTR_PREFETCHROOM_WRITERFRONT
@@ -121,7 +131,16 @@ struct Renderer;
 void CTR_PREFETCHROOM_TEXTFRONT(struct Renderer* renderer);
 void CTR_PREFETCHROOM_DODGEFRONT(struct Renderer* renderer);
 #else
-#define CTR_PREFETCHROOM_AFTER_ROOMPLAN __real_CtrRenderer_prefetchRoom
+#define CTR_PREFETCHROOM_AFTER_FLOWHITCH __real_CtrRenderer_prefetchRoom
+#endif
+// flowhitch (ctr_audio_system.c, UNDERTALE with Tremor): marks the room for the musical's song spares, then the next
+// link (roomplan -> flowhitch -> the rest).
+#if defined(ENABLE_WAD16) && defined(CTRPORT_HAVE_TREMOR)
+#define CTR_PREFETCHROOM_AFTER_ROOMPLAN CtrRenderer_chainFlowhitch
+struct Renderer;
+void CtrRenderer_chainFlowhitch(struct Renderer* renderer);
+#else
+#define CTR_PREFETCHROOM_AFTER_ROOMPLAN CTR_PREFETCHROOM_AFTER_FLOWHITCH
 #endif
 
 // CtrWatchdog_stop: loadscreen -> [inputlate, UT only] -> argcrash -> real.
@@ -252,9 +271,19 @@ void CTR_ENDFRAME_SWKBD(Renderer* renderer);
 // CtrRenderer_endFrame, continued: swkbd -> freebies (z_freebies.c: restarting the room into another planned scene gets
 // the room load after the frame, as main.c gives a room change) -> real.
 #define CTR_ENDFRAME_FREEBIES CtrRenderer_chainEndFrameFreebies
-#define CTR_ENDFRAME_AFTER_SWKBD CTR_ENDFRAME_FREEBIES
+#define CTR_ENDFRAME_AFTER_SWKBD CtrLoadmix_chainEndFrame
+#ifdef CTR_AUDIO_PCM_HASH
+#define CTR_ENDFRAME_AFTER_LOADMIX CtrLoadaudio_chainEndFrame
+#define CTR_ENDFRAME_AFTER_LOADAUDIO CTR_ENDFRAME_FREEBIES
+#else
+#define CTR_ENDFRAME_AFTER_LOADMIX CTR_ENDFRAME_FREEBIES
+#endif
 #ifdef __3DS__
+void CtrLoadmix_chainEndFrame(Renderer* renderer);
 void CTR_ENDFRAME_FREEBIES(Renderer* renderer);
+#ifdef CTR_AUDIO_PCM_HASH
+void CtrLoadaudio_chainEndFrame(Renderer* renderer);
+#endif
 #endif
 // CtrRenderer_endFrame, continued: freebies -> nopromo (z_nopromo.c: with no RAM for packed pages, Draw asks no
 // promotions) -> real.
@@ -262,6 +291,13 @@ void CTR_ENDFRAME_FREEBIES(Renderer* renderer);
 #define CTR_ENDFRAME_AFTER_FREEBIES CTR_ENDFRAME_NOPROMO
 #ifdef __3DS__
 void CTR_ENDFRAME_NOPROMO(Renderer* renderer);
+#endif
+// CtrRenderer_endFrame, continued: nopromo -> postkick (z_postkick.c: a frame that changes no room runs its
+// end-of-frame instance pass, UTSW_ROOMCHANGE, after the real endFrame has handed the frame to the GPU) -> real.
+#define CTR_ENDFRAME_POSTKICK CtrRenderer_chainEndFramePostkick
+#define CTR_ENDFRAME_AFTER_NOPROMO CTR_ENDFRAME_POSTKICK
+#ifdef __3DS__
+void CTR_ENDFRAME_POSTKICK(Renderer* renderer);
 #endif
 #endif
 

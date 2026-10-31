@@ -12,6 +12,7 @@
 #                              [statedump=<frame>] (state hash: dump every variable's hash at that frame, separate build directory)
 #                              [audiocap] (records the DSP mix and channel events to the SD card, separate build directory)
 #                              [pcmhash] (logs a hash of every stream's PCM, to compare builds; separate build directory)
+#                              [loadaudio-control] (UT pcmhash only: matched observer, spare first-buffer preparation disabled)
 #                              [audiometrics] (decoder allocation bytes and ticks per frame; Release diagnostic directory)
 #                              [adpcmprobe] (UT native DSP block/reference check before audio startup; diagnostic only)
 #                              [adpcmsfx] (compressed SFX cache/PCM feeder prototype; separate directory)
@@ -138,6 +139,7 @@ gameend=OFF
 statedump=
 audiocap=OFF
 pcmhash=OFF
+loadaudio_control=OFF # loadaudio-control requires UT pcmhash; matched observer without spare first-buffer preparation
 audiometrics=OFF
 adpcmprobe=OFF
 adpcmsfx=OFF
@@ -213,6 +215,7 @@ for arg in "$@"; do
         statedump=*) statedump="${arg#statedump=}" ;;
         audiocap) audiocap=ON ;;
         pcmhash) pcmhash=ON ;;
+        loadaudio-control) loadaudio_control=ON ;;
         audiometrics) audiometrics=ON ;;
         adpcmprobe) adpcmprobe=ON ;;
         adpcmsfx) adpcmsfx=ON ;;
@@ -288,6 +291,10 @@ for arg in "$@"; do
             ;;
     esac
 done
+if [ "$loadaudio_control" = ON ] && { [ "$pcmhash" != ON ] || [ "$game" != undertale ]; }; then
+    echo "loadaudio-control requires undertale pcmhash (diagnostic only)" >&2
+    exit 2
+fi
 if [ -n "$halfart" ] && { [ "$game" != undertale ] || [ "$target" != o3ds ]; }; then
     echo "halfart=$halfart is for UNDERTALE on o3ds only (Omega Flowey's art on the Old 3DS); this is $game $target" >&2
     exit 2
@@ -408,6 +415,9 @@ if [ "$audiocap" = ON ]; then
 fi
 if [ "$pcmhash" = ON ]; then
     build="$build-pcmhash"
+fi
+if [ "$loadaudio_control" = ON ]; then
+    build="$build-loadaudio-control"
 fi
 if [ "$audiometrics" = ON ]; then
     build="$build-audiometrics"
@@ -635,6 +645,10 @@ if [ "$game" = undertale ]; then
     prompt_args=(--out "$(native_path "$repo/build/pixgrid-undertale")")
     if [ -n "$data_dir" ]; then prompt_args+=(--data "$(native_path "$data_dir")"); fi
     "${python[@]}" -I "$(native_path "$repo/tools/aot/btnprompt_build.py")" "${prompt_args[@]}"
+    # UNDERTALE Old's covered-star key (tools/aot/dskip.py; the no-key values when the data isn't a checked version).
+    skip_args=(--out "$(native_path "$repo/build/pixgrid-undertale/dskip_key.inc")")
+    if [ -n "$data_dir" ]; then skip_args+=(--data "$(native_path "$data_dir")"); fi
+    "${python[@]}" -I "$(native_path "$repo/tools/aot/dskip.py")" "${skip_args[@]}"
 fi
 
 # The loading screens' art (z_loadscreen.c), cut from the player's own files (tools/aot/loadscreen_art.py) into the
@@ -915,6 +929,7 @@ cmake -S "$here" -B "$build" -G "Unix Makefiles" \
     -DCTRPORT_STATE_DUMP_FRAME="$statedump" \
     -DCTRPORT_AUDIO_CAPTURE="$audiocap" \
     -DCTRPORT_AUDIO_PCM_HASH="$pcmhash" \
+    -DCTRPORT_LOADAUDIO_CONTROL="$loadaudio_control" \
     -DCTRPORT_AUDIO_METRICS="$audiometrics" \
     -DCTRPORT_ADPCM_PROBE="$adpcmprobe" \
     -DCTRPORT_ADPCM_SFX="$adpcmsfx" \

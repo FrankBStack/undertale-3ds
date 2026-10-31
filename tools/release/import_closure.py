@@ -18,6 +18,8 @@ ENTRY_POINTS = ('tools/release/builder/builder.py', 'tools/release/builder_platf
                 'tools/release/package_builder.py', 'tools/release/check_release.py', 'tools/audio/sfxpack.py')
 OPTIONAL_PACKERS = {'tools/analysis/crispart_pack.py', 'tools/analysis/smalltext_pack.py'}
 GAME_ONLY = {'tools/aot/pixgrid.py': 'undertale', 'tools/aot/btnprompt_build.py': 'undertale',
+             # UNDERTALE Old's covered-star key (build.sh runs it for UNDERTALE only).
+             'tools/aot/dskip.py': 'undertale',
              'tools/aot/chapter_manifest.py': 'deltarune',
              'tools/roomplan/build_sfxplan.py': 'undertale', 'tools/aot/gog_smart.py': 'undertale',
              # UNDERTALE Old's half-resolution art (build.sh halfart, the builder's products.HALFART setting).

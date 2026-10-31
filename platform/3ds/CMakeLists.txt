@@ -257,6 +257,15 @@ list(REMOVE_ITEM ENGINE_SOURCES "${ENGINE_DIR}/src/z_boardgrid.c")
 if(CTRPORT_GAME STREQUAL "deltarune" AND CTRPORT_TARGET STREQUAL "n3ds")
     list(APPEND ENGINE_SOURCES "${ENGINE_DIR}/src/z_boardgrid.c")
 endif()
+# UNDERTALE's filled-rectangle script (utrect, uthunt): a builtin of the script's name, registered by the wrap of
+# Utgap_registerAll (VM_create's last registration; only that call's target changes). Late code only, last;
+# UNDERTALE only. Its strings unmerged (-fno-merge-constants), so they stay with its code in the late text; -Os, as
+# the UNDERTALE 1.0 late reserve is tight.
+list(REMOVE_ITEM ENGINE_SOURCES "${ENGINE_DIR}/src/z_utrect.c")
+if(CTRPORT_GAME STREQUAL "undertale")
+    list(APPEND ENGINE_SOURCES "${ENGINE_DIR}/src/z_utrect.c")
+endif()
+set_source_files_properties("${ENGINE_DIR}/src/z_utrect.c" PROPERTIES COMPILE_OPTIONS "-Os;-fno-merge-constants")
 
 set(VENDOR_SOURCES
     "${ENGINE_DIR}/vendor/md5/md5.c"
@@ -351,12 +360,14 @@ if(NOT CTRPORT_EXITTRAIL)
 endif()
 # dodgefront (credfix, charter rev 1 item 2, option 3): UNDERTALE Old 3DS only. The centred text line's hand front
 # (source/z_dodgefront.c), bound by vm.c's late VM_aotBindFront through CtrRenderer_prefetchRoom's wrap chain
-# (z_roomplan.c, ctr_wrap_chain.h). Late text only; the definition goes on the three files that read it.
+# (z_roomplan.c, ctr_wrap_chain.h). Late text only; the definition goes on the files that read it (ctr_audio_system.c:
+# flowhitch's link, after roomplan's, calls textfront's).
 # build.sh passes this cache setting for every target; only UT Old consumes its behavior below.
 set(CTRPORT_WRITERFRONT_MODE "ON" CACHE STRING "Writer front: ON, OFF, FALLBACK or COUNT (UNDERTALE Old)")
 if(CTRPORT_GAME STREQUAL "undertale" AND CTRPORT_TARGET STREQUAL "o3ds")
     set_property(SOURCE "${ENGINE_DIR}/src/vm.c" "${CMAKE_CURRENT_SOURCE_DIR}/source/z_roomplan.c"
-        "${CMAKE_CURRENT_SOURCE_DIR}/source/z_dodgefront.c" APPEND PROPERTY COMPILE_DEFINITIONS CTRPORT_DODGEFRONT)
+        "${CMAKE_CURRENT_SOURCE_DIR}/source/z_dodgefront.c" "${CMAKE_CURRENT_SOURCE_DIR}/source/ctr_audio_system.c"
+        APPEND PROPERTY COMPILE_DEFINITIONS CTRPORT_DODGEFRONT)
     set_property(SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/source/z_dodgefront.c" APPEND PROPERTY COMPILE_OPTIONS
         "-Os;-fno-tree-switch-conversion;-fno-jump-tables")
     # textfront (simplefix): the centred-text scripts' fronts with the view cull (source/z_textfront.c), the
@@ -527,6 +538,11 @@ if(CTRPORT_GAME STREQUAL "undertale")
         endif()
         configure_file("${CTRPORT_PROMPT_INPUT_DIR}/${prompt_input}" "${CTRPORT_BUILD_ID_DIR}/${prompt_input}" COPYONLY)
     endforeach()
+    # UNDERTALE Old's covered-star key (tools/aot/dskip.py), included by runner.c's utkDrawRoom tail.
+    if(NOT EXISTS "${CTRPORT_PROMPT_INPUT_DIR}/dskip_key.inc")
+        message(FATAL_ERROR "Covered-star key missing: use build.sh with data=<your UNDERTALE folder>")
+    endif()
+    configure_file("${CTRPORT_PROMPT_INPUT_DIR}/dskip_key.inc" "${CTRPORT_BUILD_ID_DIR}/dskip_key.inc" COPYONLY)
 endif()
 
 # Deep frame skip's Draw classes for this game (bench/drawskip_<game>.txt), as drawskip_txt.h.
@@ -794,6 +810,19 @@ endforeach()
 # the console (asrfight frozen/if4); elsewhere itemfront is empty and the pad is 0 B. The evguard anchor (lead GO 10-30,
 # dec-1029-phase-pads): UNDERTALE Old 16, the phase of evguard's console rows and rev 2 identity build (asgore30
 # frozen/evg1, evg2); a 0 B pad elsewhere (UNDERTALE New was not measured on a console; DELTARUNE has no evguard).
+# The pacerflt anchor (lead GO 10-30, dec-1029-phase-pads): UNDERTALE Old 0, the phase of the prefilter's console rows
+# (pacer's prefstack rows, B); a 0 B pad elsewhere (10-30: no New pads; DELTARUNE has none).
+# The flowhitch anchor (lead GO 10-31, dec-1029-phase-pads): UNDERTALE Old 24, the phase of flowhitch rev 3m's console
+# rows (0x18); a 0 B pad elsewhere (no New pads; DELTARUNE's flowhitch section is empty).
+# The postkick anchor (lead 03:2x 10-31, dec-1029-phase-pads; it runs every frame): UNDERTALE Old 8, the phase of its
+# console rows (pacer's postkick rows, B: __wrap_Utsw_handleRoomChange at 0x6703e8); a 0 B pad elsewhere
+# (no New pads; DELTARUNE's postkick section is empty).
+# freebytes r5b pads (dec-1029-phase-pads, c26rev r5 F1): smalltextro, aotlate, utsfx, utlava, utoldreg, cheaplevers
+# and asgborder sit at the r5 cut boundaries; each anchor is stage75zd's address mod 32 there (47d487eb0, built at
+# 58baa4700; the next late input's start; utlava: aotul_11, utoldreg: aotult_11_00B8), per UNDERTALE model, so every
+# later late function keeps stage75zd's phase; aotlhelp, aotlgen and utlhelp keep the folded AOT objects' own
+# aotSlotFind copies and aotl_31 on stage75zd's phase too. DELTARUNE has none of the cuts: each anchor is the pad's
+# own start, a 0 B pad.
 if(CTRPORT_GAME STREQUAL "undertale" AND CTRPORT_TARGET STREQUAL "o3ds")
     set(ctrport_smalltext_text_phase 16)
     set(ctrport_utfaot_text_phase 24)
@@ -803,6 +832,19 @@ if(CTRPORT_GAME STREQUAL "undertale" AND CTRPORT_TARGET STREQUAL "o3ds")
     set(ctrport_bootlog_text_phase 8)
     set(ctrport_itemfront_text_phase 24)
     set(ctrport_evguard_text_phase 16)
+    set(ctrport_pacerflt_text_phase 0)
+    set(ctrport_flowhitch_text_phase 24)
+    set(ctrport_postkick_text_phase 8)
+    set(ctrport_smalltextro_text_phase 24)
+    set(ctrport_aotlate_text_phase 4080)
+    set(ctrport_utsfx_text_phase 0)
+    set(ctrport_utlava_text_phase 16)
+    set(ctrport_utoldreg_text_phase 3136)
+    set(ctrport_cheaplevers_text_phase 8)
+    set(ctrport_asgborder_text_phase 780)
+    set(ctrport_aotlhelp_text_phase 988)
+    set(ctrport_aotlgen_text_phase 1888)
+    set(ctrport_utlhelp_text_phase 1896)
 elseif(CTRPORT_GAME STREQUAL "undertale")
     set(ctrport_smalltext_text_phase 0)
     set(ctrport_utfaot_text_phase 8)
@@ -812,8 +854,22 @@ elseif(CTRPORT_GAME STREQUAL "undertale")
     set(ctrport_bootlog_text_phase 16)
     set(ctrport_itemfront_text_phase __itemfront_text_gap_start)
     set(ctrport_evguard_text_phase __evguard_text_gap_start)
+    set(ctrport_pacerflt_text_phase __pacerflt_text_gap_start)
+    set(ctrport_smalltextro_text_phase 8)
+    set(ctrport_aotlate_text_phase 0)
+    set(ctrport_utsfx_text_phase 8)
+    set(ctrport_utlava_text_phase 24)
+    set(ctrport_utoldreg_text_phase 8)
+    set(ctrport_cheaplevers_text_phase 16)
+    set(ctrport_asgborder_text_phase 20)
+    set(ctrport_aotlhelp_text_phase 12)
+    set(ctrport_aotlgen_text_phase 16)
+    set(ctrport_utlhelp_text_phase 16)
+    set(ctrport_flowhitch_text_phase __flowhitch_text_gap_start)
+    set(ctrport_postkick_text_phase __postkick_text_gap_start)
 else()
-    foreach(pad smalltext utfaot utflames utfhelix statehash itemfront evguard)
+    foreach(pad smalltext utfaot utflames utfhelix statehash itemfront evguard pacerflt flowhitch postkick
+            smalltextro aotlate utsfx utlava utoldreg cheaplevers asgborder aotlhelp aotlgen utlhelp)
         set(ctrport_${pad}_text_phase __${pad}_text_gap_start)
     endforeach()
     if(CTRPORT_TARGET STREQUAL "o3ds")
@@ -822,7 +878,8 @@ else()
         set(ctrport_bootlog_text_phase 28)
     endif()
 endif()
-foreach(pad SMALLTEXT UTFAOT UTFLAMES UTFHELIX STATEHASH BOOTLOG ITEMFRONT EVGUARD)
+foreach(pad SMALLTEXT UTFAOT UTFLAMES UTFHELIX STATEHASH BOOTLOG ITEMFRONT EVGUARD PACERFLT FLOWHITCH POSTKICK
+            SMALLTEXTRO AOTLATE UTSFX UTLAVA UTOLDREG CHEAPLEVERS ASGBORDER AOTLHELP AOTLGEN UTLHELP)
     string(TOLOWER "${pad}" pad_lower)
     string(FIND "${CTRPORT_LATE_LD_TEXT}" "/* ${pad}_TEXT_PHASE */ 0" pad_at)
     if(pad_at LESS 0)
@@ -830,6 +887,83 @@ foreach(pad SMALLTEXT UTFAOT UTFLAMES UTFHELIX STATEHASH BOOTLOG ITEMFRONT EVGUA
     endif()
     string(REPLACE "/* ${pad}_TEXT_PHASE */ 0" "${ctrport_${pad_lower}_text_phase}"
            CTRPORT_LATE_LD_TEXT "${CTRPORT_LATE_LD_TEXT}")
+endforeach()
+# freebytes H1 (freebytes, 2026-10-31; late_reserve.ld's H1 holes): on UNDERTALE Old the cold cuts and AOT folds
+# leave holes in place, filled with whole cold loading-screen functions, and the loading screen's end pad moves the late
+# code after it by exactly -4096 B (one I-cache set period). Each hole pad ends on stage75zd's address mod 4096 there
+# (b89469fb3 built with the release URL: the end of the selector the hole follows); the fold pads above take the same
+# mod-4096 anchors with a 4095 mask on UNDERTALE Old (each is its old mod-32 anchor's 4096 B form), 31 elsewhere.
+# Other targets: each H1 pad's own start, a 0 B pad.
+if(CTRPORT_GAME STREQUAL "undertale" AND CTRPORT_TARGET STREQUAL "o3ds")
+    set(ctrport_h1loadtime_text_phase 40)
+    set(ctrport_h1coverage_text_phase 2716)
+    set(ctrport_h1rend_text_phase 515)
+    set(ctrport_h1utstall_text_phase 264)
+    set(ctrport_h1bxreview_text_phase 1460)
+    set(ctrport_h1relprep_text_phase 4076)
+    set(ctrport_h1utloop_text_phase 3104)
+    set(ctrport_h1_fold_mask 4095)
+else()
+    foreach(pad loadtime coverage rend utstall bxreview relprep utloop)
+        set(ctrport_h1${pad}_text_phase __h1${pad}_text_gap_start)
+    endforeach()
+    set(ctrport_h1_fold_mask 31)
+endif()
+foreach(pad LOADTIME COVERAGE REND UTSTALL BXREVIEW RELPREP UTLOOP)
+    string(TOLOWER "${pad}" pad_lower)
+    string(FIND "${CTRPORT_LATE_LD_TEXT}" "/* H1${pad}_TEXT_PHASE */ 0" pad_at)
+    if(pad_at LESS 0)
+        message(FATAL_ERROR "freebytes H1: late_reserve.ld has no H1${pad}_TEXT_PHASE anchor")
+    endif()
+    string(REPLACE "/* H1${pad}_TEXT_PHASE */ 0" "${ctrport_h1${pad_lower}_text_phase}"
+           CTRPORT_LATE_LD_TEXT "${CTRPORT_LATE_LD_TEXT}")
+endforeach()
+foreach(pad AOTLHELP AOTLGEN AOTLATE UTLAVA UTLHELP UTOLDREG ASGBORDER)
+    string(FIND "${CTRPORT_LATE_LD_TEXT}" "/* ${pad}_TEXT_MASK */ 31" pad_at)
+    if(pad_at LESS 0)
+        message(FATAL_ERROR "freebytes H1: late_reserve.ld has no ${pad}_TEXT_MASK")
+    endif()
+    string(REPLACE "/* ${pad}_TEXT_MASK */ 31" "${ctrport_h1_fold_mask}" CTRPORT_LATE_LD_TEXT "${CTRPORT_LATE_LD_TEXT}")
+endforeach()
+# freebytes H1 hole limits (flushrev R4-F2): on UNDERTALE Old each hole's end in the frozen H1 layout (stage75zd + H1
+# rev 2, frozen build B2). A hole pads to it while its start is at or before it and pads nothing otherwise, so test
+# profiles that add late code before a hole (shots, spikerec, ...) still link, packed. Release builds (the release
+# source URL set) also ASSERT every hole ends at or before it, so any overflow stops the link whatever its size (a
+# wrapped pad would end the hole 4 KiB or more later). A change that moves late code by whole pages before a hole
+# updates these. Other targets: the hole's own start and end, always true.
+if(CTRPORT_GAME STREQUAL "undertale" AND CTRPORT_TARGET STREQUAL "o3ds")
+    set(ctrport_h1loadtime_text_limit 0x608028)
+    set(ctrport_h1coverage_text_limit 0x610a9c)
+    set(ctrport_h1rend_text_limit 0x622203)
+    set(ctrport_h1utstall_text_limit 0x62b108)
+    set(ctrport_aotlhelp_text_limit 0x6353dc)
+    set(ctrport_aotlgen_text_limit 0x635760)
+    set(ctrport_aotlate_text_limit 0x635ff0)
+    set(ctrport_utlava_text_limit 0x640010)
+    set(ctrport_utlhelp_text_limit 0x641768)
+    set(ctrport_h1utloop_text_limit 0x641c20)
+    set(ctrport_utoldreg_text_limit 0x641c40)
+    set(ctrport_h1bxreview_text_limit 0x64e5b4)
+    set(ctrport_h1relprep_text_limit 0x66bfec)
+    set(ctrport_asgborder_text_limit 0x66e30c)
+endif()
+foreach(hole H1LOADTIME H1COVERAGE H1REND H1UTSTALL AOTLHELP AOTLGEN AOTLATE UTLAVA UTLHELP H1UTLOOP UTOLDREG H1BXREVIEW H1RELPREP ASGBORDER)
+    string(TOLOWER "${hole}" hole_lower)
+    foreach(kind LIMIT STRICT)
+        if(kind STREQUAL "LIMIT")
+            set(hole_marker "/* ${hole}_TEXT_LIMIT */ __${hole_lower}_text_gap_start")
+        else()
+            set(hole_marker "/* ${hole}_TEXT_STRICT */ __${hole_lower}_text_gap_end")
+        endif()
+        string(FIND "${CTRPORT_LATE_LD_TEXT}" "${hole_marker}" hole_at)
+        if(hole_at LESS 0)
+            message(FATAL_ERROR "freebytes H1: late_reserve.ld has no ${hole}_TEXT_${kind}")
+        endif()
+        if(DEFINED ctrport_${hole_lower}_text_limit AND (kind STREQUAL "LIMIT" OR CTRPORT_RELEASE_SOURCE_URL))
+            string(REPLACE "${hole_marker}" "${ctrport_${hole_lower}_text_limit}" CTRPORT_LATE_LD_TEXT
+                   "${CTRPORT_LATE_LD_TEXT}")
+        endif()
+    endforeach()
 endforeach()
 # UNDERTALE did not link libctru's RomFS driver on main 36a55611. benchromfs (first) put romfs_dev.o right after its own
 # late lines, so its addresses are frozen there; relprep's later RELPREP_ROMFS_<kind> placeholders stay empty (a second
@@ -1007,6 +1141,13 @@ endif()
 option(CTRPORT_AUDIO_PCM_HASH "Log a hash of every stream's PCM (diagnostic)" OFF)
 if(CTRPORT_AUDIO_PCM_HASH)
     target_compile_definitions(ctrport PRIVATE CTR_AUDIO_PCM_HASH)
+endif()
+option(CTRPORT_LOADAUDIO_CONTROL "Matched loadaudio observer without spare first-buffer preparation (pcmhash only)" OFF)
+if(CTRPORT_LOADAUDIO_CONTROL)
+    if(NOT CTRPORT_GAME STREQUAL "undertale" OR NOT CTRPORT_AUDIO_PCM_HASH)
+        message(FATAL_ERROR "loadaudio control is an UNDERTALE pcmhash diagnostic only")
+    endif()
+    target_compile_definitions(ctrport PRIVATE CTRPORT_LOADAUDIO_CONTROL)
 endif()
 option(CTRPORT_ADPCM_PROBE "Compare native DSP-ADPCM against its PCM reference before audio startup" OFF)
 option(CTRPORT_ADPCM_SFX "Prototype compressed SFX through the existing PCM feeder" OFF)
@@ -1255,6 +1396,11 @@ target_link_options(ctrport PRIVATE -Wl,--wrap=CtrMemory_logHeapLayout,--wrap=Ct
 # nativemac: data versions added after revision 1 (ctr_data_version.c's end). The one wrap of CtrDataVersion_check;
 # its chain's links and their order are in source/ctr_wrap_chain.h.
 target_link_options(ctrport PRIVATE -Wl,--wrap=CtrDataVersion_check)
+# utrect (uthunt; UNDERTALE only): z_utrect.c registers the filled-rectangle script's builtin after VM_create's
+# other registrations through this wrap, so vm.c changes only that call's target.
+if(CTRPORT_GAME STREQUAL "undertale")
+    target_link_options(ctrport PRIVATE -Wl,--wrap=Utgap_registerAll)
+endif()
 # source/z_chapterleak.c (chapterleak): the chapter switch gives back the renderer's effect textures (ctr_renderer.c's
 # late tail) before the renderer goes. Wrapped, so ctr_chapters.c and main.c stay as they were.
 target_link_options(ctrport PRIVATE -Wl,--wrap=CtrChapters_unloadGame)
@@ -1307,6 +1453,13 @@ target_link_options(ctrport PRIVATE -Wl,--wrap=GSPLCD_PowerOffBacklight,--wrap=G
 target_link_options(ctrport PRIVATE -Wl,--wrap=gspLcdExit)
 set_source_files_properties("${CMAKE_CURRENT_SOURCE_DIR}/source/ctr_rosalina.c" PROPERTIES COMPILE_OPTIONS
     "-Os;-fno-builtin-printf;-fno-builtin-puts;-fno-builtin-putchar;-fno-builtin-fprintf;-fno-builtin-fputs;-fno-tree-switch-conversion;-fno-jump-tables")
+# exitpanic rosacore (10-30): the watcher's threadCreate calls go to z_leavekeep.c's CtrRosalina_threadCreate (the
+# same call, another target; no instruction in ctr_rosalina.c changes). On a core-1 ask with the app's CPU time limit
+# still 0 it returns NULL as the kernel's refusal (E0A01839) would, without the refused create: that create looks
+# to keep a thread count past the process's end, one per run (docs/3ds-hardware.md, "Thread slots lost across 3dsx
+# launches"). The watcher then falls back to -2, as it did after the refusal.
+set_property(SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/source/ctr_rosalina.c" APPEND PROPERTY COMPILE_DEFINITIONS
+    "threadCreate=CtrRosalina_threadCreate")
 option(CTRPORT_ROSALINA_SIM "Test only: run the Rosalina watcher without Luma, on simulated buttons and a pause" OFF)
 option(CTRPORT_ROSALINA_PROBE "Test only: log each pause and switch the Rosalina watcher sees" OFF)
 if(CTRPORT_ROSALINA_PROBE)
@@ -1791,6 +1944,21 @@ elseif(CTRPORT_AOT_DIR)
         set_source_files_properties("${CTRPORT_AOT_DIR}/aot_utold_regions.c" PROPERTIES
             COMPILE_OPTIONS "-fno-schedule-insns;-fno-var-tracking;-fno-var-tracking-assignments;-fno-merge-constants;-fno-fast-math;-ffp-contract=off"
             COMPILE_DEFINITIONS "${CTRPORT_TYPED_DEFS}")
+        # freebytes: aot_late.c and aot_utold_loop.c share one aotStoreSlow and aotToInt32Slow (engine/src/aot/vm_aot.h,
+        # AOT_LATE_SHARED_*) and call collision_gm14.c's RValue conversions (engine/src/rvalue.h, RVALUE_OTHER_EXTERN);
+        # these two files' copies were byte-identical after relocation and their callers' code is unchanged
+        # (freebytes results). UNDERTALE Old only, as part of H1 (2026-10-31): each fold's freed bytes
+        # stay a hole in place (late_reserve.ld's H1 holes), filled with cold loading-screen code, so no hot code moves
+        # by less than a whole 4 KiB set period. UNDERTALE New keeps its own copies and its bytes.
+        if(CTRPORT_TARGET STREQUAL "o3ds")
+            set(CTRPORT_LATE_OTHER_DEFS "RValue_toRealOther=Colflip14_toRealOther;RValue_toInt32Other=Colflip14_toInt32Other;RVALUE_OTHER_EXTERN")
+            set_property(SOURCE "${CTRPORT_AOT_DIR}/aot_late.c" APPEND PROPERTY COMPILE_DEFINITIONS AOT_LATE_SHARED_DEFINE ${CTRPORT_LATE_OTHER_DEFS})
+            set_property(SOURCE "${CTRPORT_AOT_DIR}/aot_utold_loop.c" APPEND PROPERTY COMPILE_DEFINITIONS AOT_LATE_SHARED_EXTERN ${CTRPORT_LATE_OTHER_DEFS})
+            # z_asgborder.c (Asgore's sided fire, UNDERTALE late) had a third aotStoreSlow from the same source: it calls
+            # aot_late.c's. Not byte-identical: GCC scheduled three blocks differently, with the same live state, memory
+            # writes and calls at each join (c26rev r5 review, c27e983a9).
+            set_property(SOURCE "${ENGINE_DIR}/src/z_asgborder.c" APPEND PROPERTY COMPILE_DEFINITIONS AOT_LATE_SHARED_EXTERN)
+        endif()
     endif()
     # UNDERTALE's late-text reclaim (argcheck) leaves aotResolveInlineBindings out of static-table builds
     # (vm_aot_inline.c); it comes back only when the generated code calls it (gmlaot.py emits the call in aot_gen_*.c
@@ -2307,6 +2475,14 @@ target_link_options(ctrport PRIVATE
     -Wl,--wrap=InputRecording_createPlayer,--wrap=InputRecording_processFrame,--wrap=CtrChapters_takeGameChange,--wrap=_exit)
 endif()
 
+# postkick (pacer): a frame that changes no room runs main.c's UTSW_ROOMCHANGE after the GPU has the frame
+# (source/z_postkick.c; the endFrame chain's last link, ctr_wrap_chain.h). Its own block, after inputlate's link
+# options (the same order on the link line), so inputlate's block keeps one target_link_options call
+# (checked by a link-order test).
+if(CTRPORT_GAME STREQUAL "undertale")
+target_link_options(ctrport PRIVATE -Wl,--wrap=Utsw_handleRoomChange)
+endif()
+
 # build.sh refreshes this after every RomFS producer, including fonts. This covers added/removed
 # chapter modules, plans and font verdicts as well as changes to files known at configure time.
 set(ROMFS_CONTENT_STAMP "${CMAKE_CURRENT_BINARY_DIR}/romfs-content.stamp")
@@ -2587,3 +2763,13 @@ set_property(TARGET ctrport PROPERTY C_COMPILER_LAUNCHER
     "${CTRPORT_PYTHON_EXECUTABLE};-I;${CMAKE_CURRENT_SOURCE_DIR}/../../tools/buildcache/fpsbox_compile.py;${fpsbox_delegate};--fpsbox-compiler")
 set_property(SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/source/ctr_argui.c" APPEND PROPERTY OBJECT_DEPENDS
     "${CMAKE_CURRENT_SOURCE_DIR}/../../tools/buildcache/fpsbox_compile.py")
+
+# labcut: one lab-only join wrapper, with the two cold exit bodies retained in
+# their stage75w slots. Keep its late input last after player-facing units.
+target_link_options(ctrport PRIVATE -Wl,--wrap=CtrExit_closeLog)
+get_target_property(labcut_delegate ctrport C_COMPILER_LAUNCHER)
+set_property(TARGET ctrport PROPERTY C_COMPILER_LAUNCHER
+    "${CTRPORT_PYTHON_EXECUTABLE};-I;${CMAKE_CURRENT_SOURCE_DIR}/../../tools/buildcache/labcut_compile.py;${labcut_delegate};--labcut-compiler")
+set_property(SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/source/ctr_exit_log.c"
+    "${CMAKE_CURRENT_SOURCE_DIR}/source/ctr_exit_midfile.c" APPEND PROPERTY OBJECT_DEPENDS
+    "${CMAKE_CURRENT_SOURCE_DIR}/../../tools/buildcache/labcut_compile.py")

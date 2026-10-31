@@ -1,0 +1,6 @@
+# names only: section-placement keys for compiling the player's own code.
+# New reference arrays consume existing retained AOT text padding; none of the
+# original arrays changes section. The padded AOT layout gate is mandatory.
+gml_Object_obj_creditbullet_Create_0
+gml_Object_obj_creditboss_Other_10
+gml_Object_obj_creditbullet_Alarm_0

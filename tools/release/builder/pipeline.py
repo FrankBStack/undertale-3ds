@@ -158,9 +158,10 @@ def source_wanted(relative, game=None):
         # the Credits page text (build.sh runs it for both games).
         return len(parts) == 3 and (parts[-1] in (
             "builtin_audit.py", "btnprompt.py", "corpus.py", "data_versions.py", "escape.py", "fontverdict.py",
-            "gmlaot.py", "itemverdict.py", "prepare.py", "aot_select.py", "typed.py", "loadscreen_art.py", "late_numeric.py",
+            "gmlaot.py", "itemverdict.py", "prepare.py", "padrefs.py", "aot_select.py", "typed.py", "loadscreen_art.py", "late_numeric.py",
             "symverdict.py", "stglyphs.py", "stpack.py", "stasrtext.py", "credits.py")
-            or (parts[-1] in ("pixgrid.py", "btnprompt_build.py", "stmenu.py") and game != "deltarune")
+            # dskip.py: UNDERTALE Old's covered-star key (build.sh runs it for UNDERTALE only).
+            or (parts[-1] in ("pixgrid.py", "btnprompt_build.py", "stmenu.py", "dskip.py") and game != "deltarune")
             or (parts[-1] in ("gog_smart.py", "gog-smart-1.08.json") and game != "deltarune")
             # offkill.py: the early destroy's entries (build.sh runs it; UNDERTALE only).
             or (parts[-1] == "offkill.py" and game != "deltarune")

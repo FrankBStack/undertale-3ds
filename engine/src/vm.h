@@ -526,7 +526,7 @@ void VM_runEventBound(VMContext* ctx, VMEventRun* run, struct Instance* instance
 #define VM_RUN_EVENT_IN_RUN VM_runEvent
 #endif
 
-// evguard (asgore30, z_evguard.c, late text, UNDERTALE only): the runner's event runs begin with
+// evguard (lane asgore30, z_evguard.c, late text, UNDERTALE only): the runner's event runs begin with
 // VM_BEGIN_EVENT_RUN, which notes a code entry that starts with a test of a global jumping to its end when false,
 // and VM_RUN_EVENT_IN_RUN (above) skips the run's events while that test is false (they would do nothing).
 #if defined(ENABLE_WAD16)

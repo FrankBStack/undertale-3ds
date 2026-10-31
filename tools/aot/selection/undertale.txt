@@ -387,3 +387,8 @@ root gml_Object_obj_mettatonb_body_Draw_0
 root gml_Object_obj_carrotshot_Step_0
 root gml_Object_obj_blueswitch_1_Step_1
 root gml_Object_obj_genericfire_Create_0
+# Pinwheel spawn: three real interpreter events, 1,000 instructions on a
+# twenty-name spawn frame. Append only: existing entry indexes stay fixed.
+root gml_Object_obj_creditbullet_Create_0
+root gml_Object_obj_creditboss_Other_10
+root gml_Object_obj_creditbullet_Alarm_0

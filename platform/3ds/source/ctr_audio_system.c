@@ -997,6 +997,10 @@ static float leastQueuedMs(CtrAudioSystem* ca) {
 
 static void rampStep(CtrAudioSystem* ca);
 
+#if defined(ENABLE_WAD16)
+#define LightEvent_WaitTimeout lmDecodeWait
+#endif
+#line 971
 static void decodeThreadMain(void* arg) {
     CtrAudioSystem* ca = (CtrAudioSystem*) arg;
     CtrWatchdog_nameThread("audio decode");
@@ -1033,6 +1037,8 @@ static void decodeThreadMain(void* arg) {
     }
 }
 
+#undef LightEvent_WaitTimeout
+#line 1007
 static void openerThreadMain(void* arg) {
     CtrAudioSystem* ca = (CtrAudioSystem*) arg;
     CtrWatchdog_nameThread("audio open");
@@ -1054,6 +1060,10 @@ uint32_t CtrAudioSystem_underruns(CtrAudioSystem* ca) {
 
 // Runs on NDSP's thread once per DSP frame (~4.9 ms).
 static void ndspFrameCallback(void* data) {
+#if defined(ENABLE_WAD16) && defined(CTR_AUDIO_PCM_HASH)
+    latSample((CtrAudioSystem*) data);
+#endif
+#line 1028
     LightEvent_Signal(&((CtrAudioSystem*) data)->event);
 }
 
@@ -2656,6 +2666,10 @@ static int32_t playSoundImpl(CtrAudioSystem* ca, int32_t soundIndex, int32_t pri
     v->pitch = pitch;
     v->emitterGain = 1.0f;
     v->ctx = -1;
+#if defined(ENABLE_WAD16) && defined(CTR_AUDIO_PCM_HASH)
+    latRequest(ca, vi);
+#endif
+#line 2641
 
     if (!ca->ndspReady) {
         v->kind = VOICE_VIRTUAL;
@@ -2890,6 +2904,13 @@ static float clockPosition(CtrAudioSystem* ca, const Voice* v) {
 }
 
 static float ctrGetTrackPosition(AudioSystem* audio, int32_t soundOrInstance) {
+#if defined(ENABLE_WAD16) && defined(CTR_AUDIO_PCM_HASH)
+    if ((uint32_t) soundOrInstance - 0x80000001u < 255u) {
+        latMark((uint32_t) soundOrInstance - 0x80000000u);
+        return 0.0f;
+    }
+#endif
+#line 2875
     CtrAudioSystem* ca = (CtrAudioSystem*) audio;
     for (int i = 0; i < VOICE_COUNT; i++) {
         if (!voiceMatches(ca, i, soundOrInstance)) continue;
@@ -3383,7 +3404,7 @@ typedef struct {
     int8_t trigger[2];
 } UtaSeamSound;
 
-#if defined(CTRPORT_ADPCM_MUSIC) || defined(CTRPORT_ADPCM_SFXPACK)
+#if defined(ENABLE_WAD16) || defined(CTRPORT_ADPCM_MUSIC) || defined(CTRPORT_ADPCM_SFXPACK)
 #include "ctr_adpcm_uta_state.inc"
 #else
 static CtrAudioSystem* utaCa UTA_BSS;
@@ -3757,7 +3778,11 @@ UTA_LATE static void utaChnSetPaused(int id, bool paused) {
 #line 3646
     int p = utaPhys(id);
     if (p >= 0 && p < UTA_CHANNELS) utaChan[p].paused = paused;
+#ifdef ENABLE_WAD16
+    lmPaused(p, paused);
+#else
     UTA_PHYS_PAUSED(p, paused);
+#endif
 }
 
 // A sound effect this layer feeds is not cut here: the next frame callback ends it with its tail (utaStop). The voice is
@@ -4012,7 +4037,7 @@ UTA_LATE static void utaStop(int p, UtaChan* c, uint32_t cb) {
     }
 }
 
-UTA_LATE static void utaFrameCallback(void* data) {
+UTA_LATE __attribute__((used)) static void utaFrameCallback(void* data) {
     u64 t0 = svcGetSystemTick();
     if (utaActive) {
         LightLock_Lock(&utaLock);
@@ -4067,10 +4092,18 @@ UTA_LATE static void utaFrameCallback(void* data) {
 }
 
 UTA_LATE static void utaSetCallback(ndspCallback callback, void* data) {
+#if defined(ENABLE_WAD16) && defined(CTR_AUDIO_PCM_HASH)
+    latReset();
+    __asm__ volatile("nop"); // Preserve the next original double literal pool's phase in this observer.
+#endif
     if (callback == NULL) {
         // Shutting down: no more tails; the channels are still reset through the mapping, which covers all of them.
         utaActive = false;
+#ifdef ENABLE_WAD16
+        lmRegister(NULL, NULL);
+#else
         UTA_PHYS_CALLBACK(NULL, NULL);
+#endif
         return;
     }
     utaCa = (CtrAudioSystem*) data;
@@ -4088,7 +4121,11 @@ UTA_LATE static void utaSetCallback(ndspCallback callback, void* data) {
     if (utaSeamPcm == NULL) utaSeamPcm = (uint8_t*) UTA_FAULT_ALLOC(2, UTA_CHANNELS * UTA_SEAM_MAX * 4);
     utaEngineCallback = callback;
     utaActive = true;
+#ifdef ENABLE_WAD16
+    lmRegister(utaFrameCallback, data);
+#else
     UTA_PHYS_CALLBACK(utaFrameCallback, data);
+#endif
 }
 
 // The loop seam of the stream whose decoder this is, or NULL for any other decoder (sounds decoded into the cache).
@@ -4712,6 +4749,10 @@ UTSFX_CODE static void usUpdate(AudioSystem* audio, float deltaTime) {
 }
 
 UTSFX_CODE static int32_t usPlaySound(AudioSystem* audio, int32_t soundIndex, int32_t priority, bool loop) {
+#ifdef CTR_AUDIO_PCM_HASH
+    latCall((CtrAudioSystem*) audio, soundIndex);
+#endif
+#line 4543
     if (usw.started) usInstall();
     return usw.inner->playSound(audio, soundIndex, priority, loop);
 }
@@ -5098,6 +5139,58 @@ static inline void usFastCheck(void) {} // shipped builds: the skip makes no cal
 int32_t __real_CtrDecoder_read(CtrDecoder* dec, int16_t* out, uint32_t maxFrames);
 int32_t __wrap_CtrDecoder_read(CtrDecoder* dec, int16_t* out, uint32_t maxFrames);
 
+// ===[ flowhitch rev 3 (flowend r22c; UNDERTALE): the first buffer of a spare, decoded ahead ]===
+// A stream's first buffer (4,096 frames, 93 ms of sound) is decoded before anything is queued: 37-45 ms on the Old
+// models even for a stream opened ahead (Azahar Old, timing mode, run r22-hdiag-flowey-old), so a pre-opened song
+// started 1-2 frames after its play call and a shed cue replayed as a stream 3-10 frames after (its open too). The
+// opener decodes each spare's first buffer at its next wait (FlowhitchPre, one per spare: the next-file spare, the
+// phase-song spare and three shed-cue spares), and the decode thread's first reads of the stream that took that spare
+// copy it. A spare's decoder position is set back to 0 after the decode ahead, so the stream reads frame 0 first, as
+// before, and the decoder continues where the copy ends (pcm_offset == end). A seek or another decoder fails that test.
+#if defined(ENABLE_WAD16) && defined(CTRPORT_HAVE_TREMOR) // Tremor's decoder state (stb_vorbis builds: the real calls)
+#define FLOWHITCH_SLOTS 3 // the shed cues' spares (below)
+#define FLOWHITCH_PRE (2 + FLOWHITCH_SLOTS)
+#define FLOWHITCH_PRE_FRAMES STREAM_BUFFER_FRAMES
+typedef struct {
+    const void* key; // the spare's vorbis_info: a taken spare's decoder carries it
+    int16_t* pcm; // FLOWHITCH_PRE_FRAMES frames, interleaved; opener-owned (freed once no stream reads it)
+    uint32_t frames;
+    ogg_int64_t end; // the decoder's pcm_offset after them
+} FlowhitchPre;
+static FlowhitchPre flowhitchPre[FLOWHITCH_PRE] __attribute__((section(".bss.flowhitch_late")));
+int32_t CtrAudioSystem_chainReadFlowhitch(CtrDecoder* dec, int16_t* out, uint32_t maxFrames);
+#define FLOWHITCH_READ_NEXT CtrAudioSystem_chainReadFlowhitch
+bool CtrAudioSystem_chainOpenFlowhitch(CtrDecoder* dec, const char* path);
+#define FLOWHITCH_OPEN_NEXT CtrAudioSystem_chainOpenFlowhitch
+void CtrAudioSystem_chainNoteFlowhitch(const char* state);
+#define FLOWHITCH_NOTE_NEXT CtrAudioSystem_chainNoteFlowhitch
+void __real_CtrReadAhead_shutdown(void); // UNDERTALE's link wraps it (usstop, at this file's end)
+void CtrAudioSystem_chainStopFlowhitch(void);
+#define FLOWHITCH_STOP_NEXT CtrAudioSystem_chainStopFlowhitch
+
+// The read link after flowend's (decode thread, and the rare other reader): a taken spare's first frames come from
+// the copy decoded ahead.
+__attribute__((noinline, noipa, optimize("Os"), section(".text.flowhitch_late"))) int32_t CtrAudioSystem_chainReadFlowhitch(
+    CtrDecoder* dec, int16_t* out, uint32_t maxFrames) {
+    for (int k = 0; dec->kind == CTR_DECODER_VORBIS && FLOWHITCH_PRE > k; k++) {
+        const FlowhitchPre* e = &flowhitchPre[k];
+        uint32_t at = (uint32_t) dec->positionFrames;
+        if (e->pcm == NULL || e->key != dec->vf.vi || dec->positionFrames >= e->frames || dec->vf.pcm_offset != e->end) continue;
+        uint32_t n = e->frames - at;
+        if (n > maxFrames) n = maxFrames;
+        memcpy(out, e->pcm + at * dec->channels, n * dec->channels * sizeof(int16_t));
+        __sync_synchronize(); // the opener frees the copy once this position passes its end
+        dec->positionFrames = at + n;
+        return (int32_t) n;
+    }
+    return __real_CtrDecoder_read(dec, out, maxFrames);
+}
+#else
+#define FLOWHITCH_READ_NEXT __real_CtrDecoder_read
+#define FLOWHITCH_OPEN_NEXT __real_CtrDecoder_openFile
+#define FLOWHITCH_NOTE_NEXT __real_CtrWatchdog_note
+#endif
+#line 4905 // flowhitch rev 3: main's numbering (the __LINE__ trap)
 #ifdef ENABLE_WAD16
 // A cached looping sound's seam check (utaSeamSound) read every frame of the copy on the game thread at its first
 // looped play: 591 KB took 17.4 ms and 870 KB 25.9 ms of game-thread audio on the o2ds (argutflowey L5). For a
@@ -5177,7 +5270,7 @@ __attribute__((noinline, optimize("Os"), section(".text.flowend_late"))) int32_t
         return got;
 #endif
     }
-    return __real_CtrDecoder_read(dec, out, maxFrames);
+    return FLOWHITCH_READ_NEXT(dec, out, maxFrames);
 }
 
 #ifdef ENABLE_WAD16
@@ -5263,10 +5356,60 @@ __attribute__((noinline, optimize("Os"), section(".text.flowend_late"))) static 
     if (usw.wrapped != NULL && usw.wrapped == gShutdownTarget && usw.outer.update == usUpdate) usw.outer.update = flowendUpdate;
 }
 
+// ===[ flowhitch: a sound the linear guard shed plays as a stream for the rest of the room (late code, UNDERTALE) ]===
+// keepLinearFloor sheds cached sound effects when textures need linear memory. A shed sound played again in the same
+// room missed the cache: it played as a stream while the audio loader probed and decoded it into the cache again
+// (probe 144-190 ms, decode 2.4 s on the Old models), taking back the linear memory the guard had just freed. Omega
+// Flowey's turn-4 buzz and its destroyed theme did this, and the game thread waited on the newlib heap lock or
+// the loader's loadLock for 10-69 ms in that window (bfprobe3, o3DS XL): held frames of 42.7-59.4 ms (flowend
+// r20b, case 2). Each sound of at least FLOWHITCH_MIN_BYTES that a shed frees is marked FORM_STREAMED, so its later
+// plays stream as before but queue no new probe or decode from streamWhileCaching, until the next room change puts
+// its form back. Other paths can still cache it again (a small embedded WAV's buildSfx, a prepare job already in
+// flight, the sound plan's worker); those keep valid playback and only lessen the saving. A smaller one
+// is decoded again as before: one played often is cheaper to decode once than to open at every play (Omega Flowey's
+// 74 KB flame loop, marked too in a first build, was opened 49 times instead of 14 in the Azahar run). Plays, voices
+// and samples are the same; only which buffer a later play reads from differs (the stream's, not the cache copy's).
+#define FLOWHITCH_MAX 32u
+#define FLOWHITCH_MIN_BYTES (256u * 1024u)
+#define FLOWHITCH_SOUNDS 1024u
+static int16_t flowhitchSound[FLOWHITCH_MAX] __attribute__((section(".bss.flowhitch_late")));
+static uint8_t flowhitchForm[FLOWHITCH_MAX] __attribute__((section(".bss.flowhitch_late")));
+static uint32_t flowhitchCount __attribute__((section(".bss.flowhitch_late")));
+
+// The shedSfx chain's link after flowend's (ctr_wrap_chain.h), on the game thread, as every play is.
+__attribute__((noinline, noipa, optimize("Os"), section(".text.flowhitch_late"))) uint32_t CtrAudioSystem_chainFlowhitch(uint32_t bytes) {
+    CtrAudioSystem* ca = gShutdownTarget;
+    uint32_t n = ca != NULL ? ca->soundCount : 0;
+    if (n > FLOWHITCH_SOUNDS) n = FLOWHITCH_SOUNDS;
+    uint32_t was[FLOWHITCH_SOUNDS / 32u];
+    for (uint32_t i = 0; n > i; i++) {
+        if ((i & 31u) == 0) was[i >> 5] = 0; // each word set before its first bit (c26rev r33 LOW)
+        if (ca->sfxCache[i].pcm != NULL && ca->sfxCache[i].bytes >= FLOWHITCH_MIN_BYTES) was[i >> 5] |= 1u << (i & 31u);
+    }
+    uint32_t shed = CTR_SHEDSFX_AFTER_FLOWHITCH(bytes);
+    for (uint32_t i = 0; n > i && FLOWHITCH_MAX > flowhitchCount; i++) {
+        if ((was[i >> 5] >> (i & 31u) & 1u) && ca->sfxCache[i].pcm == NULL) {
+            flowhitchSound[flowhitchCount] = (int16_t) i;
+            flowhitchForm[flowhitchCount++] = ca->soundForms[i];
+            ca->soundForms[i] = FORM_STREAMED;
+        }
+    }
+    return shed;
+}
+
+// The beginSfxPlan chain's link after flowend's: at a room change the shed sounds get their forms back (the last
+// room's first mark last, so a sound marked twice gets the form it had before both).
+__attribute__((noinline, noipa, optimize("Os"), section(".text.flowhitch_late"))) void CtrAudioSystem_chainPlanFlowhitch(void) {
+    CtrAudioSystem* ca = gShutdownTarget;
+    for (uint32_t i = flowhitchCount; ca != NULL && i-- > 0;) ca->soundForms[(uint16_t) flowhitchSound[i]] = flowhitchForm[i];
+    flowhitchCount = 0;
+    __real_CtrAudioSystem_beginSfxPlan();
+}
+#line 5070 // flowhitch: main's numbering (the __LINE__ trap)
 __attribute__((noinline, optimize("Os"), section(".text.flowend_late"))) void __wrap_CtrAudioSystem_beginSfxPlan(void) {
     flowendRaiseKept(true);
     flowendKeepCount = 0;
-    __real_CtrAudioSystem_beginSfxPlan();
+    CTR_BEGINSFXPLAN_AFTER_FLOWEND();
 }
 
 __attribute__((noinline, optimize("Os"), section(".text.flowend_late"))) static void flowendKeepSound(int32_t soundIndex) {
@@ -5453,6 +5596,10 @@ __attribute__((noinline, optimize("Os"), section(".text.flowburst_late"))) stati
         v->pitch = sound->pitch > 0.0f ? sound->pitch : 1.0f;
         v->emitterGain = 1.0f;
         v->ctx = -1;
+#if defined(ENABLE_WAD16) && defined(CTR_AUDIO_PCM_HASH)
+        latRequest(ca, vi);
+#endif
+#line 5229
         v->kind = VOICE_PENDING;
         flowendDeferred |= 1u << vi;
         // As played now for the cache's shedding and eviction until the update starts it (sfxInUse counts SFX voices).
@@ -5664,6 +5811,10 @@ static uint8_t flowendSongState __attribute__((section(".bss.flowpre_late"))); /
 static const uint32_t flowendSongs[][2] __attribute__((section(".rodata.flowend_in_text"))) = {
     {0x26B8DF80u, 0x5638720Au}, {0x328062AFu, 0x5638720Au}, {0x5638720Au, 0x55387077u}, {0x55387077u, 0x5638720Au},
     {0x3B1C020Eu, 0}, {0x3EE40FFEu, 0x9B1C49AAu}};
+extern const uint32_t CtrLoadmix_songs[2][2]; // Additional guesses reuse this spare and flowhitch's first buffer.
+#ifdef CTR_AUDIO_PCM_HASH
+bool CtrLoadmix_preparing(void); // The diagnostic selector covers the entire unit, including these guesses.
+#endif
 static const char flowendSongName[] __attribute__((section(".rodata.flowend_in_text"))) = "%.*s%.*s%s\0\0\0\0"; // NULs after: a phase pad
 
 __attribute__((noinline, optimize("Os"), section(".text.flowend_late"))) static void flowendSongDrop(void) {
@@ -5684,12 +5835,23 @@ __attribute__((noinline, optimize("Os"), section(".text.flowend_late"))) static 
 // Opener thread, at the quiet second after opening path: true when the table names path (its number guess is skipped).
 __attribute__((noinline, optimize("Os"), section(".text.flowend_late"))) static bool flowendSongGuess(CtrAudioSystem* ca, const char* path) {
     __asm__ volatile("nop"); // phase pad: the loader and update code after keeps stage72's phase
+#if !defined(CTR_AUDIO_PCM_HASH)
+    // Retain rev 3m's 444 B release slot: the extra table entries simplified
+    // its body by 64 B. Every following existing late body keeps its address.
+    __asm__ volatile(".rept 16\n nop\n .endr");
+#endif
     const char* base;
     size_t len;
     uint32_t h = flowendSongHash(path, &base, &len);
-    for (size_t k = 0; sizeof(flowendSongs) / sizeof(flowendSongs[0]) > k; k++) {
-        if (flowendSongs[k][0] != h) continue;
-        if (flowendSongs[k][1] == 0) {
+    const size_t originalCount = sizeof(flowendSongs) / sizeof(flowendSongs[0]);
+    size_t count = originalCount + 2;
+#ifdef CTR_AUDIO_PCM_HASH
+    if (!CtrLoadmix_preparing()) count = originalCount;
+#endif
+    for (size_t k = 0; count > k; k++) {
+        const uint32_t* song = k < originalCount ? flowendSongs[k] : CtrLoadmix_songs[k - originalCount];
+        if (song[0] != h) continue;
+        if (song[1] == 0) {
             flowendSongDrop();
             return false;
         }
@@ -5697,7 +5859,7 @@ __attribute__((noinline, optimize("Os"), section(".text.flowend_late"))) static 
             const char* file = ca->base.audioGroups[0]->sond.sounds[i].file;
             const char* fb;
             size_t fl;
-            if (file == NULL || flowendSongHash(file, &fb, &fl) != flowendSongs[k][1]) continue;
+            if (file == NULL || flowendSongHash(file, &fb, &fl) != song[1]) continue;
             char guess[FLOWEND_AHEAD_PATH];
             int n = snprintf(guess, sizeof(guess), flowendSongName, (int) (base - path), path, (int) fl, fb, base + len);
             if (n > 0 && FLOWEND_AHEAD_PATH > n && (flowendSongState == 0 || strcmp(flowendSongPath, guess) != 0)) {
@@ -5786,6 +5948,327 @@ __attribute__((noinline, optimize("Os"), section(".text.flowend_late"))) static 
     flowendAheadState = 1;
 }
 
+#ifdef ENABLE_WAD16
+// ===[ flowhitch rev 3: three spares for the shed cues (flowend r22c) ]===
+// A cue of FLOWHITCH_MIN_BYTES or more that the guard shed replays as a stream for the rest of the room; its open
+// took 160-310 ms on the Old consoles (alarm, repeat_1), where cand27's cache hit started in the frame of the call.
+// At a quiet second, as the other spares, the opener keeps open the files of the three shed cues played most recently
+// (Omega Flowey replays alarm, repeat_1 and endnote), and a replay takes its spare as the others are taken. A room change
+// unmarks them; they close. Only the open of a cue's first play after a shed is paid, as before.
+#include "ctr_open_files.h" // the spares are a kept-open cache: an open that finds the card's files crowded closes them
+// Each held decoder (760 B with Tremor) is on the heap, not in late BSS: the image stays at stage75i's page count.
+static CtrDecoder* flowhitchSlot[FLOWHITCH_SLOTS] __attribute__((section(".bss.flowhitch_late"))); // with its path
+static char* flowhitchSlotPath[FLOWHITCH_SLOTS] __attribute__((section(".bss.flowhitch_late"))); // NULL: closed
+static int16_t flowhitchSlotSound[FLOWHITCH_SLOTS] __attribute__((section(".bss.flowhitch_late")));
+static int16_t flowhitchNoFile __attribute__((section(".bss.flowhitch_late"))); // sound index + 1 of a cue no spare can hold
+#define FLOWHITCH_RECENT 4
+static int16_t flowhitchRecent[FLOWHITCH_RECENT] __attribute__((section(".bss.flowhitch_late"))); // sound index + 1, latest first
+static int8_t flowhitchKeeper __attribute__((section(".bss.flowhitch_late"))); // CtrOpenFiles keeper id + 2 (1: none free)
+// The keeper's owner is flowhitchCa, not the audio system: a wake another thread copied before the keeper went can
+// still arrive after the audio system is freed (exit's rooms.dtm write follows the audio stop). flowhitchWaking counts
+// wakes inside flowhitchWake; the stop clears flowhitchCa, then waits for it to reach 0 (all three sequentially
+// consistent: a wake either sees NULL or is counted before the stop reads the count).
+static CtrAudioSystem* flowhitchCa __attribute__((section(".bss.flowhitch_late")));
+static uint32_t flowhitchWaking __attribute__((section(".bss.flowhitch_late")));
+
+#include "renderer.h" // rev 4's room link reads the runner's room
+#include "runner.h"
+// flowhitch rev 4 (flowend r25): the musical's two cold song starts. Its first song has no open before it in the
+// room to guess from, and the song it plays twice in a row is cold the second time (the number-guess spare already
+// holds the song after it): 179-193 and 185-188 ms of open on the Old models (cand26), each a song start that late
+// against the PC game's. The room link marks the musical's room (the FNV-1a hash of its name, as the song table's);
+// at the opener's waits the phase-song spare (idle there) takes the first song's file once the room is entered, and
+// the repeated song's file again once it starts. Both are opened at a quiet second, as every spare is; a spare left
+// over is closed when the room changes (either song) or another file opens (the repeated one). Rev 4's code and statics
+// are in their own sections after rev 3's (.text/.bss.flowhitch4_late, late_reserve.ld), so rev 3's keep their addresses.
+#define FLOWHITCH_SONG_ROOM 0xD60BB10Fu // the room's name
+#define FLOWHITCH_SONG_FIRST 0x9A2B3ECEu // its first song's file name, before the extension
+#define FLOWHITCH_SONG_AGAIN 0x992B3D3Bu // the song it plays twice in a row
+static uint32_t flowhitchRoomSeq __attribute__((section(".bss.flowhitch4_late"))); // game thread: room changes so far
+static uint8_t flowhitchRoomIs __attribute__((section(".bss.flowhitch4_late"))); // game thread: in the musical's room
+static uint32_t flowhitchRoomSeen __attribute__((section(".bss.flowhitch4_late"))); // opener: the changes handled
+static uint8_t flowhitchSongMine __attribute__((section(".bss.flowhitch4_late"))); // opener: 1 the repeat, 2 the first song
+static uint8_t flowhitchAgainDone __attribute__((section(".bss.flowhitch4_late"))); // opener: the repeat was asked for
+
+static void flowhitchSongs(CtrAudioSystem* ca); // rev 4, after the note link (defined there: a function before it that
+// reads flowend's statics first reorders them)
+static void flowhitchOwner(CtrAudioSystem* ca); // rev 4, the same
+
+// Opener thread (CtrOpenFiles_poll, or inside its own open that failed): an open found the card's files crowded, so
+// every spare closes, as a cache's kept-open files do, and that open is tried again. Up to 5 files open at a quiet
+// second; the card's open allowance ran out at 14-18 files on consoles (docs/3ds-hardware.md, FS OutOfResource).
+__attribute__((noinline, optimize("Os"), section(".text.flowhitch_late"))) static void flowhitchShed(void* owner) {
+    (void) owner;
+    flowendDropAhead();
+    flowendSongDrop();
+    for (int j = 0; FLOWHITCH_SLOTS > j; j++) {
+        if (flowhitchSlotPath[j] == NULL) continue;
+        CtrDecoder_close(flowhitchSlot[j]);
+        free(flowhitchSlot[j]);
+        free(flowhitchSlotPath[j]);
+        flowhitchSlotPath[j] = NULL;
+    }
+}
+
+// Any thread: has the opener poll soon (its wait ends). Nothing once the audio system stopped (flowhitchCa NULL).
+__attribute__((noinline, optimize("Os"), section(".text.flowhitch_late"))) static void flowhitchWake(void* owner) {
+    (void) owner;
+    __atomic_add_fetch(&flowhitchWaking, 1, __ATOMIC_SEQ_CST);
+    CtrAudioSystem* ca = __atomic_load_n(&flowhitchCa, __ATOMIC_SEQ_CST);
+    if (ca != NULL) LightEvent_Signal(&ca->openEvent);
+    __atomic_sub_fetch(&flowhitchWaking, 1, __ATOMIC_SEQ_CST);
+}
+
+// shutdownAudio's CtrReadAhead_shutdown call (through usstop's wrap), after the opener and the decode thread are
+// joined and before the audio system is freed: the keeper goes, no wake can reach the audio system any more, and the
+// spares close and their first buffers are freed here (no thread of this audio system is left to read them), so
+// the files the exit opens next (rooms.dtm's write) have the card's allowance, and a later audio system starts clean.
+__attribute__((noinline, noipa, optimize("Os"), section(".text.flowhitch_late"))) void CtrAudioSystem_chainStopFlowhitch(void) {
+    if (flowhitchKeeper > 1) CtrOpenFiles_removeKeeper(flowhitchKeeper - 2);
+    flowhitchKeeper = 0;
+    __atomic_store_n(&flowhitchCa, NULL, __ATOMIC_SEQ_CST);
+    while (__atomic_load_n(&flowhitchWaking, __ATOMIC_SEQ_CST) != 0) svcSleepThread(100000);
+    flowhitchShed(NULL);
+    for (int k = 0; FLOWHITCH_PRE > k; k++) {
+        free(flowhitchPre[k].pcm);
+        flowhitchPre[k].pcm = NULL;
+    }
+    __real_CtrReadAhead_shutdown();
+}
+
+// Whether the guard shed sound si this room (the game thread's marks; a stale read only opens or closes a spare).
+__attribute__((noinline, optimize("Os"), section(".text.flowhitch_late"))) static bool flowhitchMarked(int32_t si) {
+    for (uint32_t i = 0; flowhitchCount > i; i++) {
+        if (flowhitchSound[i] == si) return true;
+    }
+    return false;
+}
+
+// The open link after flowend's (opener thread, an open no other spare holds): a shed cue's spare, else the file.
+__attribute__((noinline, noipa, optimize("Os"), section(".text.flowhitch_late"))) bool CtrAudioSystem_chainOpenFlowhitch(
+    CtrDecoder* dec, const char* path) {
+    bool ok = false;
+    for (int j = 0; FLOWHITCH_SLOTS > j && !ok; j++) {
+        if (flowhitchSlotPath[j] == NULL || strcmp(flowhitchSlotPath[j], path) != 0) continue;
+        memcpy(dec, flowhitchSlot[j], sizeof(*dec));
+        dec->vf.datasource = dec; // Tremor's callbacks get the decoder
+        if (dec->vf.ready_state >= FLOWEND_INITSET) dec->vf.vb.vd = &dec->vf.vd;
+        free(flowhitchSlot[j]);
+        free(flowhitchSlotPath[j]);
+        flowhitchSlotPath[j] = NULL;
+        ok = true;
+    }
+    if (!ok) ok = __real_CtrDecoder_openFile(dec, path);
+    // The sound of the stream that owns dec, if a cue (its first play caches it) or a shed one: the latest first.
+    CtrAudioSystem* ca = gShutdownTarget;
+    uintptr_t off = (uintptr_t) dec - (uintptr_t) &ca->streams[0].decoder;
+    if (!ok || off % sizeof(StreamContext) != 0 || off / sizeof(StreamContext) >= STREAM_CONTEXTS) return ok;
+    int32_t vi = ca->streams[off / sizeof(StreamContext)].owner;
+    int32_t si = vi >= 0 && VOICE_COUNT > vi ? ca->voices[vi].soundIndex : -1;
+    if (si < 0 || (uint32_t) si >= ca->soundCount || (ca->soundForms[si] == FORM_STREAMED && !flowhitchMarked(si))) return ok;
+    int i = 0;
+    while (FLOWHITCH_RECENT - 1 > i && flowhitchRecent[i] != si + 1) i++;
+    for (; i > 0; i--) flowhitchRecent[i] = flowhitchRecent[i - 1];
+    flowhitchRecent[0] = (int16_t) (si + 1);
+    return ok;
+}
+
+// The note link before flowend's spare work (opener thread, at each wait): frees the copies no stream reads, decodes
+// a held spare's first buffer, and at a quiet second with no other spare to open, keeps the shed cues' spares.
+__attribute__((noinline, noipa, optimize("Os"), section(".text.flowhitch_late"))) void CtrAudioSystem_chainNoteFlowhitch(const char* state) {
+    __real_CtrWatchdog_note(state);
+    CtrAudioSystem* ca = gShutdownTarget;
+    if (ca != NULL && threadGetCurrent() == ca->opener && strcmp(state, flowendWaiting) == 0) flowhitchOwner(ca);
+    if (ca == NULL || flowendAheadOwner != ca || threadGetCurrent() != ca->opener || strcmp(state, flowendWaiting) != 0 || ca->openerQuit) return;
+    if (flowhitchKeeper == 0) {
+        __atomic_store_n(&flowhitchCa, ca, __ATOMIC_SEQ_CST);
+        flowhitchKeeper = (int8_t) (CtrOpenFiles_addKeeper(flowhitchShed, flowhitchWake, NULL) + 2);
+    }
+    CtrOpenFiles_poll();
+    for (int i = 0; STREAM_CONTEXTS > i; i++) {
+        if (ca->streams[i].state == CTX_OPEN_REQUESTED) return;
+    }
+    flowhitchSongs(ca);
+    CtrDecoder* held[FLOWHITCH_PRE]; // no initializer list: a constant copy would land in .rodata, before the late sections
+    held[0] = flowendAheadState == 2 ? &flowendAhead : NULL;
+    held[1] = flowendSongState == 2 ? &flowendSong : NULL;
+    for (int j = 0; FLOWHITCH_SLOTS > j; j++) held[2 + j] = flowhitchSlotPath[j] != NULL ? flowhitchSlot[j] : NULL;
+    for (int k = 0; FLOWHITCH_PRE > k; k++) {
+#ifdef CTR_AUDIO_PCM_HASH
+        if (!latPreparationOn()) continue; // Matched diagnostic control: leave a spare at source frame zero.
+#endif
+        FlowhitchPre* e = &flowhitchPre[k];
+        CtrDecoder* d = held[k];
+        if (e->pcm != NULL && (d == NULL || d->vf.vi != e->key || d->vf.pcm_offset != e->end)) { // its spare went or was read
+            bool reading = false;
+            for (int i = 0; STREAM_CONTEXTS > i; i++) {
+                const CtrDecoder* sd = &ca->streams[i].decoder;
+                if (sd->kind == CTR_DECODER_VORBIS && sd->vf.vi == e->key && e->frames > sd->positionFrames) reading = true;
+            }
+            if (reading) continue;
+            free(e->pcm);
+            e->pcm = NULL;
+        }
+        if (d == NULL || e->pcm != NULL || d->positionFrames != 0) continue;
+        uint32_t ch = d->channels, got = 0;
+        int16_t* pcm = malloc(FLOWHITCH_PRE_FRAMES * ch * sizeof(int16_t));
+        int32_t r = 1;
+        while (pcm != NULL && FLOWHITCH_PRE_FRAMES > got && r > 0) {
+            r = __real_CtrDecoder_read(d, pcm + got * ch, FLOWHITCH_PRE_FRAMES - got);
+            if (r > 0) got += (uint32_t) r;
+        }
+        d->positionFrames = 0;
+        e->key = d->vf.vi;
+        e->end = d->vf.pcm_offset;
+        e->frames = got;
+        e->pcm = pcm;
+        return; // one decode ahead per wait
+    }
+    if (flowendAheadState == 1 || flowendGuessDue || flowendSongState == 1 || svcGetSystemTick() - flowendLastOpen < (uint64_t) (FLOWEND_AHEAD_IDLE_MS * CPU_TICKS_PER_MSEC))
+        return;
+    int32_t want[FLOWHITCH_SLOTS]; // the three shed cues played most recently
+    int w = 0;
+    for (int i = 0; FLOWHITCH_RECENT > i && FLOWHITCH_SLOTS > w; i++) {
+        if (flowhitchRecent[i] != 0 && flowhitchMarked(flowhitchRecent[i] - 1)) want[w++] = flowhitchRecent[i] - 1;
+    }
+    while (FLOWHITCH_SLOTS > w) want[w++] = -1;
+    for (int j = 0; FLOWHITCH_SLOTS > j; j++) {
+        bool keep = flowhitchSlotPath[j] == NULL;
+        for (w = 0; FLOWHITCH_SLOTS > w; w++) keep |= flowhitchSlotSound[j] == want[w];
+        if (!keep) {
+            CtrDecoder_close(flowhitchSlot[j]);
+            free(flowhitchSlot[j]);
+            free(flowhitchSlotPath[j]);
+            flowhitchSlotPath[j] = NULL;
+            return;
+        }
+    }
+    for (w = 0; FLOWHITCH_SLOTS > w; w++) {
+        int32_t si = want[w];
+        int j = -1;
+        bool held = false;
+        for (int i = 0; FLOWHITCH_SLOTS > i; i++) {
+            if (flowhitchSlotPath[i] == NULL) j = i;
+            else if (flowhitchSlotSound[i] == si) held = true;
+        }
+        if (si < 0 || (uint32_t) si >= ca->soundCount || si + 1 == flowhitchNoFile || held || j < 0) continue;
+        const Sound* sound = &ca->base.audioGroups[0]->sond.sounds[si];
+        char* path = (sound->flags & (AUDIO_ENTRY_FLAG_REGULAR | AUDIO_ENTRY_FLAG_IS_EMBEDDED | AUDIO_ENTRY_FLAG_IS_COMPRESSED)) ==
+                             AUDIO_ENTRY_FLAG_REGULAR
+                         ? resolveExternalPath(ca, sound)
+                         : NULL; // a file of its own, as playSoundImpl streams it
+        CtrDecoder* d = malloc(sizeof(CtrDecoder));
+        bool ok = path != NULL && d != NULL && __real_CtrDecoder_openFile(d, path);
+        if (ok && d->kind != CTR_DECODER_VORBIS) {
+            CtrDecoder_close(d);
+            ok = false;
+        }
+        flowendLastOpen = svcGetSystemTick();
+        if (ok) {
+            flowhitchSlot[j] = d;
+            flowhitchSlotPath[j] = path;
+            flowhitchSlotSound[j] = (int16_t) si;
+        } else {
+            free(d);
+            free(path);
+            flowhitchNoFile = (int16_t) (si + 1);
+        }
+        return;
+    }
+}
+
+// The FNV-1a hash of a name's last part before its extension (flowendSongHash's; its own copy: a new caller of a
+// flowend function reorders flowend's late code).
+__attribute__((noinline, optimize("Os"), section(".text.flowhitch4_late"))) static uint32_t flowhitchFileHash(const char* file) {
+    const char* base = strrchr(file, '/');
+    base = base != NULL ? base + 1 : file;
+    const char* dot = strrchr(base, '.');
+    return RoomPlan_fnv1a((const uint8_t*) base, dot != NULL ? (size_t) (dot - base) : strlen(base));
+}
+
+// Game thread: a room change, into the musical's room or not (a static function's stores: the chain link's own
+// would reorder flowend's late statics).
+__attribute__((noinline, optimize("Os"), section(".text.flowhitch4_late"))) static void flowhitchRoomMark(uint8_t is) {
+    __atomic_store_n(&flowhitchRoomIs, is, __ATOMIC_RELAXED);
+    __atomic_add_fetch(&flowhitchRoomSeq, 1, __ATOMIC_RELEASE);
+}
+
+#if defined(CTRPORT_TARGET_O3DS) && !defined(CTRPORT_DODGEFRONT)
+#error "UNDERTALE Old: this file needs CTRPORT_DODGEFRONT (CMakeLists.txt), or its link skips textfront's chain"
+#endif
+void CTR_PREFETCHROOM_AFTER_FLOWHITCH(struct Renderer* renderer);
+// The prefetchRoom chain's link after roomplan's (game thread, once per room change).
+__attribute__((noinline, noipa, optimize("Os"), section(".text.flowhitch4_late"))) void CtrRenderer_chainFlowhitch(struct Renderer* renderer) {
+    Runner* runner = renderer->runner;
+    DataWin* dw = renderer->dataWin;
+    int32_t room = runner != NULL ? runner->currentRoomIndex : -1;
+    const char* name = dw != NULL && room >= 0 && dw->room.count > (uint32_t) room ? dw->room.rooms[room].name : NULL;
+    flowhitchRoomMark(name != NULL && flowhitchFileHash(name) == FLOWHITCH_SONG_ROOM);
+    CTR_PREFETCHROOM_AFTER_FLOWHITCH(renderer);
+}
+
+// Opener thread, at a wait: the spares' owner. A game that has opened no file yet (a bench that boots into the musical's
+// room; the first open sets it) gets the opener's system, so the room's first song can open ahead. A spare an earlier
+// system left still waits for an open to drop it (the open wrap's own switch). The static's address comes through asm:
+// a new C reference to it reorders flowend's late statics; noipa and the clobber make the callers load it again.
+__attribute__((noinline, noipa, optimize("Os"), section(".text.flowhitch4_late"))) static void flowhitchOwner(CtrAudioSystem* ca) {
+    CtrAudioSystem** owner;
+    // The address word sits inside this function (a pool the assembler adds at the section end is in no symbol).
+    __asm__ volatile("ldr %0, 1f\n\tb 2f\n1:\t.word flowendAheadOwner\n2:" : "=r"(owner) : : "memory");
+    if (*owner == NULL) *owner = ca;
+    __asm__ volatile("" : : : "memory");
+}
+
+// Opener thread: closes the phase-song spare if it is still the one this asked for (hash: that song's).
+__attribute__((noinline, optimize("Os"), section(".text.flowhitch4_late"))) static void flowhitchSongLeave(uint32_t hash) {
+    if (flowendSongState != 0 && flowhitchFileHash(flowendSongPath) == hash) {
+        if (flowendSongState == 2) CtrDecoder_close(&flowendSong);
+        flowendSongState = 0;
+    }
+    flowhitchSongMine = 0;
+}
+
+// Opener thread, at each wait (before the spares' quiet-second work): asks the phase-song spare for the musical's songs.
+__attribute__((noinline, optimize("Os"), section(".text.flowhitch4_late"))) static void flowhitchSongs(CtrAudioSystem* ca) {
+    if (flowendSongState == 0) flowhitchSongMine = 0;
+    uint32_t seq = __atomic_load_n(&flowhitchRoomSeq, __ATOMIC_ACQUIRE);
+    uint8_t in = __atomic_load_n(&flowhitchRoomIs, __ATOMIC_RELAXED);
+    if (seq != flowhitchRoomSeen) {
+        // A room change: the spare this asked for in the room before (either song) is dropped first.
+        if (flowhitchSongMine != 0) flowhitchSongLeave(flowhitchSongMine == 1 ? FLOWHITCH_SONG_AGAIN : FLOWHITCH_SONG_FIRST);
+        if (in && flowendSongState != 0) return; // the spare is busy: asked again at a later wait
+        flowhitchRoomSeen = seq;
+        for (uint32_t i = 0; in && ca->base.audioGroups[0]->sond.count > i; i++) {
+            const Sound* sound = &ca->base.audioGroups[0]->sond.sounds[i];
+            if (sound->file == NULL || flowhitchFileHash(sound->file) != FLOWHITCH_SONG_FIRST) continue;
+            char* path = resolveExternalPath(ca, sound);
+            if (path != NULL && FLOWEND_AHEAD_PATH > strlen(path)) {
+                strcpy(flowendSongPath, path);
+                flowendSongState = 1;
+                flowhitchSongMine = 2;
+            }
+            free(path);
+            break;
+        }
+    }
+    if (!in) return; // the repeated song is asked for only in the musical's room
+    // The file opened last (flowendLastPath; the hash of a short name, once a wait).
+    uint32_t last = flowhitchFileHash(flowendLastPath);
+    // The first song opened some other way (cold: its spare was not open yet): its request is dropped, so the spare is
+    // free for the repeated song.
+    if (flowhitchSongMine == 2 && last == FLOWHITCH_SONG_FIRST) flowhitchSongLeave(FLOWHITCH_SONG_FIRST);
+    if (last != FLOWHITCH_SONG_AGAIN) {
+        flowhitchAgainDone = 0;
+        if (flowhitchSongMine == 1) flowhitchSongLeave(FLOWHITCH_SONG_AGAIN);
+    } else if (!flowhitchAgainDone && flowendSongState == 0) {
+        flowhitchAgainDone = 1;
+        memcpy(flowendSongPath, flowendLastPath, FLOWEND_AHEAD_PATH);
+        flowendSongState = 1;
+        flowhitchSongMine = 1;
+    }
+}
+#endif
+#line 5562 // flowhitch rev 3: main's numbering (the __LINE__ trap)
 __attribute__((noinline, optimize("Os"), section(".text.flowend_late"))) bool __wrap_CtrDecoder_openFile(CtrDecoder* dec, const char* path) {
     CtrAudioSystem* ca = gShutdownTarget;
     if (ca == NULL || ca->opener == NULL || threadGetCurrent() != ca->opener) return __real_CtrDecoder_openFile(dec, path);
@@ -5808,7 +6291,7 @@ __attribute__((noinline, optimize("Os"), section(".text.flowend_late"))) bool __
     if (!flowendSongTake(dec, path))
 #endif
     {
-        ok = __real_CtrDecoder_openFile(dec, path);
+        ok = FLOWHITCH_OPEN_NEXT(dec, path);
     }
     // The guess (its SD lookups cost 20-45 ms) waits for the quiet second with the open ahead, off the cue's path.
     size_t n = strnlen(path, FLOWEND_AHEAD_PATH);
@@ -5827,7 +6310,7 @@ __attribute__((noinline, optimize("Os"), section(".text.flowend_late"))) void __
     
 #endif
 #endif
-    __real_CtrWatchdog_note(state);
+    FLOWHITCH_NOTE_NEXT(state);
     CtrAudioSystem* ca = gShutdownTarget;
     if (ca == NULL || ca->opener == NULL || threadGetCurrent() != ca->opener || strcmp(state, flowendWaiting) != 0) return;
     // Any stream context changing (a state or a path: short streamed sounds such as a flame loop open from memory,
@@ -6767,6 +7250,9 @@ USSTOP_TTEXT static void usRev2ExitTo(void) {
 #endif
 void __real_CtrReadAhead_shutdown(void);
 void __wrap_CtrReadAhead_shutdown(void);
+#ifndef FLOWHITCH_STOP_NEXT
+#define FLOWHITCH_STOP_NEXT __real_CtrReadAhead_shutdown
+#endif
 USSTOP_TEXT void __wrap_CtrReadAhead_shutdown(void) {
     if (usw.started) {
 #ifdef CTRPORT_EXITTRAIL
@@ -6806,7 +7292,7 @@ USSTOP_TEXT void __wrap_CtrReadAhead_shutdown(void) {
         }
 #endif
     }
-    __real_CtrReadAhead_shutdown();
+    FLOWHITCH_STOP_NEXT(); // flowhitch's stop link (flowend r22e), which calls the real one
 }
 // aptExit (exit trail builds: after z_exittrail.c's wrap). Only the exit's owner gets a keep from
 // CtrLeavekeep_ownerKeep; the lab leave's own earlier aptExit call (ctr_lab.c, not the owner yet) passes through, but
@@ -6901,4 +7387,19 @@ __attribute__((noinline, section(".text.usstop_exit"))) void __wrap_svcExitProce
 #endif
     __real_svcExitProcess();
 }
+#endif
+
+#if defined(ENABLE_WAD16) && defined(CTR_AUDIO_PCM_HASH)
+#include "runner.h"
+#include "ctr_renderer.h"
+#include "ctr_wrap_chain.h"
+#include "ctr_loadaudio_observer.inc"
+#endif
+
+#if defined(ENABLE_WAD16)
+#include <citro3d.h>
+#include "runner.h"
+#include "ctr_renderer.h"
+#include "ctr_wrap_chain.h"
+#include "ctr_loadaudio_mix.inc"
 #endif

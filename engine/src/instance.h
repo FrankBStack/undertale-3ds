@@ -34,7 +34,7 @@ struct Instance {
     struct Instance* staticParent;
     float x, y;
     float xprevious, yprevious;
-    float xstart, ystart;
+    float pathPosition, pathPositionPrevious; // path fields here, beside x/y: the line the animate pass reads (lane pacer)
     bool persistent, solid, active, destroyed, visible, createEventFired, outsideRoom, spatialGridDirty, mouseOver;
     // Used to track which alarms are set without looping through the entire alarm array
     uint16_t activeAlarmMask;
@@ -73,13 +73,13 @@ struct Instance {
     float hspeed, vspeed;
     float friction;
     float gravity, gravityDirection;
-    struct PhysicsBody* physicsBody;
+    int32_t pathIndex; // -1 = no path active; here, in the line the motion pass reads (hspeed..gravity; lane pacer)
     float physicsContact[5]; // point count, first point x/y, normal x/y
 
     // Path following state
-    int32_t pathIndex;           // -1 = no path active
-    float pathPosition;           // 0.0-1.0
-    float pathPositionPrevious;
+    struct PhysicsBody* physicsBody; // read only when the runner has physics
+    float xstart, ystart; // path position: 0.0-1.0 (above)
+    // (pathPositionPrevious: above)
     float pathSpeed;
     float pathScale;              // default 1.0
     float pathOrientation;        // degrees, default 0.0
@@ -136,7 +136,7 @@ void Instance_computeComponentsFromSpeed(Instance* inst);
 
 char* Instance_toStringFancy(Instance* inst, DataWin* dataWin);
 
-// utorder (credfix, ruling 2026-10-27; UNDERTALE on the 3DS, where runner.c draws through utkDrawRoom: the
+// utorder (lane credfix, lead ruling 2026-10-27; UNDERTALE on the 3DS, where runner.c draws through utkDrawRoom: the
 // conditions of runner.h's UTK_PLAIN_RUNS): an instance's draw order key among the instances of its depth, ascending =
 // drawn first. GameMaker 1.4 puts an instance at the front of its depth's list (drawn first, so under the others) when
 // it is made and when its depth changes to another value, so at equal depth the newest is drawn first and the oldest

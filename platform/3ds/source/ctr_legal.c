@@ -121,7 +121,7 @@ static LATE_CODE int cursor(const CtrMenu* menu) {
     return legal.selected ? LEGAL_ITEM : menu->cursor >= OLD_RESUME ? menu->cursor + 1 : menu->cursor;
 }
 
-static LATE_CODE void drawOptions(CtrMenu* menu) {
+static LATE_CODE CTR_COLD_OS void drawOptions(CtrMenu* menu) {
     CtrLog_beginConsole();
     consoleSelect(menu->console);
     consoleClear();
@@ -150,7 +150,7 @@ static LATE_CODE void drawOptions(CtrMenu* menu) {
     CtrLog_endConsole();
 }
 
-static LATE_CODE void printWrapped(const char* text) {
+static LATE_CODE CTR_COLD_OS void printWrapped(const char* text) {
     while (*text) {
         int length = 0;
         while (text[length] && length < CTR_RELEASE_LEGAL_COLUMNS) length++;
@@ -175,7 +175,7 @@ static LATE_CODE void drawSummary(CtrMenu* menu) {
     CtrLog_endConsole();
 }
 
-static LATE_CODE bool readPage(void) {
+static LATE_CODE CTR_COLD_OS bool readPage(void) {
     FILE* file = fopen(documentPaths[legal.document], fileMode);
     if (file == NULL && !legal.mountTried) {
         legal.mountTried = true;
@@ -196,7 +196,7 @@ static LATE_CODE bool readPage(void) {
     return ok;
 }
 
-static LATE_CODE void drawViewer(CtrMenu* menu) {
+static LATE_CODE CTR_COLD_OS void drawViewer(CtrMenu* menu) {
     bool ok = readPage();
     CtrLog_beginConsole();
     consoleSelect(menu->console);
@@ -210,7 +210,7 @@ static LATE_CODE void drawViewer(CtrMenu* menu) {
     CtrLog_endConsole();
 }
 
-static LATE_CODE CtrMenuAction updateLegal(CtrMenu* menu, u32 down) {
+static LATE_CODE CTR_COLD_OS CtrMenuAction updateLegal(CtrMenu* menu, u32 down) {
     if ((down & KEY_SELECT) || ((down & KEY_B) && legal.document < 0)) {
         legal.active = false;
         drawOptions(menu);

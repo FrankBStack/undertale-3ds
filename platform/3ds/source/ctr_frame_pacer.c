@@ -43,6 +43,7 @@
 
 
 void __real_gfxScreenSwapBuffers(gfxScreen_t screen, bool hasStereo);
+#line 46
 void __wrap_gfxScreenSwapBuffers(gfxScreen_t screen, bool hasStereo);
 
 typedef struct {

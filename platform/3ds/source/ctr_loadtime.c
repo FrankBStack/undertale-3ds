@@ -87,7 +87,7 @@ static int* __attribute__((noinline, noipa, no_reorder, section(".text.late.load
     return NULL;
 }
 
-int bootHookStat(const char* path, struct stat* st) {
+CTR_COLD_OS int bootHookStat(const char* path, struct stat* st) {
     int* hook = bootHook(path);
     if (hook != NULL && *hook != 0) {
         if (*hook > 0) return 0; // Callers only use the existence result.
@@ -99,7 +99,7 @@ int bootHookStat(const char* path, struct stat* st) {
     return result;
 }
 
-FILE* openBootHook(const char* path, const char* mode) {
+CTR_COLD_OS FILE* openBootHook(const char* path, const char* mode) {
     int* hook = bootHook(path);
     if (hook != NULL && *hook < 0) {
         errno = ENOENT;

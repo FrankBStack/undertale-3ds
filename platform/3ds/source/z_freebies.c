@@ -102,12 +102,17 @@ FB_TEXT static int32_t fbSub(Runner* runner) {
     return sub;
 }
 
+void CtrLoadmix_boundary(Runner* runner, bool loaded);
+void CtrLoadmix_handleRoomChange(Runner* runner);
+#line 105
 FB_TEXT void __wrap_Runner_handlePendingRoomChange(Runner* runner) {
     int32_t pending = runner->pendingRoom;
     int32_t before = runner->currentRoomIndex;
-    __real_Runner_handlePendingRoomChange(runner);
+#line 108
+    CtrLoadmix_handleRoomChange(runner);
     // No change asked (most frames). Any other value (a room, a game restart) leaves fb with the key now.
     if (pending == -1) return;
+#line 111
     int32_t room = runner->currentRoomIndex;
     int32_t sub = fbSub(runner);
     // Another room: main.c's room load takes this key at the end of the frame.
@@ -136,7 +141,7 @@ FB_TEXT void CTR_ENDFRAME_FREEBIES(Renderer* renderer) {
 
 // nopromo (above), the chain's next link: the real CtrRenderer_endFrame, then the check.
 __attribute__((noinline, section(".late_nopromo"))) void CTR_ENDFRAME_NOPROMO(Renderer* renderer) {
-    __real_CtrRenderer_endFrame(renderer);
+    CTR_ENDFRAME_AFTER_NOPROMO(renderer);
     CtrTextureCache* c = fb.cache;
     if (c == nullptr || c->pageCount == 0 || c->pages[0].promotionRetryFrame == UINT32_MAX || c->packedBudgetBytes != 0 ||
         c->packedBytes != 0 || c->wholeBytes != 0 || c->wholeRead != nullptr || c->reader == nullptr)

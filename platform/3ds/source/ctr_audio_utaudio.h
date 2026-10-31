@@ -36,6 +36,27 @@ UTA_LATE static void utaChnSetFormat(int id, u16 format);
 UTA_LATE static void utaChnSetRate(int id, float rate);
 UTA_LATE static void utaChnSetMix(int id, float mix[12]);
 UTA_LATE static void utaChnSetPaused(int id, bool paused);
+#if defined(ENABLE_WAD16)
+#define LM_CODE __attribute__((noinline, noipa, optimize("Os"), section(".text.late.loadaudio")))
+LM_CODE static void lmPaused(int, bool);
+LM_CODE static void lmReset(void);
+LM_CODE static void lmCallback(void*);
+LM_CODE static int lmDecodeWait(LightEvent*, s64);
+LM_CODE static void lmRegister(ndspCallback, void*);
+#endif
+#if defined(ENABLE_WAD16) && defined(CTR_AUDIO_PCM_HASH)
+#define LAT_CODE __attribute__((noinline, noipa, optimize("Os"), section(".text.late.loadaudio")))
+LAT_CODE static void latRequest(CtrAudioSystem*, int);
+LAT_CODE static void latPhysicalAdd(int, ndspWaveBuf*);
+LAT_CODE static void latSample(CtrAudioSystem*);
+LAT_CODE static void latReset(void);
+LAT_CODE static void latCall(CtrAudioSystem*, int32_t);
+LAT_CODE static void latMark(uint32_t);
+LAT_CODE static bool latOpenFile(CtrDecoder*, const char*);
+LAT_CODE static bool latOpenMemory(CtrDecoder*, const uint8_t*, uint32_t);
+LAT_CODE static int32_t latRead(CtrDecoder*, int16_t*, uint32_t);
+LAT_CODE static bool latPreparationOn(void);
+#endif
 UTA_LATE static void utaChnWaveBufClear(int id);
 UTA_LATE static void utaChnWaveBufAdd(int id, ndspWaveBuf* buf);
 UTA_LATE static u16 utaChnGetWaveBufSeq(int id);
@@ -89,6 +110,17 @@ __attribute__((noinline, noipa, optimize("Os"), section(".text.flowpitch_late"))
 #define UTA_PHYS_OPEN_FILE (CtrDecoder_openFile)
 #define UTA_PHYS_OPEN_MEMORY (CtrDecoder_openMemory)
 #define UTA_PHYS_NOTICE (CtrNotice_missing)
+
+#if defined(ENABLE_WAD16) && defined(CTR_AUDIO_PCM_HASH)
+#undef UTA_PHYS_ADD
+#define UTA_PHYS_ADD latPhysicalAdd
+#undef UTA_PHYS_OPEN_FILE
+#define UTA_PHYS_OPEN_FILE latOpenFile
+#undef UTA_PHYS_OPEN_MEMORY
+#define UTA_PHYS_OPEN_MEMORY latOpenMemory
+#undef UTA_PHYS_READ
+#define UTA_PHYS_READ latRead
+#endif
 
 #define ndspChnReset(id) utaChnReset(id)
 #define ndspChnSetInterp(id, type) utaChnSetInterp(id, type)

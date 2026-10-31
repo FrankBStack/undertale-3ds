@@ -779,10 +779,71 @@ RValue UtFlames_helixStep(VMContext* ctx, uint32_t k, AotFn generated, const int
     }
 
     // 0080-00D8: the rectangle test; a hit goes to the interpreter from the Conv.v.b (00C0).
-    if (utfRectFast(ctx, B, inst, rect, a[4], 0xC0)) return aotDeopt(ctx, k, 0xC0);
+    bool UtFlames_rectPre(VMContext*, int32_t, Instance*, BuiltinFunc, int32_t); if (UtFlames_rectPre(ctx, B, inst, rect, a[4])) return aotDeopt(ctx, k, 0xC0);
     return aotx_scriptFallthroughReturnValue(ctx);
 }
 
+// ===[ pacer: the helix's rectangle test, skipped for a bullet nowhere near the soul (2026-10-28) ]===
+//
+// Turn 2's helix keeps some 256 bullets on screen, and each Step's rectangle test (utfRectFast) first works out the
+// bullet's whole box (utfBox: Collision_computeBBox with four banker's roundings) before the soul's cached box says no.
+// Almost every bullet is far from the soul. This works out the same box's sides unrounded, exactly as
+// Collision_computeBBox does for an unrotated bullet, and answers false when the box after rounding cannot reach the
+// soul's: rounding moves a side by at most 0.5 and compatibility mode's right/bottom less one by 1.5 in all, so a gap
+// of more than 2 on one axis is a miss for both modes (a host oracle program checks it). It answers
+// only when every candidate is the one utfSoul already holds (so nothing would refresh it); anything else (a rotated
+// or sprite-less bullet, another operand, a stale cache, NaN sides, a box within 2) goes to utfRectFast as before.
+// Its calls pass the helix's 0xC0 as the call site did, so utfRectFast's ipConv stays a constant GCC folds in.
+#if defined(__arm__) && defined(__3DS__)
+#define UTF_PREFILTER __attribute__((noinline, section(".text_pacerflt_late")))
+#else
+#define UTF_PREFILTER __attribute__((noinline))
+#endif
+bool UtFlames_rectPre(VMContext* ctx, int32_t B, Instance* inst, BuiltinFunc rect, int32_t operand) UTF_PREFILTER;
+bool UtFlames_rectPre(VMContext* ctx, int32_t B, Instance* inst, BuiltinFunc rect, int32_t operand) {
+    Runner* runner = ctx->runner;
+    const Sprite* own = Collision_getSprite(runner->dataWin, inst);
+    if (own == nullptr || GMLReal_fabs(inst->imageAngle) > 0.0001 || 0 > operand || (uint32_t) operand >= ctx->dataWin->objt.count)
+        return utfRectFast(ctx, B, inst, rect, operand, 0xC0);
+    GMLReal marginL = (own->bboxMode == 1) ? 0.0 : (GMLReal) own->marginLeft;
+    GMLReal marginR = (own->bboxMode == 1) ? (GMLReal) own->width : (GMLReal) (own->marginRight + 1);
+    GMLReal marginT = (own->bboxMode == 1) ? 0.0 : (GMLReal) own->marginTop;
+    GMLReal marginB = (own->bboxMode == 1) ? (GMLReal) own->height : (GMLReal) (own->marginBottom + 1);
+    GMLReal originX = (GMLReal) own->originX;
+    GMLReal originY = (GMLReal) own->originY;
+    GMLReal left   = inst->x + inst->imageXscale * (marginL - originX);
+    GMLReal right  = inst->x + inst->imageXscale * (marginR - originX);
+    GMLReal top    = inst->y + inst->imageYscale * (marginT - originY);
+    GMLReal bottom = inst->y + inst->imageYscale * (marginB - originY);
+    if (left > right) { GMLReal tmp = left; left = right; right = tmp; }
+    if (top > bottom) { GMLReal tmp = top; top = bottom; bottom = tmp; }
+    left -= 2;
+    top -= 2;
+    right += 2;
+    bottom += 2;
+    Instance** list = runner->instancesByObject[operand];
+    for (int32_t i = 0, n = (int32_t) arrlen(list); n > i; i++) {
+        Instance* other = list[i];
+        if (!other->active || other == inst) continue;
+        const Sprite* spr = Collision_getSprite(ctx->dataWin, other);
+        if (spr == nullptr) continue;
+        // A compiler barrier only: utfSoul is read fresh each time round instead of GCC holding its 17 fields on the
+        // stack across the loop, which keeps this under its late text allowance. utfRectFast compiles as before.
+        __asm__ volatile("" ::: "memory");
+        if (utfSoul.spr != spr || utfSoul.x != utfBits32(other->x) || utfSoul.y != utfBits32(other->y)
+            || utfSoul.xs != utfBits32(other->imageXscale) || utfSoul.ys != utfBits32(other->imageYscale)
+            || utfSoul.ang != utfBitsReal(other->imageAngle) || utfSoul.compat != runner->collisionCompatibilityMode
+            || utfSoul.w != spr->width || utfSoul.h != spr->height || utfSoul.mode != spr->bboxMode
+            || utfSoul.ml != spr->marginLeft || utfSoul.mr != spr->marginRight || utfSoul.mt != spr->marginTop
+            || utfSoul.mb != spr->marginBottom || utfSoul.ox != spr->originX || utfSoul.oy != spr->originY)
+            return utfRectFast(ctx, B, inst, rect, operand, 0xC0);
+        const InstanceBBox* b = &utfSoul.box;
+        if (b->valid && !(left >= b->right || b->left > right || top >= b->bottom || b->top > bottom))
+            return utfRectFast(ctx, B, inst, rect, operand, 0xC0);
+    }
+    return false;
+}
+#line 786
 #endif
 
 // ===[ utgapfix: string_char_at's walk to the position, 16 plain ASCII bytes at a time ]===

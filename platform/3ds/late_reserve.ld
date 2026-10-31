@@ -52,6 +52,19 @@ SECTIONS
     __relprep_text_gap_end = ABSOLUTE(.);
     /* RELPREP_ROMFS_text */
     *(.text.late.loadtime)
+    /* freebytes H1 hole (freebytes, 2026-10-31; UNDERTALE Old only): the late code above that never runs in a
+       played frame is compiled for size there (CTR_COLD_OS), and the bytes that frees stay a hole in place, so
+       nothing after it moves. Whole cold loading-screen functions fill the hole (z_loadscreen.c names them
+       .text.h1hole.<hole> with CTR_H1_SEC, outside .text.late.* so no catch-all takes them first); a pad ends it
+       on the stage address mod 4096 (CMake substitutes H1<HOLE>_TEXT_PHASE; other targets: the pad's own start,
+       0 B), unless the hole starts past its fixed end (<HOLE>_TEXT_LIMIT: a test profile's extra late code; then
+       0 B). The ASSERTs after this block stop a release link if any hole is overfilled. The other H1 holes have
+       the same form. */
+    *(.text.h1hole.loadtime)
+    __h1loadtime_text_gap_start = ABSOLUTE(.);
+    . += __h1loadtime_text_gap_start <= /* H1LOADTIME_TEXT_LIMIT */ __h1loadtime_text_gap_start
+         ? ((/* H1LOADTIME_TEXT_PHASE */ 0 - __h1loadtime_text_gap_start) & 4095) : 0;
+    __h1loadtime_text_gap_end = ABSOLUTE(.);
     *(.text.late.colflip)
     /* colflip: collision_compat.c is all late code; this takes its out-of-line copies of header functions
        (rvalue.h's RValue_toRealOther and RValue_toInt32Other, renamed there), which can't carry the section attribute. */
@@ -86,6 +99,11 @@ SECTIONS
     *(.text.late.knfuse)
     /* coverage (after knfuse): the RomFS bench supplement and the state dump's name helper. */
     *(.text.late.coverage)
+    *(.text.h1hole.coverage)
+    __h1coverage_text_gap_start = ABSOLUTE(.);
+    . += __h1coverage_text_gap_start <= /* H1COVERAGE_TEXT_LIMIT */ __h1coverage_text_gap_start
+         ? ((/* H1COVERAGE_TEXT_PHASE */ 0 - __h1coverage_text_gap_start) & 4095) : 0;
+    __h1coverage_text_gap_end = ABSOLUTE(.);
     /* o3titan8 (after coverage): reserved for its opt-in phase layout; empty in default builds. */
     *(.text.late.o3titan8)
     /* lockfix (after o3titan8): empty selectors (main's titanthrash 210e822d carries the fix). */
@@ -199,6 +217,13 @@ SECTIONS
     /* roomplan (after loadscreen): the room plan (z_roomplan.c), its constants after it. */
     *(.text.late.roomplan)
     *(.rodata.roomplan_in_text)
+    /* freebytes H1 (UNDERTALE Old only): the loading screen above gave M B of whole functions to the H1 holes, so
+       this pad of M - 4096 B (M mod 4096, on the stage address mod 4096) moves all the late code below by exactly
+       -4096 B: one whole I-cache set period, so every function below keeps its cache sets. Other targets: 0 B. */
+    __h1rend_text_gap_start = ABSOLUTE(.);
+    . += __h1rend_text_gap_start <= /* H1REND_TEXT_LIMIT */ __h1rend_text_gap_start
+         ? ((/* H1REND_TEXT_PHASE */ 0 - __h1rend_text_gap_start) & 4095) : 0;
+    __h1rend_text_gap_end = ABSOLUTE(.);
     /* engfix item 6 (after roomplan): the Flowery dash floor copy (ctr_renderer.c), DELTARUNE only. */
     *(.text.late.engfix6)
     /* roomload (after engfix item 6): the room change finishes the room's code and tile reads (z_roomload.c,
@@ -252,6 +277,11 @@ SECTIONS
     /* utstall (after asgroom, merge order; UNDERTALE only): UNDERTALE's battle and later plan
        tiles in the hidden room load (z_utstall.c, z_roomplan.c's end), then its constants. */
     *(.text.late.utstall)
+    *(.text.h1hole.utstall)
+    __h1utstall_text_gap_start = ABSOLUTE(.);
+    . += __h1utstall_text_gap_start <= /* H1UTSTALL_TEXT_LIMIT */ __h1utstall_text_gap_start
+         ? ((/* H1UTSTALL_TEXT_PHASE */ 0 - __h1utstall_text_gap_start) & 4095) : 0;
+    __h1utstall_text_gap_end = ABSOLUTE(.);
     *(.rodata.utstall_in_text)
     /* planrec (after utstall; room plan recorder builds only): RoomPlan_recordCode. */
     *(.text.late.planrec)
@@ -291,6 +321,12 @@ SECTIONS
        end, then that file's out-of-line copies of header functions. */
     *(.text.late.smalltext)
     *(.rodata.smalltext_in_text)
+    /* freebytes r5b phase pad (dec-1029-phase-pads, c26rev r5 F1): UNDERTALE reads settings.ini's path from z_loadscreen.c, so z_smalltext.o's constants are shorter;
+       this pad keeps its out-of-line header copies (TextUtils_decodeUtf8) on stage75zd's phase. CMake substitutes
+       SMALLTEXTRO_TEXT_PHASE (stage75zd's address mod 32 here; DELTARUNE: the pad's own start, 0 B). */
+    __smalltextro_text_gap_start = ABSOLUTE(.);
+    . += ((/* SMALLTEXTRO_TEXT_PHASE */ 0 - __smalltextro_text_gap_start) & 31);
+    __smalltextro_text_gap_end = ABSOLUTE(.);
     *z_smalltext.o(.text .text.* .rodata .rodata.*)
     /* Phase pad (as utflames', below): SMALLTEXT_TEXT_PHASE, stage72's address mod 32 after smalltext's group, so
        growth there (flowend's atlas) does not re-phase pacer, oomport and the utflames group. */
@@ -336,7 +372,33 @@ SECTIONS
     *(.rodata.utflowey_in_text)
     /* utflowey: UNDERTALE's late copies of generated functions (gmlaot.py's LATE_COPIES), the whole file with its
        constants and any out-of-line copies of header functions; DELTARUNE's AOT has no aot_late.c. */
-    *aot_late.o(.text .text.* .rodata .rodata.*)
+    /* freebytes r5b phase pads inside aot_late.o: its conversion helpers first; then aotSlotFind,
+       requireMessageFormatted and the store helper, in stage75zd's order, on stage75zd's phase of its aotSlotFind
+       (AOTLHELP_TEXT_PHASE); then the generated copies (aotl_<n>) and the constants, aotl_31 on stage75zd's phase
+       (AOTLGEN_TEXT_PHASE), the constants last. The same in the cold-only build, where aot_late.o keeps its own
+       copies. DELTARUNE: 0 B. */
+    *aot_late.o(.text.RValue_* .text.aotToInt32Slow .text.AotLate_toInt32Slow)
+    *(.text.h1hole.aotlhelp)
+    __aotlhelp_text_gap_start = ABSOLUTE(.);
+    . += __aotlhelp_text_gap_start <= /* AOTLHELP_TEXT_LIMIT */ __aotlhelp_text_gap_start
+         ? ((/* AOTLHELP_TEXT_PHASE */ 0 - __aotlhelp_text_gap_start) & /* AOTLHELP_TEXT_MASK */ 31) : 0;
+    __aotlhelp_text_gap_end = ABSOLUTE(.);
+    *aot_late.o(.text.aotSlotFind* .text.requireMessageFormatted* .text.aotStoreSlow .text.AotLate_storeSlow)
+    *(.text.h1hole.aotlgen)
+    __aotlgen_text_gap_start = ABSOLUTE(.);
+    . += __aotlgen_text_gap_start <= /* AOTLGEN_TEXT_LIMIT */ __aotlgen_text_gap_start
+         ? ((/* AOTLGEN_TEXT_PHASE */ 0 - __aotlgen_text_gap_start) & /* AOTLGEN_TEXT_MASK */ 31) : 0;
+    __aotlgen_text_gap_end = ABSOLUTE(.);
+    *aot_late.o(.text .text.*)
+    *aot_late.o(.rodata .rodata.*)
+    /* freebytes r5b phase pad (dec-1029-phase-pads, c26rev r5 F1): aot_late.o now holds the one aotStoreSlow and drops its own conversion copies, so the
+       utflowey, krsharp and utsfx code after it (Smalltext_drawTexture) keeps stage75zd's phase. CMake substitutes
+       AOTLATE_TEXT_PHASE (stage75zd's address mod 32 here; DELTARUNE: 0 B). */
+    *(.text.h1hole.aotlate)
+    __aotlate_text_gap_start = ABSOLUTE(.);
+    . += __aotlate_text_gap_start <= /* AOTLATE_TEXT_LIMIT */ __aotlate_text_gap_start
+         ? ((/* AOTLATE_TEXT_PHASE */ 0 - __aotlate_text_gap_start) & /* AOTLATE_TEXT_MASK */ 31) : 0;
+    __aotlate_text_gap_end = ABSOLUTE(.);
     /* utflowey iteration 3 (UNDERTALE only): Photoshop Flowey's pipe Draw body (z_utflowey.c) and the generated
        functions' wrappers that call it (gmlaot.py's aotu_<n>), their constants, then z_utflowey.c's out-of-line
        copies of header functions (none expected). */
@@ -351,6 +413,11 @@ SECTIONS
        tail), its constants after it. */
     *(.text.late.utsfx)
     *(.rodata.utsfx_in_text)
+    /* freebytes r5b phase pad (dec-1029-phase-pads, c26rev r5 F1): z_utsfx.c uses z_roomplan.c's strings, so the shimmer, utkill and utdust code after it keeps
+       stage75zd's phase. CMake substitutes UTSFX_TEXT_PHASE (stage75zd's address mod 32 here; DELTARUNE: 0 B). */
+    __utsfx_text_gap_start = ABSOLUTE(.);
+    . += ((/* UTSFX_TEXT_PHASE */ 0 - __utsfx_text_gap_start) & 31);
+    __utsfx_text_gap_end = ABSOLUTE(.);
     /* utflames heat shimmer (after utsfx; UNDERTALE only): the shimmer script's builtin
        (z_utflames_waver.c), then its constants. */
     *(.text.late.utflames.waver)
@@ -376,6 +443,36 @@ SECTIONS
        then the generated numeric caller and regions with their header copies and constants (aot_utold_*.c;
        DELTARUNE emits no such objects). */
     *(.text.late.utlava)
+    /* freebytes r5b phase pad (dec-1029-phase-pads, c26rev r5 F1): the lava waver's generated loop (aotul_<n>) first, on stage75zd's phase, then the rest of
+       aot_utold_loop.o (its own helper copies went to aot_late.o); then the regions file on its phase. CMake
+       substitutes UTLAVA_TEXT_PHASE and UTOLDREG_TEXT_PHASE (stage75zd's addresses mod 32 of aotul_11 and
+       aotult_11_00B8; DELTARUNE emits neither file: 0 B). */
+    *(.text.h1hole.utlava)
+    __utlava_text_gap_start = ABSOLUTE(.);
+    . += __utlava_text_gap_start <= /* UTLAVA_TEXT_LIMIT */ __utlava_text_gap_start
+         ? ((/* UTLAVA_TEXT_PHASE */ 0 - __utlava_text_gap_start) & /* UTLAVA_TEXT_MASK */ 31) : 0;
+    __utlava_text_gap_end = ABSOLUTE(.);
+    *aot_utold_loop.o(.text.aotul_*)
+    /* freebytes r5b: aot_utold_loop.o's conversion helpers (cold-only build), then its own aotSlotFind copy and what
+       follows it on stage75zd's phase (UTLHELP_TEXT_PHASE; DELTARUNE: 0 B), the constants last. */
+    *aot_utold_loop.o(.text.RValue_* .text.aotToInt32Slow)
+    *(.text.h1hole.utlhelp)
+    __utlhelp_text_gap_start = ABSOLUTE(.);
+    . += __utlhelp_text_gap_start <= /* UTLHELP_TEXT_LIMIT */ __utlhelp_text_gap_start
+         ? ((/* UTLHELP_TEXT_PHASE */ 0 - __utlhelp_text_gap_start) & /* UTLHELP_TEXT_MASK */ 31) : 0;
+    __utlhelp_text_gap_end = ABSOLUTE(.);
+    *aot_utold_loop.o(.text .text.*)
+    *(.text.h1hole.utloop)
+    __h1utloop_text_gap_start = ABSOLUTE(.);
+    . += __h1utloop_text_gap_start <= /* H1UTLOOP_TEXT_LIMIT */ __h1utloop_text_gap_start
+         ? ((/* H1UTLOOP_TEXT_PHASE */ 0 - __h1utloop_text_gap_start) & 4095) : 0;
+    __h1utloop_text_gap_end = ABSOLUTE(.);
+    *aot_utold_loop.o(.rodata .rodata.*)
+    *(.text.h1hole.utoldreg)
+    __utoldreg_text_gap_start = ABSOLUTE(.);
+    . += __utoldreg_text_gap_start <= /* UTOLDREG_TEXT_LIMIT */ __utoldreg_text_gap_start
+         ? ((/* UTOLDREG_TEXT_PHASE */ 0 - __utoldreg_text_gap_start) & /* UTOLDREG_TEXT_MASK */ 31) : 0;
+    __utoldreg_text_gap_end = ABSOLUTE(.);
     *aot_utold_*.o(.text .text.* .rodata .rodata.*)
     /* utkill vapor (integrate round 16, after utold's lava; UNDERTALE only): the monster dust's native Draw and
        pixel Create (z_utkill_vapor.c), with its strings and anything else of the file. */
@@ -405,9 +502,14 @@ SECTIONS
     *(.text.late.utasgore)
     /* Any other late text (round 14 dropped the wildcard ahead of the host table: it placed nothing). Not
        ctr_renderer.c's or z_itemverdict.c's, whose smartcut sections come last (round 17). */
-    *(SORT_BY_NAME(EXCLUDE_FILE (*ctr_fpsbox.o *ctr_legal.o *ctr_legal_romfs.o *z_colexact.o *z_utwindow.o *z_asrtext* *z_adpcm* *ctr_adpcm_probe.o *source/ctr_audio_system.o *z_knightnew_history.o *source/z_flowcode.o *ctr_data_version.o *z_gogut* *ctr_pixgrid* *z_builderx_review* *z_builderx_new* *z_builderx_old* *z_builderx_receipt* *runner.o *z_loadscreen.o *z_symverdict* *z_smalltext_dr* *z_utstall* *z_sdmigrate* *source/ctr_renderer.o *source/z_itemverdict.o *z_phaseplan* *z_utold_scalar* *source/ctr_benchmark.o *z_sdlat* *vm_builtins.o *z_gamedir* *ctr_flowervramg_promotion.o *ctr_memory.o *ctr_flowervramg_palette.o *ctr_textures.o) .text.late.*))
+    *(SORT_BY_NAME(EXCLUDE_FILE (*z_labcut.o *ctr_fpsbox.o *ctr_legal.o *ctr_legal_romfs.o *z_colexact.o *z_utwindow.o *z_asrtext* *z_adpcm* *ctr_adpcm_probe.o *source/ctr_audio_system.o *z_knightnew_history.o *source/z_flowcode.o *ctr_data_version.o *z_gogut* *ctr_pixgrid* *z_builderx_review* *z_builderx_new* *z_builderx_old* *z_builderx_receipt* *runner.o *z_loadscreen.o *z_symverdict* *z_smalltext_dr* *z_utstall* *z_sdmigrate* *source/ctr_renderer.o *source/z_itemverdict.o *z_phaseplan* *z_utold_scalar* *source/ctr_benchmark.o *z_sdlat* *vm_builtins.o *z_gamedir* *ctr_flowervramg_promotion.o *ctr_memory.o *ctr_flowervramg_palette.o *ctr_textures.o) .text.late.*))
     /* builderx UT-only adapters, after every round-14 fixed section. DR excludes this object. */
     *z_builderx_review*(.text .text.* .rodata .rodata.*)
+    *(.text.h1hole.bxreview)
+    __h1bxreview_text_gap_start = ABSOLUTE(.);
+    . += __h1bxreview_text_gap_start <= /* H1BXREVIEW_TEXT_LIMIT */ __h1bxreview_text_gap_start
+         ? ((/* H1BXREVIEW_TEXT_PHASE */ 0 - __h1bxreview_text_gap_start) & 4095) : 0;
+    __h1bxreview_text_gap_end = ABSOLUTE(.);
     *(.text.late.builderxnew)
     *(.text.late.builderxold)
     /* drstep F1 (integrate round 16, after the builderx adapters; DELTARUNE only, empty in UNDERTALE builds): the
@@ -542,6 +644,12 @@ SECTIONS
     /* cheaplevers target FPS (round 19, after utold partial sprites, merge order; both games): the game-visible
        simulation rate (vm_builtins.c, out of the catch-all above; its noports3 code has its own line). */
     *(.text.late.cheaplevers)
+    /* freebytes r5b phase pad (dec-1029-phase-pads, c26rev r5 F1): UNDERTALE 3DS aliases gameFpsRealTarget to gameFpsTarget, so the code after it
+       (utfldraw, Asgore's UtFlames_borderDraw) keeps stage75zd's phase. CMake substitutes CHEAPLEVERS_TEXT_PHASE
+       (stage75zd's address mod 32 here; DELTARUNE: 0 B). */
+    __cheaplevers_text_gap_start = ABSOLUTE(.);
+    . += ((/* CHEAPLEVERS_TEXT_PHASE */ 0 - __cheaplevers_text_gap_start) & 31);
+    __cheaplevers_text_gap_end = ABSOLUTE(.);
     /* builderx chapter setup (round 19, after cheaplevers, merge order; DELTARUNE only in effect): the uncached
        chapter check's setup line (z_loadscreen.c, out of the catch-all above). */
     *(.text.late.builderxhash)
@@ -666,7 +774,11 @@ SECTIONS
        the view (z_offkill.c), then its constants (in late text: UNDERTALE Old's late constants are short), then that
        file's out-of-line copies of header functions (none expected). Named outside .text.late.* so the catch-all above
        leaves it here. */
+    __offkill_text_start = ALIGN(4);
     *(.text.offkill_late)
+    /* offkillfast (pacer 10-31): OffKill_roomChange walks the listed objects' lists, 516 B where it was 520; its
+       old 520 B stay its own, so its constants and everything after keep their addresses. DELTARUNE: empty, nothing. */
+    . = . > __offkill_text_start ? MAX(., __offkill_text_start + 520) : .;
     *(.rodata.offkill_in_text)
     *z_offkill.o(.text .text.* .rodata .rodata.*)
     /* freewins (round 2, last, merge order; both games): the draw-pass bounds and fireDrawSubtype's per-instance
@@ -848,6 +960,11 @@ SECTIONS
     *(.text.pacebot_late)
     /* relprep's code, last (moved from after sandbox, above): cold, and its size follows the release source URL. */
     *(.text.late.relprep)
+    *(.text.h1hole.relprep)
+    __h1relprep_text_gap_start = ABSOLUTE(.);
+    . += __h1relprep_text_gap_start <= /* H1RELPREP_TEXT_LIMIT */ __h1relprep_text_gap_start
+         ? ((/* H1RELPREP_TEXT_PHASE */ 0 - __h1relprep_text_gap_start) & 4095) : 0;
+    __h1relprep_text_gap_end = ABSOLUTE(.);
     /* flowstream (after relprep, merge order: nothing before it moves; UNDERTALE Old only, empty
        elsewhere): the background refill of plan tiles evicted in play, its reader and page file hooks
        (z_flowstream.c) and its install (ctr_textures.c's end). */
@@ -869,6 +986,13 @@ SECTIONS
        aotu_<k>), then anything else of the file. Named outside .text.late.* so the catch-alls leave it here. */
     *(.text.asgborder_late)
     *z_asgborder.o(.text .text.* .rodata .rodata.*)
+    /* freebytes r5b phase pad (dec-1029-phase-pads, c26rev r5 F1): z_asgborder.o calls aot_late.c's aotStoreSlow, so exitpanic and the code after it keep
+       stage75zd's phase. CMake substitutes ASGBORDER_TEXT_PHASE (stage75zd's address mod 32 here; DELTARUNE: 0 B). */
+    *(.text.h1hole.asgborder)
+    __asgborder_text_gap_start = ABSOLUTE(.);
+    . += __asgborder_text_gap_start <= /* ASGBORDER_TEXT_LIMIT */ __asgborder_text_gap_start
+         ? ((/* ASGBORDER_TEXT_PHASE */ 0 - __asgborder_text_gap_start) & /* ASGBORDER_TEXT_MASK */ 31) : 0;
+    __asgborder_text_gap_end = ABSOLUTE(.);
     /* exitpanic (after asgborder, merge order; both games): the exit-wide heap keep (z_leavekeep.c's
        CtrSvcControlMemory_exitpanic). Named outside .text.* so z_leavekeep.o's catch-all leaves it here. */
     *(.exitpanic_text)
@@ -896,6 +1020,61 @@ SECTIONS
        the file. */
     *(.text.evguard_late)
     *z_evguard.o(.text .text.* .rodata .rodata.*)
+    /* pacerflt phase pad (lead GO 2026-10-30 under dec-1029-phase-pads): UNDERTALE Old's prefilter keeps the
+       cache-line phase of its console rows (pacer's prefstack rows, B: UtFlames_rectPre at 0x66f6e0,
+       phase 0), so the smallest pad (0-31 B, zero-filled) puts it there after evguard. CMake substitutes
+       PACERFLT_TEXT_PHASE (UNDERTALE Old 0; other targets: the pad's own start, a 0 B pad). */
+    __pacerflt_text_gap_start = ABSOLUTE(.);
+    . += ((/* PACERFLT_TEXT_PHASE */ 0 - __pacerflt_text_gap_start) & 31);
+    __pacerflt_text_gap_end = ABSOLUTE(.);
+    /* pacerflt (pacer 2026-10-28; after evguard, merge order): UtFlames_rectPre, the helix rectangle test's
+       far-bullet answer (z_utflames.c). Named outside .text.* so neither the catch-all nor the early z_utflames.o
+       line takes it. */
+    *(.text_pacerflt_late)
+    /* flowhitch phase pad (lead GO 2026-10-31 under dec-1029-phase-pads): UNDERTALE Old's flowhitch keeps the
+       cache-line phase of its rev 3m console rows (measured phase 0x18), so the smallest pad (0-31 B, zero-filled)
+       puts it there after pacerflt. CMake substitutes FLOWHITCH_TEXT_PHASE (UNDERTALE Old 24; other targets: the
+       pad's own start, a 0 B pad). */
+    __flowhitch_text_gap_start = ABSOLUTE(.);
+    . += ((/* FLOWHITCH_TEXT_PHASE */ 0 - __flowhitch_text_gap_start) & 31);
+    __flowhitch_text_gap_end = ABSOLUTE(.);
+    /* flowhitch (flowend r22, after pacerflt, merge order; UNDERTALE only, empty in DELTARUNE): a sound
+       the linear guard shed plays as a stream until the next room change, and its replays start from a spare
+       decoder (ctr_audio_system.c's chain links). Last, so every earlier late function keeps its address. */
+    *(.text.flowhitch_late)
+    /* flowhitch rev 4 (flowend r25, after rev 3's, UNDERTALE only): the musical's first and repeated songs. */
+    *(.text.flowhitch4_late)
+    /* loadaudio: appended after rev 3m flowhitch; freeze excess load time. */
+    *(.text.late.loadaudio)
+    /* exitpanic rosacore (last, after loadaudio, merge order; both games): the Rosalina watcher's thread create,
+       without the core-1 try the kernel refuses before the app's CPU time limit is set (z_leavekeep.c's
+       CtrRosalina_threadCreate). */
+    *(.exitpanic_rosa_text)
+    /* postkick phase pad (lead 2026-10-31 under dec-1029-phase-pads; postkick runs every frame): UNDERTALE Old's
+       postkick keeps the cache-line phase of its console rows (pacer's postkick rows, B:
+       __wrap_Utsw_handleRoomChange at 0x6703e8, phase 8), so the smallest pad (0-31 B, zero-filled) puts it there
+       after rosacore. CMake substitutes POSTKICK_TEXT_PHASE (UNDERTALE Old 8; other targets: the pad's own start,
+       a 0 B pad). */
+    __postkick_text_gap_start = ABSOLUTE(.);
+    . += ((/* POSTKICK_TEXT_PHASE */ 0 - __postkick_text_gap_start) & 31);
+    __postkick_text_gap_end = ABSOLUTE(.);
+    /* postkick (pacer, after rosacore and before labcut, merge order; UNDERTALE only, empty elsewhere):
+       main.c's end-of-frame instance pass held until the GPU has the frame (z_postkick.c), then anything else
+       of the file. */
+    *(.text.postkick_late)
+    *z_postkick.o(.text .text.* .rodata .rodata.*)
+    /* labcut: append LAST, after all selected player-facing units. */
+    *(.text.late.labcut)
+    /* utrect (uthunt, after labcut, merge order; UNDERTALE only, empty elsewhere): the filled-rectangle script's
+       builtin and Utgap_registerAll's wrap that registers it (z_utrect.c), then its constants and anything else of the
+       file. Named outside .text.late.* so the catch-all above leaves it here. */
+    *(.text.utrect_late)
+    *(.rodata.utrect_in_text)
+    *z_utrect.o(.text .text.* .rodata .rodata.*)
+    /* freebytes H1 (UNDERTALE Old only; last): the loading-screen functions the H1 holes had no room for, so that
+       the loading screen still gives at least 4096 B (its end pad, above, moves the code after it by -4096 B).
+       Late code added after this line moves nothing hot. Empty elsewhere. */
+    *(.text.h1hole.end)
     __late_text_end = ABSOLUTE(.);
   }
   /* 192 KiB (grown in whole 4 KiB pages from 16 KiB, each time late code outgrew it): screens' options page took
@@ -920,6 +1099,40 @@ SECTIONS
   }
   ASSERT(__late_text_end < __late_text_limit,
          "late code (.text.late.*) outgrew its reserve: see platform/3ds/late_reserve.ld")
+  /* freebytes H1 hole limits (flushrev R4-F2). On UNDERTALE Old CMake substitutes each hole's fixed end in the
+     frozen H1 layout as <HOLE>_TEXT_LIMIT: the hole pads to its stage address mod 4096 while its start is at
+     or before that end, and pads nothing when it is not (a test profile that adds late code, which packs).
+     In release builds (CTRPORT_RELEASE_SOURCE_URL set) CMake also substitutes <HOLE>_TEXT_STRICT, so any
+     overfilled hole stops the link whatever the overflow (the old pad < 2048 test let 2,052 B or more
+     through, wrapped into the next page). Other targets: the hole's own start and end, always true. */
+  ASSERT(__h1loadtime_text_gap_end <= /* H1LOADTIME_TEXT_STRICT */ __h1loadtime_text_gap_end,
+         "freebytes H1: hole loadtime overfilled (see platform/3ds/late_reserve.ld)")
+  ASSERT(__h1coverage_text_gap_end <= /* H1COVERAGE_TEXT_STRICT */ __h1coverage_text_gap_end,
+         "freebytes H1: hole coverage overfilled (see platform/3ds/late_reserve.ld)")
+  ASSERT(__h1utstall_text_gap_end <= /* H1UTSTALL_TEXT_STRICT */ __h1utstall_text_gap_end,
+         "freebytes H1: hole utstall overfilled (see platform/3ds/late_reserve.ld)")
+  ASSERT(__h1bxreview_text_gap_end <= /* H1BXREVIEW_TEXT_STRICT */ __h1bxreview_text_gap_end,
+         "freebytes H1: hole bxreview overfilled (see platform/3ds/late_reserve.ld)")
+  ASSERT(__h1relprep_text_gap_end <= /* H1RELPREP_TEXT_STRICT */ __h1relprep_text_gap_end,
+         "freebytes H1: hole relprep overfilled (see platform/3ds/late_reserve.ld)")
+  ASSERT(__h1utloop_text_gap_end <= /* H1UTLOOP_TEXT_STRICT */ __h1utloop_text_gap_end,
+         "freebytes H1: hole utloop overfilled (see platform/3ds/late_reserve.ld)")
+  ASSERT(__h1rend_text_gap_end <= /* H1REND_TEXT_STRICT */ __h1rend_text_gap_end,
+         "freebytes H1: hole rend overfilled (see platform/3ds/late_reserve.ld)")
+  ASSERT(__aotlhelp_text_gap_end <= /* AOTLHELP_TEXT_STRICT */ __aotlhelp_text_gap_end,
+         "freebytes H1: hole aotlhelp overfilled (see platform/3ds/late_reserve.ld)")
+  ASSERT(__aotlgen_text_gap_end <= /* AOTLGEN_TEXT_STRICT */ __aotlgen_text_gap_end,
+         "freebytes H1: hole aotlgen overfilled (see platform/3ds/late_reserve.ld)")
+  ASSERT(__aotlate_text_gap_end <= /* AOTLATE_TEXT_STRICT */ __aotlate_text_gap_end,
+         "freebytes H1: hole aotlate overfilled (see platform/3ds/late_reserve.ld)")
+  ASSERT(__utlava_text_gap_end <= /* UTLAVA_TEXT_STRICT */ __utlava_text_gap_end,
+         "freebytes H1: hole utlava overfilled (see platform/3ds/late_reserve.ld)")
+  ASSERT(__utlhelp_text_gap_end <= /* UTLHELP_TEXT_STRICT */ __utlhelp_text_gap_end,
+         "freebytes H1: hole utlhelp overfilled (see platform/3ds/late_reserve.ld)")
+  ASSERT(__utoldreg_text_gap_end <= /* UTOLDREG_TEXT_STRICT */ __utoldreg_text_gap_end,
+         "freebytes H1: hole utoldreg overfilled (see platform/3ds/late_reserve.ld)")
+  ASSERT(__asgborder_text_gap_end <= /* ASGBORDER_TEXT_STRICT */ __asgborder_text_gap_end,
+         "freebytes H1: hole asgborder overfilled (see platform/3ds/late_reserve.ld)")
 }
 INSERT AFTER .text;
 
@@ -1055,6 +1268,7 @@ SECTIONS
     /* relprep: ctr_legal.o's constants, last (moved from relprep's place above): their size follows the release
        source URL, so a URL change moves no other constant. */
     KEEP(*ctr_legal.o(.rodata.late.relprep))
+    *(.rodata.late.loadaudio)
     __late_rodata_end = ABSOLUTE(.);
   }
   /* 8 KiB (at first 4 KiB): late code's constants are mostly log formats; heapfrag's are 472 B, and
@@ -1123,7 +1337,7 @@ SECTIONS
     *(.data.late.pacer_vc)
     /* utold lava (integrate round 16): its data. */
     *(.data.late.utlava)
-    *(SORT_BY_NAME(EXCLUDE_FILE (*ctr_fpsbox.o *z_utwindow.o *z_asrtext* *z_adpcm* *ctr_adpcm_probe.o *source/ctr_audio_system.o *z_knightnew_history.o *source/z_flowcode.o *z_gogut* *z_builderx_new* *z_builderx_old* *z_loadscreen.o *source/ctr_benchmark.o *z_sdlat*) .data.late.*))
+    *(SORT_BY_NAME(EXCLUDE_FILE (*z_labcut.o *ctr_fpsbox.o *z_utwindow.o *z_asrtext* *z_adpcm* *ctr_adpcm_probe.o *source/ctr_audio_system.o *z_knightnew_history.o *source/z_flowcode.o *z_gogut* *z_builderx_new* *z_builderx_old* *z_loadscreen.o *source/ctr_benchmark.o *z_sdlat*) .data.late.*))
     *(.data.late.builderxnew)
     *(.data.late.builderxold)
     *(.data.late.builderxoldconst)
@@ -1323,7 +1537,7 @@ SECTIONS
     *(.bss.late.bootlog)
     /* utasgore (round 17, after bootlog, before the catch-all): the steady path's plan cache (utaKeys). */
     *(.bss.late.utasgore)
-    *(SORT_BY_NAME(EXCLUDE_FILE (*ctr_fpsbox.o *z_utwindow.o *z_asrtext* *z_adpcm* *ctr_adpcm_probe.o *source/ctr_audio_system.o *z_knightnew_history.o *source/z_flowcode.o *z_gogut* *z_loadscreen.o *z_symverdict* *z_smalltext_dr* *z_utstall* *z_sdmigrate* *libswkbd_late.a:* *source/ctr_renderer.o *source/z_itemverdict.o *z_phaseplan* *z_sdlat* *z_gamedir* *ctr_flowervramg_palette.o) .bss.late.*))
+    *(SORT_BY_NAME(EXCLUDE_FILE (*z_labcut.o *ctr_fpsbox.o *z_utwindow.o *z_asrtext* *z_adpcm* *ctr_adpcm_probe.o *source/ctr_audio_system.o *z_knightnew_history.o *source/z_flowcode.o *z_gogut* *z_loadscreen.o *z_symverdict* *z_smalltext_dr* *z_utstall* *z_sdmigrate* *libswkbd_late.a:* *source/ctr_renderer.o *source/z_itemverdict.o *z_phaseplan* *z_sdlat* *z_gamedir* *ctr_flowervramg_palette.o) .bss.late.*))
     /* packscreen (integrate round 16, after the catch-all, merge order): the setup line it draws. */
     *(.bss.late.packscreen)
     /* symverdict (after packscreen; UNDERTALE only): the table's bits. */
@@ -1524,6 +1738,18 @@ SECTIONS
     *(.bss.itemfront_late)
     /* evguard (asgore30, after itemfront, merge order; UNDERTALE only): the current run's test (24 B). */
     *(.bss.evguard_late)
+    /* flowhitch (flowend r22, after evguard, merge order; UNDERTALE only): the sounds the guard shed
+       this room, their forms before, the spare decoders and first buffers of rev 3; its own last section so every
+       earlier late static keeps its address. */
+    *(.bss.flowhitch_late)
+    /* flowhitch rev 4 (flowend r25, after rev 3's, UNDERTALE only): its room and song marks. */
+    *(.bss.flowhitch4_late)
+    *(.bss.late.loadaudio) /* after every existing flowhitch static */
+    /* postkick (pacer, after loadaudio, merge order; UNDERTALE only): the held runner (4 B). */
+    *(.bss.postkick_late)
+    /* utrect (uthunt, after postkick, merge order; UNDERTALE only): the script's code index and its draw's
+       function index (8 B). */
+    *(.bss.utrect_late)
     /* 3dsxtool refuses a segment whose size isn't a multiple of 4 ("The segments is not word-aligned!"), and this
        block ends the RW segment: late statics of odd sizes (bools) would end it off a word. */
     . = ALIGN(4);

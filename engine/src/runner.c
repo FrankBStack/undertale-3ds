@@ -6534,6 +6534,15 @@ static __attribute__((noinline, section(".text.late.utkill"))) void utkRebuildIf
     rebuildDrawableCacheIfDirty(runner);
 }
 
+// asrfight (D, ruling 2026-10-30): on UNDERTALE Old, utkDrawRoom leaves out the draws that the builder's key
+// (tools/aot/dskip.py, private build input) proves hidden: a star burst's new ring stars, drawn upright in their first
+// frame under the opaque core of the big star drawn after them. The key (object, depth) is two words in utkDskipTail,
+// so this code is the same whatever the key; the no-key words (-1, 0) match no instance.
+#if defined(UTK_PLAIN_RUNS) && defined(ENABLE_WAD16) && defined(CTRPORT_TARGET_O3DS) && defined(__GNUC__)
+#define DSKIP_ON 1
+extern const int32_t utkDskipKey[2] __asm__("utkDskipKey");
+#endif
+
 static __attribute__((noinline, section(".text.late.utkill"))) void utkDrawRoom(Runner* runner) {
     if (DataWin_isVersionAtLeast(runner->dataWin, 2, 0, 0, 0) || arrlen(runner->runtimeLayers) != 0) {
         drawRoom(runner);
@@ -6611,6 +6620,10 @@ static __attribute__((noinline, section(".text.late.utkill"))) void utkDrawRoom(
             }
             // Filter inactive/invisible instances at draw time so the cache doesn't need invalidation when those flags toggle.
             if (!inst->active || !inst->visible) continue;
+#if defined(DSKIP_ON)
+            // A first-frame star under the big star: left out as an invisible instance is.
+            if (inst->objectIndex == utkDskipKey[0] && inst->depth == utkDskipKey[1] && inst->imageAngle == 0) continue;
+#endif
 
             if (run.on) {
                 int32_t next = utkRunBatch(runner, inst, &run, i, drawableCount);
@@ -6652,6 +6665,18 @@ static __attribute__((noinline, section(".text.late.utkill"))) void utkDrawRoom(
     // Draw foreground backgrounds (in front of instances, behind GUI)
     drawGMS1Backgrounds(runner, true);
 }
+#if defined(DSKIP_ON)
+// The key's words, then zero bytes that make utkDrawRoom's growth (68 B, GCC 16.1.0 Release) and this tail a multiple
+// of 32. GCC places the tail before utkRebuildIfDirty and utkDrawRoom; the late code after utkDrawRoom keeps its
+// cache-line phase (docs/3ds-hardware.md, late-code phase pads). Never executed.
+#include "dskip_key.inc"
+#define DSKIP_STR2(x) #x
+#define DSKIP_STR(x) DSKIP_STR2(x)
+#define DSKIP_PAD ".space 20"
+__attribute__((naked, used, section(".text.late.utkill"))) static void utkDskipTail(void) {
+    __asm__("utkDskipKey: .word " DSKIP_STR(DSKIP_OBJECT) ", " DSKIP_STR(DSKIP_DEPTH) "\n " DSKIP_PAD);
+}
+#endif
 // utflames (tilerun): utkDrawRoom's tile branch is a call to drawLegacyTileRun now, 64 B shorter; these zero bytes
 // after it in .text.late.utkill keep the late code after it where it was. Never executed or referenced. The same on Old
 // and New (GCC 16.1.0 Release).

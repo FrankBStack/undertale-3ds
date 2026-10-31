@@ -3,6 +3,8 @@
 #include <sys/socket.h>
 
 #include "ctr_exit.h"
+#include "ctr_lab.h"
+#line 6
 #include "ctr_link_files.h"
 
 #define MIDFILE_TEXT __attribute__((noipa, section(".text.late.exithang.midfile")))
@@ -38,12 +40,16 @@ MIDFILE_TEXT Thread CtrExitGsp_threadCreate(ThreadFunc entry, void* arg, size_t 
 // junk or EINTR; the existing cancellation worker can still shut it down.
 MIDFILE_TEXT int CtrExitFiles_shutdownDrained(int sock, int how) {
     if (__atomic_load_n(&CtrExit_started, __ATOMIC_ACQUIRE) &&
-        CtrLinkFiles_enabled() && CtrLinkFiles_progress() > 0 && shutdown(sock, SHUT_WR) == 0) {
+        (CtrLab_active() || CtrLinkFiles_progress() > 0) && shutdown(sock, SHUT_WR) == 0) {
         u32 start = (u32) (svcGetSystemTick() / CPU_TICKS_PER_MSEC);
         char discard[64];
         while ((u32) ((u32) (svcGetSystemTick() / CPU_TICKS_PER_MSEC) - start) < 5000u) {
             int n = recv(sock, discard, sizeof(discard), 0);
-            if (n == 0 || (n < 0 && errno != EAGAIN && errno != EWOULDBLOCK && errno != EINTR)) break;
+            if (n == 0) break;
+            if (n < 0) {
+                int error = errno;
+                if (error != EAGAIN && error != EWOULDBLOCK && error != EINTR) break;
+            }
             svcSleepThread(10000000LL);
         }
     }

@@ -235,6 +235,13 @@ platform/3ds/source/ctr_audio_decoder.h
 platform/3ds/source/ctr_audio_selftest.c
 platform/3ds/source/ctr_audio_system.c
 platform/3ds/source/ctr_audio_system.h
+platform/3ds/source/ctr_loadaudio.inc
+platform/3ds/source/ctr_loadaudio_trace.inc
+platform/3ds/source/ctr_loadaudio_observer.inc
+platform/3ds/source/ctr_audio_transport_mix.inc
+platform/3ds/source/ctr_loadaudio_mix.inc
+platform/3ds/source/ctr_loadaudio_budget.inc
+platform/3ds/source/ctr_loadaudio_clock.inc
 platform/3ds/source/ctr_audio_utaudio.h
 platform/3ds/source/ctr_bench_scene_start.c
 platform/3ds/source/ctr_bench_scene_start.h
@@ -619,6 +626,8 @@ tools/aot/data_versions.py
 tools/aot/fontverdict.py
 tools/aot/gmlaot.py
 tools/aot/prepare.py
+tools/aot/padrefs.py
+tools/aot/selection/undertale-o3ds-padrefs.txt
 tools/aot/selection/typed-undertale.txt
 tools/aot/selection/undertale-hints.txt
 tools/aot/selection/undertale-n3ds.txt
@@ -718,6 +727,7 @@ engine/src/z_utflowey.c
 engine/src/z_utflames_waver.c
 tools/aot/btnprompt_build.py
 tools/aot/pixgrid.py
+tools/aot/dskip.py
 tools/aot/loadscreen_art.py
 tools/release/builder/art_pixels.py
 tools/release/builder/fixtures/appmanifest_1690940.acf
@@ -910,6 +920,7 @@ tools/aot/test_offkill.py
 # freebies restart preload: restarting the room into another planned scene gets the room load (UNDERTALE only;
 # compiled empty for DELTARUNE, listed for the build inputs)
 platform/3ds/source/z_freebies.c
+platform/3ds/source/z_postkick.c
 
 # bboxround (simplefix): Collision_computeBBox's exact edge rounding (both games)
 engine/src/z_bboxround.c
@@ -933,3 +944,6 @@ platform/3ds/source/ctr_fpsbox.c
 platform/3ds/source/ctr_fpsbox.h
 tools/buildcache/fpsbox_compile.py
 tools/buildcache/test_fpsbox_compile.py
+platform/3ds/source/z_labcut.c
+tools/buildcache/labcut_compile.py
+engine/src/z_utrect.c

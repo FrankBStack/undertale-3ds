@@ -65,19 +65,19 @@ EXIT_TEXT void CtrExit_flush(void) {
     while (*state.running && (s32) (*state.done - number) < 0 && exitLogNow() < deadline) svcSleepThread(1000000LL);
 }
 
-EXIT_TEXT void CtrExit_closeLog(void) {
+EXIT_TEXT __attribute__((optimize("Os"))) void CtrExit_closeLog(void) {
     if (!__atomic_load_n(&CtrExit_started, __ATOMIC_ACQUIRE)) {
         CtrLog_closeFile();
         return;
     }
     CtrExit_flush();
-    // Never wait for a peer, call socExit, or free a live sender's memory.
-    *state.linkStop = true;
+    // Drain the writer before the sender may observe an empty final ring.
     *state.stop = true;
     if (*state.thread != NULL) {
         LightEvent_Signal(state.event);
         if (threadJoin(*state.thread, 250000000ULL) != 0) CtrExitFiles_closeFailed();
     }
+    *state.linkStop = true;
     // The independent deadline also bounds stuck FS and C library/APT exit.
     if (*state.file != NULL) fclose(*state.file);
     *state.file = NULL;

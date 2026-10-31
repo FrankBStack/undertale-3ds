@@ -64,6 +64,17 @@ extern uint32_t aotCensus[AOTC_COUNT];
 #else
 #define AOT_HELPER static NOINLINE __attribute__((unused))
 #endif
+// freebytes: UNDERTALE's late AOT files share aotStoreSlow and aotToInt32Slow (AOT_LATE_SHARED_DEFINE: aot_late.c;
+// AOT_LATE_SHARED_EXTERN: aot_utold_loop.c, whose copies were byte-identical, and z_asgborder.c, the same source with
+// three blocks scheduled apart). The helpers call extern functions, so a caller assumes the full AAPCS clobber anyway.
+#if defined(AOT_LATE_SHARED_DEFINE) || defined(AOT_LATE_SHARED_EXTERN)
+#define aotStoreSlow AotLate_storeSlow
+#define aotToInt32Slow AotLate_toInt32Slow
+#define AOT_LATE_HELPER NOINLINE
+#else
+#define AOT_LATE_HELPER AOT_HELPER
+#endif
+#line 67
 
 typedef RValue (*AotFn)(VMContext* ctx);
 
@@ -376,10 +387,16 @@ AOT_HELPER bool aotPopVarFast(VMContext* ctx, RValue* src, int32_t instanceType,
 #define AOT_REF_TYPES ((1u << RVALUE_STRING) | (1u << RVALUE_ARRAY) | (1u << RVALUE_STRUCT))
 #endif
 
-AOT_HELPER void aotStoreSlow(RValue* dst, RValue* src) {
+#ifdef AOT_LATE_SHARED_EXTERN
+void aotStoreSlow(RValue* dst, RValue* src);
+#else
+#line 379
+AOT_LATE_HELPER void aotStoreSlow(RValue* dst, RValue* src) {
     AOTC(120);
     storeStackValueIntoSlot(dst, src);
 }
+#endif
+#line 383
 
 // storeStackValueIntoSlot, with only its common case inline: a value that is no string, array, struct or method
 // going over one that owns nothing is a plain copy there too. Inlined whole, each store was some 60 ARM
@@ -732,9 +749,15 @@ AOT_INLINE int aotCmpFast(RValue* a, RValue* b, uint8_t kind) {
     return r;
 }
 
-AOT_HELPER int32_t aotToInt32Slow(const RValue* v) {
+#ifdef AOT_LATE_SHARED_EXTERN
+int32_t aotToInt32Slow(const RValue* v);
+#else
+#line 735
+AOT_LATE_HELPER int32_t aotToInt32Slow(const RValue* v) {
     return RValue_toInt32(*v);
 }
+#endif
+#line 738
 
 // stackPopInt32 != 0 on S[d - 1], without changing ctx->stack.top: vmToInt32Fast, its conversion out of line.
 AOT_INLINE bool aotTruth(RValue* v) {

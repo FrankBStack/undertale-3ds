@@ -116,7 +116,18 @@ def layout_file(game):
 GMLAOT_EXTRA = []
 # The Python files that generate the code: gmlaot.py and what it imports, and this file, which picks its arguments.
 GENERATOR_FILES = ("gmlaot.py", "builtin_audit.py", "corpus.py", "prepare.py", "btnprompt.py", "escape.py",
-                   "late_numeric.py", "typed.py")
+                   "late_numeric.py", "typed.py", "padrefs.py")
+
+
+def padrefs_file(game, target, chapters=False):
+    """An optional single-table manifest, paired with that target's retained padding."""
+    path = Path(HERE) / 'selection' / ('%s-%s-padrefs.txt' % (game, target))
+    if chapters or not path.is_file():
+        return None
+    pad = path.with_name('%s-%s-pad.txt' % (game, target))
+    if not pad.is_file():
+        raise ValueError('Retained references require an AOT padding file: ' + str(pad))
+    return path
 
 
 def gmlaot_runs(game, target, found, out, selection, chapters=False, typed=None, late_numeric=None):
@@ -181,6 +192,8 @@ def fingerprint(game, target, data, selection, chapters=False, runs=(), typed=No
     h = hashlib.sha256()
     for path in [os.path.join(HERE, name) for name in GENERATOR_FILES] + [selection]:
         h.update(Path(path).read_bytes())
+    refs = padrefs_file(game, target, chapters)
+    h.update(refs.read_bytes() if refs else b'no retained references')
     if typed:   # gmlaot.py --typed (tools/aot/typed.py); "all" names no file
         for path in (os.path.join(HERE, "typed.py"),) + (() if typed == "all" else (typed,)):
             h.update(Path(path).read_bytes())
@@ -297,6 +310,10 @@ def main(argv):
         rc = run_gmlaot(runs[0][1])
     if rc:
         return rc
+    refs = padrefs_file(game, target, chapters)
+    if refs:
+        import padrefs
+        padrefs.apply(out, refs)
     with open(stamp, "w") as f:
         f.write(fp + "\n")
     return 0

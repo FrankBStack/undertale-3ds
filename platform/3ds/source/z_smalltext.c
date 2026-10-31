@@ -217,7 +217,13 @@ static const char stKeyFmt[ST_ALL][24] ST_CONST = {
 // The parts' names in the first build with the menu (1 = Crisp as now), read as the names above; a save writes
 // the new names.
 static const char stOldPartFmt[4][24] ST_CONST = { " smooth_text = %d", " smooth_bones = %d", " smooth_numbers = %d", " smooth_soul = %d" };
+#ifndef ST_DR_UNIT
+// z_loadscreen.c's copy (UNDERTALE; freebytes 2026-10-31).
+#define stIniPath LoadScreen_settingsPath
+extern const char stIniPath[];
+#else
 static const char stIniPath[] ST_CONST = CTRPORT_GAME_DIR "/settings.ini";
+#endif
 static const char stRead[] ST_CONST = "r";
 static const char stAppend[] ST_CONST = "a";
 static const char stReadBin[] ST_CONST = "rb";

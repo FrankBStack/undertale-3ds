@@ -92,6 +92,55 @@ static void UTPART_LATE partEmit(CtrRenderer* r, CtrPage* page, float sx0, float
 
 #endif
 
+// drawcut is UNDERTALE only (ENABLE_WAD16; ruling, 10-31): DELTARUNE keeps the stock cull and finite test below,
+// byte for byte, until its own placement and draw timings are measured (park-drawcut-dr).
+#if !defined(CTRPORT_RENDER_TIMING) && defined(ENABLE_WAD16)
+#define UTPART_DRAWCUT 1
+// quadOutsideView, for partOutside: partOutsideKeep calls it with s0-s11 saved around the call, so partDrawSprite keeps
+// its arguments (which its full way passes on) in registers instead of storing and reloading all twelve around it.
+static bool UTPART_LATE __attribute__((used, noclone)) partOutsideAsk(CtrRenderer* r, const float* px, const float* py) {
+    if (!r->gameProjection) __builtin_unreachable();  // partOutside's own first test
+    return quadOutsideView(r, px, py);
+}
+
+// Its 8 B tail is never run: a pad that makes .text.utpart_late grow by whole cache lines (128 B), so the late code
+// after it keeps its cache-line phase and every phase pad stays as it was. (An alignment would raise the section's own
+// alignment and move its start on UNDERTALE New.)
+static void __attribute__((naked, noinline, used, section(".text.utpart_late"))) partOutsideKeep(void) {
+    __asm__("push {r4, lr}\n\tvpush {d0-d5}\n\tbl partOutsideAsk\n\tvpop {d0-d5}\n\tpop {r4, pc}\n\t.space 8");
+}
+
+// quadOutsideView for partDrawSprite's rectangle (corners 0 and 3 share their x, 0 and 1 their y, by construction).
+// Under a projection with no rotation or perspective, drawn for one eye, each corner's x depends on its x alone, its y
+// on its y alone, and its w is the matrix's own: two x and two y decide it, with quadOutsideView's sums but for the
+// sign of a zero term. Both eyes, any other projection and a corner that isn't finite ask quadOutsideView. Every
+// tile of a room and every draw_sprite_part comes here; the general test costs about four times this one.
+static inline __attribute__((always_inline)) bool partOutside(CtrRenderer* r, const float* px, const float* py) {
+    if (!r->gameProjection) return false;
+    const C3D_Mtx* m = &r->projection;
+    float w = m->r[3].w;
+    float x0 = m->r[0].x * px[0] + m->r[0].w, x1 = m->r[0].x * px[1] + m->r[0].w;
+    float y0 = m->r[1].y * py[0] + m->r[1].w, y1 = m->r[1].y * py[2] + m->r[1].w;
+    // Finite x0..y1 and w mean finite corners and matrix terms, so each zero term is a signed zero.
+    float sum = x0 + x1 + y0 + y1 + w;
+    if ((floatBits(m->r[0].y) | floatBits(m->r[1].x) | floatBits(m->r[3].x) | floatBits(m->r[3].y)) << 1 != 0 ||
+        !(sum - sum == 0.0f) || drawingBothEyes(r)) {
+        register uint32_t a0 __asm__("r0") = (uint32_t) r;
+        register const float* a1 __asm__("r1") = px;
+        register const float* a2 __asm__("r2") = py;
+        __asm__ volatile("bl partOutsideKeep" : "+r"(a0), "+r"(a1), "+r"(a2) : : "r3", "ip", "lr", "cc", "memory", "s12", "s13",
+                         "s14", "s15");
+        return a0 != 0;
+    }
+    if (0.0f >= w) return false;
+    // With w > 0 and all finite, -w > x exactly when x + w rounds to a negative number (never -0), and x > w when
+    // w - x does: two sign bits per edge, and no compare.
+    uint32_t left = floatBits(x0 + w) & floatBits(x1 + w), right = floatBits(w - x0) & floatBits(w - x1);
+    uint32_t top = floatBits(y0 + w) & floatBits(y1 + w), bottom = floatBits(w - y0) & floatBits(w - y1);
+    return (int32_t) (left | right | top | bottom) < 0;
+}
+#endif
+
 static void UTPART_LATE partDrawSprite(Renderer* renderer, int32_t tpagIndex, float srcOffX, float srcOffY,
                                      float srcW, float srcH, float x, float y, float xscale, float yscale,
                                      float angleDeg, float pivotX, float pivotY, uint32_t color, float alpha) {
@@ -111,7 +160,11 @@ static void UTPART_LATE partDrawSprite(Renderer* renderer, int32_t tpagIndex, fl
     CtrPage* page = &r->textures.pages[pageId];
     float px[4] = { x, x + srcW * xscale, x + srcW * xscale, x };
     float py[4] = { y, y, y + srcH * yscale, y + srcH * yscale };
+#if defined(UTPART_DRAWCUT)
+    if (partOutside(r, px, py)) {
+#else
     if (quadOutsideView(r, px, py)) {
+#endif
         page->lastUsedFrame = r->textures.frame;
         return;
     }
@@ -119,7 +172,13 @@ static void UTPART_LATE partDrawSprite(Renderer* renderer, int32_t tpagIndex, fl
     float sx0 = tpag->sourceX + srcOffX, sy0 = tpag->sourceY + srcOffY;
     float sx1 = sx0 + srcW, sy1 = sy0 + srcH;
     // Avoid caching non-finite geometry; the full renderer owns that behaviour.
+#if defined(UTPART_DRAWCUT)
+    // A finite sum means four finite corners (a sum too large for a float goes the full way too).
+    float sum = sx0 + sy0 + sx1 + sy1;
+    if (!(sum - sum == 0.0f)) goto full;
+#else
     if (!isfinite(sx0) || !isfinite(sy0) || !isfinite(sx1) || !isfinite(sy1)) goto full;
+#endif
     page->lastUsedFrame = r->textures.frame;
     CtrColor c = makeColor(color, alpha);
     CtrColor cs[4] = { c, c, c, c };
@@ -132,3 +191,4 @@ full:
 }
 #undef UTPART_LATE
 #undef UTPART_CLIPPED_CACHE
+#undef UTPART_DRAWCUT

@@ -65,10 +65,10 @@ PAD_START, PAD_END = 52, 56
 # docs/release/builder-status.md, "Texture preparation on the PC".
 # Rebuild and re-pin whenever any file in `texprep --sources` changes (a release step, builder-status.md).
 PINNED = {
-    # MSYS2 UCRT64 gcc 16.1.0, static, UTF-8 paths; exact stage73 sources (2026-10-29).
-    # texprep-src-1:f3ff19fc6d4e060aaaf300ad5c4023ab003a3ad294be191ae45e612669bd44c9
+    # MSYS2 UCRT64 gcc 16.1.0, static, UTF-8 paths; exact stage75ze sources (pre75ze bc29eed38; 2026-10-31).
+    # texprep-src-1:0f3f7bd161a348b4c65984908b66a9215d3a71bc9a8ba0a2efe40cc096f341f4
     ("win32", "x86_64"): ("texprep-windows-x64.exe", 354294,
-                          "5302dc7e1c842e5ac5ef01f7fa2a005518db4dfd8a1dd668821fe588f62ebe9f"),
+                          "f131f994f36574ada2fe638afacde6ab62bff317f7cda22eaa3e885a0393084c"),
     # Linux builds locally with the system compiler. The former static glibc 2.39 binary is
     # retired: it lacked a corresponding-source/relink kit and did not fit older Debian hosts.
     # macOS (arm64 and x86_64): texprep-macos-universal, built on an M1 Mac (steps in builder-status.md).

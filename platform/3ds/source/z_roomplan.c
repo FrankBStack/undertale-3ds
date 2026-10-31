@@ -225,8 +225,16 @@ static const char rpPath[] ROOMPLAN_CONST = "romfs:/roomplan/undertale.dtp";
 static const char rpPathFormat[] ROOMPLAN_CONST = "romfs:/roomplan/%s.dtp";
 #endif
 static const char rpRomfs[] ROOMPLAN_CONST = "romfs";
+#if defined(ENABLE_WAD16) && !defined(ROOMPLAN_HOST_TEST)
+// UNDERTALE: two of these strings are global; z_utsfx.c uses the same words (freebytes 2026-10-31).
+#define rpRead RoomPlan_strRead
+#define rpBattleVar RoomPlan_strBattleVar
+#define RP_SHARED(name) extern const char name[]; const char name[]
+#else
+#define RP_SHARED(name) static const char name[]
+#endif
 static const char rpDtm[] ROOMPLAN_CONST = "rooms.dtm";
-static const char rpRead[] ROOMPLAN_CONST = "rb";
+RP_SHARED(rpRead) ROOMPLAN_CONST = "rb";
 static const char rpSeeded[] ROOMPLAN_CONST = "Room plan: %u rooms without a record take the plan's first tiles (%u tiles, %u rooms planned, %.1f ms)\n";
 static const char rpIgnored[] ROOMPLAN_CONST = "Room plan: %s not used: %s\n";
 static const char rpKept[] ROOMPLAN_CONST = "Room plan: rooms.dtm leaves out %u rooms still as planned\n";
@@ -426,7 +434,7 @@ ROOMPLAN_TEXT void RoomPlan_retiredWriteFile(CtrTileReader* reader, const char* 
 #define ROOMPLAN_CODE_BYTES (256u * 1024u)
 #define ROOMPLAN_CODE_MS 250u
 
-static const char rpBattleVar[] ROOMPLAN_CONST = "battlegroup";
+RP_SHARED(rpBattleVar) ROOMPLAN_CONST = "battlegroup";
 
 __attribute__((section(".bss.late.roomplan"))) static struct {
     VMContext* battleFor; // the VM the variable id below belongs to

@@ -30,8 +30,14 @@
     {
       "member": "tools/aot/selection/undertale.txt",
       "class": "aot-selection",
-      "sha256": "8511e8fede793b19e3ffd671fd8825133081fdd1f6432be9526ae7f8ad2a406e",
+      "sha256": "16fbc34e7486a9f02209d9e55d1402a096ccc0979a0e9d126b7a0d408b385998",
       "justification": "Names-only selection keys for compiling the players own code."
+    },
+    {
+      "member": "tools/aot/selection/undertale-o3ds-padrefs.txt",
+      "class": "aot-selection",
+      "sha256": "ee542a14bd7cd3f9b8d5a12166e88c28696db1537243b4838781186c6e866f21",
+      "justification": "Names-only section-placement keys for compiling the player's own code; no generated code or game content."
     },
     {
       "member": "platform/3ds/source/ctr_dialogue.c",
@@ -108,7 +114,7 @@
     {
       "member": "engine/src/runner.c",
       "class": "engine-lookups",
-      "sha256": "c041f59a04923f330f617f5390b9573811ff9169e3b740d8147fa1a10936b1e9",
+      "sha256": "491e6c5455d031a270c283b84d2bb29eddb3f8039a5784300992981b092f1499",
       "justification": "Object and variable lookup examples explain runner initialization and dispatch.",
       "evidence_sha256": [
         "e21b4a0970f25e43698b263730323baeaa930e9907f1661a433985a117c25dc1"
@@ -117,7 +123,7 @@
     {
       "member": "engine/src/vm.h",
       "class": "engine-lookups",
-      "sha256": "c1959ee30e01e7173ff06c1261bb5040457fd2a06ebcf8c5860ba6ca4ac8390b",
+      "sha256": "5c7490c3d4ac69c3e6bb5031f8b1d241b5f73d8b0ff459485a7b0c53684ad57d",
       "justification": "Player object examples document VM lookup semantics; restart is an engine sentinel.",
       "evidence_sha256": [
         "294b925c3b32d700e9a62b46f3d7ed3e88141d58ba496ce20769b5ee0d04182f"
@@ -130,6 +136,15 @@
       "justification": "Sound and music lookup names select player assets for the audio self-test.",
       "evidence_sha256": [
         "c9848bd17ce0237625ca52b260727310cf3cbb11cabff331645938c52c87f8cd"
+      ]
+    },
+    {
+      "member": "platform/3ds/source/ctr_loadaudio_clock.inc",
+      "class": "engine-lookups",
+      "sha256": "e9602e8187aa6f95a4040daec149bbdfafac900eccf016586fe6e23441b7b9b9",
+      "justification": "Three name prefixes tell a music voice from a sound effect for the load-audio clock; no game asset names.",
+      "evidence_sha256": [
+        "a5606ab2d4688711ed0dea44d585e7217ee10f7538ba3553065ec90be867cdac"
       ]
     },
     {
@@ -180,7 +195,7 @@
     {
       "member": "platform/3ds/source/ctr_texture_pack.c",
       "class": "engine-lookups",
-      "sha256": "6e05134248a20fa877c4ecc78e13002ad8036bd487eb4143c550473f45591ab1",
+      "sha256": "4e2a3aacb96511b7d84d599c4166fd9309823a8cad2b2debb1ddb27767c5455e",
       "justification": "A sprite lookup selects the texture-pack compatibility case.",
       "evidence_sha256": [
         "6c4a3a5434e8566594b6dfb3ce629fd3f6955d09dcd790a2fb1ced45df27eea0"
@@ -189,7 +204,7 @@
     {
       "member": "platform/3ds/source/main.c",
       "class": "engine-lookups",
-      "sha256": "a055858c7a914ddca32521a5a903af586defdbe0bd5c8d8477591c541e9fe2a6",
+      "sha256": "78b74080ca13f84b2a90d7443e80f31eb2a40d152ea309761f4a990850d7a3ea",
       "justification": "Intro and title room names select startup rooms in player data.",
       "evidence_sha256": [
         "beff7c970aaeadca3f94aedfe4901d446f31340c60d5b22c361461f1f3cc2cdc"
@@ -207,7 +222,7 @@
     {
       "member": "tools/release/test_builder.py",
       "class": "engine-lookups",
-      "sha256": "4b951e595e0d8eab4d56824d24f86ea861a41fd910917a1dfee140665479d7cf",
+      "sha256": "5c1bb7ab9a59283e53f8128de30d7c2e3d7684757c69827c084dd5296de103b2",
       "justification": "Existing synthetic compiler/music fixtures and player cursor lookup; new tests only require private generator source closure in the exported builder.",
       "evidence_sha256": [
         "e1013ccac9297ff1f3205e0d2e1e0966f75c9b7b570515dedc2026aba40ade7b"
@@ -315,7 +330,7 @@
     {
       "member": "platform/3ds/source/z_loadscreen.c",
       "class": "engine-lookups",
-      "sha256": "dbf773b312002071d1ea8c0d85a92d182885ca68fa6dab9f227454d80b6e5af0",
+      "sha256": "c4c323eea564d2e3612ee9105b33e2fee307ea5a5ec0e51ad3d86bdcc396e4ff",
       "justification": "Source asset names document loading art extracted privately from player data. The DR cold chapter hash callback reuses that existing UI; identifier evidence is unchanged.",
       "evidence_sha256": [
         "af267ff21c3f4923516026bbfb91dc4fb53532535d95b783ebc4ccb02d985c62"
@@ -536,7 +551,7 @@
     {
       "member": "tools/roomplan/records/undertale-steam-1.08.json",
       "class": "roomplan-record",
-      "sha256": "5389c1446c0fe400cf4df2a7c59a5111717b307401576d02772aae26732f0873",
+      "sha256": "9830d98bd15b41f80ca8d3cf4897395e751ee5e0ec062328a7231b40b5c31774",
       "justification": "Owner-approved hash-gated indices and source rectangles recorded during our own playthroughs.",
       "evidence_sha256": [
         "dcf99176f5beeab6da7c76142996000867d039c9fffd11c97f64eb2640957c09",
@@ -585,7 +600,7 @@
     {
       "member": "engine/src/vm_builtins.c",
       "class": "engine-symbols",
-      "sha256": "3cd3ed8b8890ec65c614d95944cf778a2c80c1f7fac02d2034b24775cbee4ae2",
+      "sha256": "9f295ffd6d65242db08efa7f68c26ba04d267b511ac720be67bd47a1466196b8",
       "justification": "Generic GameMaker room API names and argument placeholders only; game-specific comment examples removed, with no native game bodies remaining.",
       "evidence_sha256": [
         "e4e79ad2fa93fd7259698723d25e590113b4ad6e849a82ee5240fc890c43d313"
@@ -684,7 +699,7 @@
     {
       "member": "platform/3ds/source/z_smalltext.c",
       "class": "engine-lookups",
-      "sha256": "931ea75022b6a3735f0a1b5219edcd914c1a55fa253eee91c950dd4b48e0ef92",
+      "sha256": "d8cc4004b6f5d9f8059373eba8756bd35c5f619bd921465e4fd078db836eef08",
       "justification": "The KR label's sprite name finds the frame that Crisp text draws sharp (UNDERTALE only; part of the Smoothing menu's choices). Speech bubbles (bubbleclip; integrate21, approved by the lead 2026-10-27): the text writer object and the four bubble border objects find the writer and the bubble edges so Crisp text stays inside the bubble.",
       "evidence_sha256": [
         "db903e39c5e3b4b4503b85492d4397b9c79fb2534f86197307ffd9a0e012f190"
@@ -736,7 +751,7 @@
     {
       "member": "tools/roomplan/records/undertale-gog-1.08.json",
       "class": "roomplan-record",
-      "sha256": "cbf2acace2f843ddb1cdf977e1425e228f7fa8360ae826a28b87d0e6cf61b0ae",
+      "sha256": "edcb544c9e8c090b540e0ce8a70bbb0dbeba0e5a8119173653fb84566cd2bc1a",
       "justification": "Lead-approved GOG hash-gated record, reprojecting our recorded playthrough indices through equal metadata and RGBA.",
       "evidence_sha256": [
         "ea1289ef94f5f714e142d7cb8c4e851dc4326e625c48c21bb9639130497f6b5e",
@@ -789,7 +804,7 @@
       "evidence_sha256": [
         "ec6d5c493df4c8b53e57dd4a2ce27ce563d52ee9ccf95083c9135cec002574aa"
       ],
-      "sha256": "955fa12785f0e7416c04f27827796aef395af4305f6c6ece1b36bae0fcacc4b9"
+      "sha256": "ab4c4bbf3850443743e0299c7425bc2d26b861c89aeb806261073e3a6e2c3dff"
     },
     {
       "member": "tools/aot/stpack.py",
@@ -851,7 +866,7 @@
     {
       "member": "engine/src/z_utflames.c",
       "class": "engine-lookups",
-      "sha256": "c7c2ad3bae88f6a99581c1e00b3b8238ff97339e3bee73da63da0749329424bd",
+      "sha256": "5b48fde1b9613fec7b0ecf11bae99c22240ee167b63dcad8022071d1f997e5c9",
       "justification": "A section comment names the room whose snow floor collision_circle's native no-hit answer serves (comment only; UNDERTALE only, utflames circle af36f9670).",
       "evidence_sha256": [
         "5ba75d9207f269aac4ebb0473447bf55bac5fb0cc3bb0ff2f73c41b3923717d3"
@@ -869,7 +884,7 @@
     {
       "member": "platform/3ds/source/z_utstall.c",
       "class": "engine-lookups",
-      "sha256": "94f9470b80c5f90bcc7b00387e097d6d8c783d03c8634e087f98468309158c6c",
+      "sha256": "5e6bae3e588d13f0fbf55e84c705e0dce0ff17ea17b9552f20433ce468b0d776",
       "justification": "Code entry names the UNDERTALE Old first room load reads ahead (utflDialogueCode: the first textbox's dialogue scripts), and comments naming the room and object that reach it.",
       "evidence_sha256": [
         "b30b6f9c0118c69e23e46614e45ed7de416e68c19a4c370b7d27cbd96df15c05"
@@ -945,6 +960,17 @@
       "justification": "The engine-authored restart sentinel, defined in engine/src/vm.h, matches the scanner's ROOM_ prefix. It is not a room asset. This generic window adapter adds no game lookup names or game content.",
       "evidence_sha256": [
         "958d6288206bc7db90985927fa200db1ac9bd76838a3aff21452fa5c6493c0c4"
+      ]
+    },
+    {
+      "member": "tools/aot/dskip.py",
+      "class": "gating-hashes",
+      "sha256": "14611e0ae26012aa18d69071f9b217749ad014ff938a7b8fece890b524609836",
+      "justification": "Lead 2026-10-30 (asrfight D; GOG added 20:0x): UNDERTALE Old's covered-star key is written only for the three data versions its occlusion proof was checked on (whole-file SHA-256); no game content.",
+      "evidence_sha256": [
+        "cf7a80fd0f8ab71c47954453f7de768681a1e788ca4bfb2f81222c76ee3aac46",
+        "dcf99176f5beeab6da7c76142996000867d039c9fffd11c97f64eb2640957c09",
+        "ea1289ef94f5f714e142d7cb8c4e851dc4326e625c48c21bb9639130497f6b5e"
       ]
     }
   ],

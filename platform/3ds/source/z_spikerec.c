@@ -30,7 +30,7 @@
 //   per    its Step's start to the next frame's Step's start: its whole period, waiting for the slot included.
 //   step, draw   Runner_step, and Draw up to the end of the GUI layer, as main.c times them.
 //   other  the rest of the frame's CPU time: the audio update, then from the room-change call's end to the next wait
-//          (CtrRenderer_endFrame, which waits for the GPU's frame before, the room's texture prefetch, logging).
+//          (CtrRenderer_endFrame, which waits for the GPU's frame before, the room's texture prefetch, logging; postkick's room-change call, held after endFrame on a frame that changes no room).
 //   load   the room-change call: the hidden room load in a room-change frame (fl bit 1), close to 0 otherwise. The
 //          recorder's own write in that frame is not included (F's prevflush).
 //   gpu    the larger of the GPU times of the last frame the GPU had finished at this frame's room-change call and at
@@ -116,7 +116,7 @@ static struct {
     void* mainTls;
     aptHookCookie cookie;
     // The phase marks of the frame under way (present and wait: of the frame before, until this frame reaches them).
-    uint64_t tStep, tDraw, tAudio, tRoom, tPresent, tWait;
+    uint64_t tStep, tDraw, tAudio, tRoom, tPresent, tWait, tPresentHeld; bool roomOpen, presentHeld; // postkick: see the present mark
     uint32_t vbStep;
     // The game thread's FSFILE_Read totals.
     uint32_t sdReads;
@@ -459,7 +459,7 @@ SR_TEXT void __wrap_CtrBench_handleRoomChange(Runner* runner) {
     uint32_t self = (uint32_t) (selfPause - selfStart + svcGetSystemTick() - selfResume);
     sr.selfTicks += self;
     sr.selfFrames++;
-    if (self > sr.selfMax) sr.selfMax = self;
+    if (self > sr.selfMax) sr.selfMax = self; sr.roomOpen = false; if (sr.presentHeld) { sr.tPresent = sr.tPresentHeld; sr.presentHeld = false; }
 }
 
 SR_TEXT void __wrap_CtrWatchdog_mark(const char* phase) {
@@ -492,9 +492,9 @@ SR_TEXT void __wrap_CtrWatchdog_mark(const char* phase) {
     } else if (c == 'a') {
         if (strcmp(phase, srMarkAudio) == 0) sr.tAudio = svcGetSystemTick();
     } else if (c == 'r') {
-        if (strcmp(phase, srMarkRoom) == 0) sr.tRoom = svcGetSystemTick();
+        if (strcmp(phase, srMarkRoom) == 0) { sr.tRoom = svcGetSystemTick(); sr.roomOpen = true; }
     } else if (c == 'p') {
-        if (strcmp(phase, srMarkPresent) == 0) sr.tPresent = svcGetSystemTick();
+        if (strcmp(phase, srMarkPresent) == 0) { if (sr.roomOpen) { sr.tPresentHeld = svcGetSystemTick(); sr.presentHeld = true; } else sr.tPresent = svcGetSystemTick(); } // postkick (z_postkick.c) holds the room-change call of a frame that changes no room until after endFrame: its present waits for that call's judgement of the frame before
     } else if (c == 'w') {
         if (strcmp(phase, srMarkWait) == 0) {
             // A second wait without a Step between: the loop went round paused (the options menu), so the next period

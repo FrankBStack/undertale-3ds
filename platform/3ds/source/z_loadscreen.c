@@ -74,7 +74,14 @@ static const uint16_t lsPerMb10[P_COUNT] LS_RO = { 0, 0, 389, 0, 31, 91, 0, 89, 
 // The phases whose speed says how fast the rest will go.
 static const uint8_t lsMeasured[P_COUNT] LS_RO = { 0, 0, 1, 0, 1, 1, 0, 1, 1 };
 
+#ifdef ENABLE_WAD16
+// UNDERTALE: one copy of the path, global; main.c's boot log and z_smalltext.c read it too (freebytes 2026-10-31).
+#define lsSettingsPath LoadScreen_settingsPath
+extern const char lsSettingsPath[(sizeof(CTRPORT_GAME_DIR "/settings.ini") + 3u) & ~3u];
+const char lsSettingsPath[(sizeof(CTRPORT_GAME_DIR "/settings.ini") + 3u) & ~3u] LS_RO = CTRPORT_GAME_DIR "/settings.ini";
+#else
 LS_STR(lsSettingsPath, CTRPORT_GAME_DIR "/settings.ini");
+#endif
 LS_STR(lsShotsPath, CTRPORT_GAME_DIR "/loadshot.txt");
 LS_STR(lsShotFormat, CTRPORT_GAME_DIR "/loadshot-%u-%05u.bmp");
 LS_STR(lsKeyFormat, " %63[^= ] = %d");
@@ -155,7 +162,7 @@ extern uint8_t CtrScreens_game;
 
 // ===[ Drawing ]===
 
-LS_CODE static void lsRect(const LsCanvas* c, int32_t x, int32_t y, int32_t w, int32_t h, uint32_t rgb) {
+CTR_H1_LS("utloop") static void lsRect(const LsCanvas* c, int32_t x, int32_t y, int32_t w, int32_t h, uint32_t rgb) {
     u8 r = (u8) (rgb >> 16), g = (u8) (rgb >> 8), b = (u8) rgb;
     if (x < 0) w += x, x = 0;
     if (y < 0) h += y, y = 0;
@@ -180,7 +187,7 @@ LS_CODE static void lsRect(const LsCanvas* c, int32_t x, int32_t y, int32_t w, i
     }
 }
 
-LS_CODE static void lsClear(const LsCanvas* c) {
+CTR_H1_LS("aotlhelp") static void lsClear(const LsCanvas* c) {
     size_t pixels = (size_t) LS_SCREEN_W * (size_t) c->scale * c->rows;
     if (c->bpp == 3) {
         memset(c->fb, 0, pixels * 3);
@@ -190,7 +197,7 @@ LS_CODE static void lsClear(const LsCanvas* c) {
     for (size_t i = 0; pixels > i; i++) p[i] = 0xFFu;
 }
 
-LS_CODE static void lsDrawText(const LsCanvas* c) {
+CTR_H1_LS("utstall") static void lsDrawText(const LsCanvas* c) {
     if (ls.text == nullptr) return;
     uint32_t stride = (ls.textW + 7) / 8;
     for (uint32_t y = 0; ls.textH > y; y++) {
@@ -217,7 +224,7 @@ LS_CODE static void lsDrawDog(const LsCanvas* c, int32_t frame) {
     }
 }
 
-LS_CODE static void lsDrawEye(gfx3dSide_t side, bool full, int32_t fillW, int32_t frame, LsCanvas* out) {
+CTR_H1_LS("utstall") static void lsDrawEye(gfx3dSide_t side, bool full, int32_t fillW, int32_t frame, LsCanvas* out) {
     u16 width = 0, height = 0;
     GSPGPU_FramebufferFormat format = gfxGetScreenFormat(GFX_TOP);
     LsCanvas c = { gfxGetFramebuffer(GFX_TOP, side, &width, &height), width, height >= 2 * LS_SCREEN_W ? 2 : 1,
@@ -235,7 +242,7 @@ LS_CODE static void lsDrawEye(gfx3dSide_t side, bool full, int32_t fillW, int32_
     if (out != nullptr) *out = c;
 }
 
-LS_CODE static void lsPut32(uint8_t* p, uint32_t v) {
+CTR_H1_LS("bxreview") static void lsPut32(uint8_t* p, uint32_t v) {
     p[0] = (uint8_t) v;
     p[1] = (uint8_t) (v >> 8);
     p[2] = (uint8_t) (v >> 16);
@@ -243,7 +250,7 @@ LS_CODE static void lsPut32(uint8_t* p, uint32_t v) {
 }
 
 // The loadshot.txt test hook: the picture as a 400 x 240 BMP.
-LS_CODE static void lsSaveShot(const LsCanvas* c, uint32_t ms) {
+CTR_H1_LS("asgborder") static void lsSaveShot(const LsCanvas* c, uint32_t ms) {
     char name[96];
     snprintf(name, sizeof(name), lsShotFormat, (unsigned) ls.load, (unsigned) ms);
     FILE* f = fopen(name, lsWriteBinary);
@@ -328,7 +335,7 @@ LS_CODE static uint32_t lsMs(uint64_t from, uint64_t to) {
     return (uint32_t) ((to - from) / LS_TICKS_PER_MS);
 }
 
-LS_CODE static uint32_t lsExpected(int32_t p, uint32_t elapsed) {
+CTR_H1_LS("end") static uint32_t lsExpected(int32_t p, uint32_t elapsed) {
     uint32_t e = (uint32_t) ((uint64_t) ls.base[p] * ls.ratio / 1000u);
     if (p == P_HASH && ls.hashCalls > 0 && ls.sizeBytes > 0) {
         // A first check hashes the whole file: as long as its progress says.
@@ -341,7 +348,7 @@ LS_CODE static uint32_t lsExpected(int32_t p, uint32_t elapsed) {
 }
 
 // Per mille of the load done, by the clock.
-LS_CODE static uint32_t lsTarget(uint64_t now) {
+CTR_H1_LS("utloop") static uint32_t lsTarget(uint64_t now) {
     uint64_t done = 0, total = 0;
     int32_t current = ls.phase;
     for (int32_t p = 0; current > p; p++) {
@@ -364,7 +371,7 @@ LS_CODE static uint32_t lsTarget(uint64_t now) {
     return total > 0 ? (uint32_t) (done * 1000u / total) : 0;
 }
 
-LS_CODE static void lsBase(uint32_t bytes) {
+CTR_H1_LS("aotlhelp") static void lsBase(uint32_t bytes) {
     for (int32_t p = 0; P_COUNT > p; p++)
         ls.base[p] = lsFixedMs[p] + (uint32_t) ((uint64_t) lsPerMb10[p] * bytes / (10u << 20));
 }
@@ -389,7 +396,7 @@ LS_CODE static void lsPhaseLocked(int32_t p) {
     }
 }
 
-LS_CODE static void lsPhase(int32_t p) {
+CTR_H1_LS("utlhelp") static void lsPhase(int32_t p) {
     if (!ls.running) return;
     LightLock_Lock(&ls.lock);
     if (ls.running) lsPhaseLocked(p);
@@ -397,7 +404,7 @@ LS_CODE static void lsPhase(int32_t p) {
 }
 
 // One step of the thread, under the lock.
-LS_CODE static void lsStep(bool force) {
+CTR_H1_LS("utstall") static void lsStep(bool force) {
     uint64_t now = svcGetSystemTick();
     uint32_t t = lsTarget(now);
     if (t > LS_CAP) t = LS_CAP;
@@ -421,7 +428,7 @@ LS_CODE static void lsThread(void* arg) {
 
 // ===[ Starting and stopping ]===
 
-LS_CODE static void lsLayout(void) {
+CTR_H1_LS("utlhelp") static void lsLayout(void) {
     if (!LS_DELTARUNE) {
         // UNDERTALE: a 160 x 14 bar, 3 pixels of frame and 2 of gap.
         ls.barW = 160, ls.barH = 14, ls.frameT = 3;
@@ -515,7 +522,7 @@ LS_CODE static void lsPickText(const char* path) {
 #endif
 
 // The first load: settings.ini's game_screen and loading_screen, the art, loadshot.txt, and the thread.
-LS_CODE static void lsDecide(void) {
+CTR_H1_LS("asgborder") static void lsDecide(void) {
     ls.decided = true;
     const char* why = nullptr;
     FILE* f = fopen(lsSettingsPath, lsRead);
@@ -564,7 +571,7 @@ LS_CODE static void lsDecide(void) {
     ls.enabled = true;
 }
 
-LS_CODE static void lsBegin(uint32_t load, const char* path) {
+CTR_H1_LS("utloop") static void lsBegin(uint32_t load, const char* path) {
     if (!ls.decided) lsDecide();
     bool below = ls.firstDone ? CtrScreens_game == 1 : ls.firstBelow;
     if (!ls.enabled || below || ls.running) return;
@@ -601,7 +608,7 @@ LS_CODE static void lsBegin(uint32_t load, const char* path) {
 static uint32_t lsLoads LS_BSS;
 
 // The first data.win of a load: its size and, in DELTARUNE, its message.
-LS_CODE static void lsDataWin(const char* path) {
+CTR_H1_LS("asgborder") static void lsDataWin(const char* path) {
     if (!ls.running) {
         lsBegin(ls.firstDone ? ++lsLoads : 1, path);
         return;
@@ -621,7 +628,7 @@ LS_CODE static void lsDataWin(const char* path) {
     LightLock_Unlock(&ls.lock);
 }
 
-LS_CODE static void lsPause(bool paused) {
+CTR_H1_LS("end") static void lsPause(bool paused) {
     if (!ls.running) return;
     LightLock_Lock(&ls.lock);
     ls.paused = paused;
@@ -632,7 +639,7 @@ LS_CODE static void lsPause(bool paused) {
 }
 
 // The room is ready: the full bar, then the thread idles until the next load.
-LS_CODE static void lsFinish(void) {
+CTR_H1_LS("utloop") static void lsFinish(void) {
     if (!ls.running) return;
     LightLock_Lock(&ls.lock);
     lsPhaseLocked(P_COUNT - 1);
@@ -652,7 +659,7 @@ LS_CODE static void lsFinish(void) {
 }
 
 // The first load's notes: the log wasn't open when they were made.
-LS_CODE static void lsNotes(void) {
+CTR_H1_LS("bxreview") static void lsNotes(void) {
     if (ls.why != nullptr) logInfo(lsLogOff, ls.why);
 #if LS_DELTARUNE
     if (ls.artNote == 1) logInfo(lsLogNoArt);
@@ -661,7 +668,7 @@ LS_CODE static void lsNotes(void) {
 }
 
 // An error screen or the exit: the thread ends (threads left running can keep the console from leaving).
-LS_CODE static void lsQuit(void) {
+CTR_H1_LS("relprep") static void lsQuit(void) {
     if (ls.thread == nullptr) return;
     LightLock_Lock(&ls.lock);
     ls.running = false;
@@ -695,7 +702,7 @@ void __wrap_Runner_initFirstRoom(Runner* runner);
 extern const char ctrSdLegacyDir[];
 int CtrSdMigrate_run(const char* legacyParent, int mode);
 
-LS_CODE bool __wrap_C3D_Init(size_t cmdBufSize) {
+CTR_H1_LS("loadtime") bool __wrap_C3D_Init(size_t cmdBufSize) {
     // The retired SD folder move (z_sdmigrate.c): a stub since 2026-10-27, kept so this code does not move.
     CtrSdMigrate_run(ctrSdLegacyDir, 0777);
     bool ok = __real_C3D_Init(cmdBufSize);
@@ -704,18 +711,18 @@ LS_CODE bool __wrap_C3D_Init(size_t cmdBufSize) {
     return ok;
 }
 
-LS_CODE void __wrap_CtrPack_setDataWinPath(const char* path) {
+CTR_H1_LS("coverage") void __wrap_CtrPack_setDataWinPath(const char* path) {
     lsDataWin(path);
     __real_CtrPack_setDataWinPath(path);
 }
 
-LS_CODE static void lsHashProgress(void) {
+CTR_H1_LS("bxreview") static void lsHashProgress(void) {
     ls.hashCalls++;
     if (ls.progress != nullptr) ls.progress();
 }
 
 // A link of CtrDataVersion_check's wrap chain (its order: ctr_wrap_chain.h).
-LS_CODE CtrDataVersionResult CTR_DATAVERSION_LOADSCREEN(const char* path, const char* game, const char* part,
+CTR_H1_LS("utstall") CtrDataVersionResult CTR_DATAVERSION_LOADSCREEN(const char* path, const char* game, const char* part,
                                                          const char* cachePath, void (*progress)(void), bool* cached,
                                                          char digest[65]) {
     if (!ls.running) return CTR_DATAVERSION_AFTER_LOADSCREEN(path, game, part, cachePath, progress, cached, digest);
@@ -726,7 +733,7 @@ LS_CODE CtrDataVersionResult CTR_DATAVERSION_LOADSCREEN(const char* path, const 
     return result;
 }
 
-LS_CODE DataWin* __wrap_DataWin_parse(const char* filePath, DataWinParserOptions options) {
+CTR_H1_LS("utstall") DataWin* __wrap_DataWin_parse(const char* filePath, DataWinParserOptions options) {
     lsPhase(P_PARSE);
     DataWin* dataWin = __real_DataWin_parse(filePath, options);
     lsPhase(P_PACK);
@@ -740,13 +747,13 @@ LS_CODE void __wrap_CtrPackScreen_run(const DataWin* dataWin) {
     lsPause(false);
 }
 
-LS_CODE VMContext* __wrap_VM_create(DataWin* dataWin) {
+CTR_H1_LS("coverage") VMContext* __wrap_VM_create(DataWin* dataWin) {
     VMContext* vm = __real_VM_create(dataWin);
     lsPhase(P_FS);
     return vm;
 }
 
-LS_CODE FileSystem* __wrap_SandboxFileSystem_create(FileSystem* real, FileSystem* bundleOnly) {
+CTR_H1_LS("relprep") FileSystem* __wrap_SandboxFileSystem_create(FileSystem* real, FileSystem* bundleOnly) {
     FileSystem* fs = __real_SandboxFileSystem_create(real, bundleOnly);
     lsPhase(P_GAP);
     lsPause(true);
@@ -759,7 +766,7 @@ LS_CODE void __wrap_CtrPacer_loadStress(const char* path) {
     __real_CtrPacer_loadStress(path);
 }
 
-LS_CODE void __wrap_Runner_initFirstRoom(Runner* runner) {
+CTR_H1_LS("utlhelp") void __wrap_Runner_initFirstRoom(Runner* runner) {
     lsPhase(P_ROOM);
     __real_Runner_initFirstRoom(runner);
     lsFinish();
@@ -768,7 +775,7 @@ LS_CODE void __wrap_Runner_initFirstRoom(Runner* runner) {
 }
 
 // A link of CtrWatchdog_stop's wrap chain (its order: ctr_wrap_chain.h).
-LS_CODE void CTR_WATCHDOGSTOP_LOADSCREEN(void) {
+CTR_H1_LS("aotlate") void CTR_WATCHDOGSTOP_LOADSCREEN(void) {
     lsQuit();
     CTR_WATCHDOGSTOP_AFTER_LOADSCREEN();
 }
@@ -1086,7 +1093,11 @@ PS_CODE static void psReadArt(void) {
 }
 #endif
 
-// lsRect's copy.
+// lsRect's copy (DELTARUNE). UNDERTALE calls lsRect itself: the two bodies are byte-identical, and UNDERTALE Old's
+// late text is the budget that binds (freebytes 2026-10-31, 204 B).
+#if !LS_DELTARUNE
+#define psRect lsRect
+#else
 PS_CODE static void psRect(const LsCanvas* c, int32_t x, int32_t y, int32_t w, int32_t h, uint32_t rgb) {
     u8 r = (u8) (rgb >> 16), g = (u8) (rgb >> 8), b = (u8) rgb;
     if (x < 0) w += x, x = 0;
@@ -1110,6 +1121,7 @@ PS_CODE static void psRect(const LsCanvas* c, int32_t x, int32_t y, int32_t w, i
         }
     }
 }
+#endif
 
 // 1-bit text, white, its top left at (x0, y0) (lsDrawText's way).
 PS_CODE static void psBits(const LsCanvas* c, const uint8_t* bits, uint32_t w, uint32_t h, int32_t x0, int32_t y0) {

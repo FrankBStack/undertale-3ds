@@ -38,22 +38,20 @@ Older models: 54 of 69 measured scenes pass on a 3DS (45 of 71 on 28 October). L
 - One Snowdin scene that dropped no frames but still needs its slowest frame measured
 - A final check of every scene
 
-Asriel, Mad Dummy and Lemon Bread were measured before the 29 October sound fix, and Asgore before the changes below.
+Asriel, Mad Dummy and Lemon Bread were measured before the 29 October sound fix, and Asgore before the 30 October changes.
 
 We also measured every room of a full playthrough on the older models, on an earlier build: 589 of 595 rooms pass on a 3DS.
 
-## What changed since the last update (29 October, evening)
+## What changed since the last update (30 October)
 
-- Older models: fixed a crash that could happen when sounds stopped, for example at a room change. A sound channel's buffers were cleared before the channel was reset, and the system's sound thread could read them in between.
-- Older models: fixed a rare crash after quitting the game. When the loader gives the game no way back, the game now keeps its memory at exit instead of freeing it while its own threads may still be running.
-- Older models: Asgore's fight is smoother. Engine fixes cut the late frames in our console test runs of the fight from 13 to 5, then from 7 to 3. It isn't at a locked 30 yet.
-- Older models: the item names in Asriel's DREAM menu no longer stutter.
-- Older models: 4 KB more room for engine code, which these fixes use.
-- Also new: the Genocide ending's window shake now shows as picture motion; with the game on the bottom screen, frames are timed to that screen; the FPS counter counts the frames actually shown; and no boot log appears when the other screen is turned off.
+- Older models: music and sounds no longer go silent after the game has been started many times. Each launch left one system thread slot in use until the console was turned off; the game now gives it back.
+- Older models: 4 KB more room for engine code, with no loss of speed in our console tests. It makes room for the next fixes.
+- New 3DS: a tour of every room of a full playthrough dropped no frames.
 
 ## Setbacks
 
-- An experiment to speed up Asgore's fight made Omega Flowey's fight slower, so it was taken back out.
+- We found a slowdown in Hotland: code that moved between builds landed on different 4 KB sets of the processor's cache, costing up to 9 ms in a frame. Our build checks now catch this.
+- Older models: in the ending credits, the part where you dodge the names drops one frame each time a new wave of names appears (about every 2.5 seconds). Work on it is ongoing.
 - The beta is still not out. The hardest scenes on the older models, above all the ending credits, still drop frames.
 
 ## Known issues
@@ -65,7 +63,6 @@ We also measured every room of a full playthrough on the older models, on an ear
 - Opening Options lets the music fade out instead of stopping at once, and a sound that was playing can be cut off or play twice afterwards.
 - A few stray red pixels can appear around the last Froggit in the ending credits. We're looking into it.
 - Rarely, an older model can crash when you press HOME, and a 2DS can freeze or crash around Asriel's fight or the ending credits. We're looking into it. Save first.
-- If music and sounds go silent after you've started the game several times, restart the console.
 
 ## Supported consoles
 

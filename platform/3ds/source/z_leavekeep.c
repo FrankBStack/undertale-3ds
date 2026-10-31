@@ -182,6 +182,17 @@ __attribute__((noinline, section(".exitpanic_text"))) Result CtrSvcControlMemory
     return LK_NEXT_CONTROL(addr_out, addr0, addr1, size, op, perm);
 }
 
+// The Rosalina watcher's thread create (ctr_rosalina.c's threadCreate calls, renamed by CMakeLists.txt). A core-1 ask
+// before the app's CPU time limit is set fails in the kernel (E0A01839), and that refused create looks to keep one
+// thread count past the process's end (exitpanic, census rows 10-30). Answer it as the kernel would, without
+// asking: NULL, after which the watcher tries -2 as before. Every other ask goes on unchanged. Last in the late text.
+__attribute__((noinline, section(".exitpanic_rosa_text"))) Thread CtrRosalina_threadCreate(ThreadFunc entrypoint,
+        void* arg, size_t stack_size, int prio, int core_id, bool detached) {
+    u32 limit = 0;
+    if (core_id == 1 && (R_FAILED(APT_GetAppCpuTimeLimit(&limit)) || limit == 0)) return NULL;
+    return threadCreate(entrypoint, arg, stack_size, prio, core_id, detached);
+}
+
 void __real_CtrLab_poll(void);
 LK_CODE void CtrLabPoll_chainLeavekeep(void) {
     if (!lkAimed) {

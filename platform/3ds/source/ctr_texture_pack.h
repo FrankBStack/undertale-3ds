@@ -303,7 +303,7 @@ void CtrPackWorker_setKeepPacked(CtrPackWorker* worker, bool keep);
 // Stops the worker, waiting for the page in progress, and frees everything.
 void CtrPackWorker_stop(CtrPackWorker* worker);
 
-// ===[ Packed copies in spare linear memory (utflowey2, option 4; UNDERTALE Old only) ]===
+// ===[ Packed copies in spare linear memory (lane utflowey2, option 4; UNDERTALE Old only) ]===
 // CMake defines CTRPORT_PKLIN for UNDERTALE o3ds builds only, so every other build compiles the original calls
 // through the CTR_PKLIN_* names below. A packed copy then has two homes under one budget: the heap first (within the
 // game's measured heap share), then linear memory that the room's planned tiles, the 3 MB floor and the texture

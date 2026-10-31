@@ -25231,9 +25231,15 @@ GAME_FPS_TARGET_CODE static double gameFpsTarget(Runner* runner) {
     return (double) Runner_getEffectiveGameSpeed(runner);
 }
 
+#if defined(__3DS__) && defined(ENABLE_WAD16)
+// UNDERTALE: the same body under a second symbol (an alias), so the getter keeps two distinct bl targets and its
+// layout, and the late text holds one copy (freebytes 2026-10-31, 136 B). DELTARUNE keeps its two copies.
+static double gameFpsRealTarget(Runner* runner) __attribute__((alias("gameFpsTarget")));
+#else
 GAME_FPS_TARGET_CODE static double gameFpsRealTarget(Runner* runner) {
     return (double) Runner_getEffectiveGameSpeed(runner);
 }
+#endif
 #undef GAME_FPS_TARGET_CODE
 
 // ds_map_add borrows a static string (freewins, win 2): a key, or a string value, that RValue_isStaticString

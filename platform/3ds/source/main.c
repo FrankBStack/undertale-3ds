@@ -1998,7 +1998,13 @@ static struct {
 #endif
 } bootlog BOOTLOG_BSS;
 
+#ifdef ENABLE_WAD16
+// UNDERTALE: z_loadscreen.c's copy of SETTINGS_PATH (freebytes 2026-10-31).
+#define bootlogPath LoadScreen_settingsPath
+extern const char bootlogPath[];
+#else
 static const char bootlogPath[(sizeof(SETTINGS_PATH) + 3u) & ~3u] BOOTLOG_RO = SETTINGS_PATH;
+#endif
 static const char bootlogRead[4] BOOTLOG_RO = "r";
 static const char bootlogKey[20] BOOTLOG_RO = " bottom_mode = %d";
 static const char bootlogOtherKey[20] BOOTLOG_RO = " other_screen = %d";

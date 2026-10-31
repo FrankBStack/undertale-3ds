@@ -185,8 +185,11 @@ void CtrAudioSystem_sfxPlanStats(uint32_t out[4], double* ms);
 
 static const char usPath[] UTSFX_CONST = "romfs:/roomplan/undertale-sfx.dtp";
 static const char usRomfs[] UTSFX_CONST = "romfs";
-static const char usRead[] UTSFX_CONST = "rb";
-static const char usBattleVar[] UTSFX_CONST = "battlegroup";
+// z_roomplan.c's copies of the same words (freebytes 2026-10-31). The reasons stay here: as extern addresses they
+// grew usReason by 8 B and re-phased the sound plan's code after it (freebytes r5b).
+#define usRead RoomPlan_strRead
+#define usBattleVar RoomPlan_strBattleVar
+extern const char usRead[], usBattleVar[];
 static const char usLoaded[] UTSFX_CONST = "Sound plan: %u scenes (%u bytes)\n";
 static const char usIgnored[] UTSFX_CONST = "Sound plan: %s not used: %s\n";
 static const char usReason0[] UTSFX_CONST = "no file";

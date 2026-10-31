@@ -68,22 +68,22 @@ void OffKill_roomChange(Runner* runner) {
         hi[0] = lo[0] + (float) cam->viewWidth;
         hi[1] = lo[1] + (float) cam->viewHeight;
     }
-    int32_t n = (int32_t) arrlen(runner->instances);
-    for (int32_t i = 0; n > i; i++) {
-        Instance* inst = runner->instances[i];
-        if (inst->destroyed || !inst->active) continue;
-        for (int32_t k = 0; okCount > k; k++) {
-            const OffKillRule* rule = &okRules[k];
-            if (inst->objectIndex != rule->object) continue;
-            int a = rule->axis != 0;
-            float s = (float) rule->sign;
-            float p = (float) (a ? inst->y : inst->x);
-            float v = (float) (a ? inst->vspeed : inst->hspeed);
-            float edge = rule->sign > 0 ? hi[a] : lo[a];
-            if (s * v > 0.0f && s * (p - edge) > (float) rule->reach) {
-                Runner_destroyInstance(runner, inst, false);
-                break;
-            }
+    // Each rule walks only its object's instances (pacer 10-31): every instance of runner->instances is in
+    // instancesByExactObject under its current object until the cleanup after its destroy (runner.c, "Draw passes
+    // with no instance"), and a destroy changes no list. Position before speed: an instance in view reads no more.
+    // (the lists are read per rule: hoisted, the pointer is kept across Runner_destroyInstance on the stack)
+    for (int32_t k = 0; okCount > k; k++) {
+        const OffKillRule* rule = &okRules[k];
+        // rule->object indexes this data.win's objects: tools/aot/offkill.py writes only those it resolved in its OBJT.
+        Instance** list = runner->instancesByExactObject[rule->object];
+        int a = rule->axis != 0;
+        float s = (float) rule->sign;
+        float edge = rule->sign > 0 ? hi[a] : lo[a];
+        for (int32_t i = 0, n = (int32_t) arrlen(list); n > i; i++) {
+            Instance* inst = list[i];
+            if (inst->destroyed || !inst->active) continue;
+            if (s * ((float) (a ? inst->y : inst->x) - edge) > (float) rule->reach &&
+                s * (float) (a ? inst->vspeed : inst->hspeed) > 0.0f) Runner_destroyInstance(runner, inst, false);
         }
     }
     // No cleanup here: the next Step's own cleanup takes them out, as it does the game's own destroys.

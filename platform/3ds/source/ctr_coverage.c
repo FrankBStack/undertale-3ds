@@ -21,7 +21,7 @@ static const char coverageLoaded[] __attribute__((section(".rodata.late.coverage
 // call target. Preserve the SD replacement and expand includes against the
 // primary list before discarding duplicate IDs (primary always wins).
 __attribute__((noinline, noclone, section(".text.late.coverage")))
-BenchScene* coverageParseScenes(const char* primary) {
+CTR_COLD_OS BenchScene* coverageParseScenes(const char* primary) {
     char overridePath[256];
     snprintf(overridePath, sizeof(overridePath), coverageOverridePath, coverageGameDir());
     FILE* override = fopen(overridePath, coverageReadMode);

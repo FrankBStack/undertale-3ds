@@ -852,6 +852,7 @@ class BuildTest(unittest.TestCase):
             self.assertTrue(pipeline.source_wanted("tools/aot/loadscreen_art.py", game))
             self.assertEqual(pipeline.source_wanted("tools/aot/pixgrid.py", game), game != "deltarune")
             self.assertEqual(pipeline.source_wanted("tools/aot/btnprompt_build.py", game), game != "deltarune")
+            self.assertEqual(pipeline.source_wanted("tools/aot/dskip.py", game), game != "deltarune")
             self.assertTrue(pipeline.source_wanted("tools/aot/stglyphs.py", game))
             self.assertTrue(pipeline.source_wanted("tools/aot/stpack.py", game))
             self.assertEqual(pipeline.source_wanted("tools/aot/stmenu.py", game), game != "deltarune")
@@ -860,7 +861,7 @@ class BuildTest(unittest.TestCase):
             self.assertTrue(pipeline.source_wanted("tools/aot/itemverdict.py", game))
         manifest = Path(pipeline.SOURCE_ROOT, "tools/release/manifest-ut.txt").read_text(encoding="utf-8")
         for name in ("tools/aot/pixgrid.py", "tools/aot/loadscreen_art.py", "tools/aot/btnprompt_build.py",
-                     "tools/aot/stglyphs.py", "tools/aot/stpack.py", "tools/aot/stmenu.py"):
+                     "tools/aot/dskip.py", "tools/aot/stglyphs.py", "tools/aot/stpack.py", "tools/aot/stmenu.py"):
             self.assertIn(name, manifest.splitlines())
 
     def test_work_dir(self):

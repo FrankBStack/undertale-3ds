@@ -1985,7 +1985,7 @@ int32_t CtrPackWorker_utstallState(CtrPackWorker* worker, uint32_t pageId, uint3
 }
 #endif
 
-// ===[ A finished worker gives back its data.win (utstall, item 8 step 1b') ]===
+// ===[ A finished worker gives back its data.win (lane utstall, item 8 step 1b') ]===
 
 // Late code, the --wrap of CtrPackWorker_poll (CMakeLists.txt), which the game thread calls every frame. Each worker
 // thread opens data.win for itself, and freeWorker closed those only when the worker was stopped, at the chapter's
@@ -2017,7 +2017,7 @@ UTSTALL8B_TEXT bool __wrap_CtrPackWorker_poll(CtrPackWorker* worker, CtrPackResu
     return got;
 }
 
-// ===[ With the cache complete, the background worker stops checking page files one by one (utstall, step 1c) ]===
+// ===[ With the cache complete, the background worker stops checking page files one by one (lane utstall, step 1c) ]===
 
 // Late code: --wraps of CtrPack_isComplete (the pack screen's call at each chapter start) and
 // CtrPackWorker_setKeepPacked (the game thread's, when packed copies stop fitting in RAM). Until then the background

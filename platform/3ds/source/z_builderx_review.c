@@ -23,7 +23,7 @@ bool CtrBuilderx_hasBenchScenes(void);
 // The romfs's list first: every build packs bench_scenes.txt there (CMakeLists), so the SD card's override is looked
 // up only when that one is empty. A stat of a missing name in the game's SD folder took 400-440 ms on the Old test
 // consoles (docs/3ds-hardware.md), and the options menu's first page paid it on the game thread (the Debug row).
-BX_REVIEW bool CtrBuilderx_hasBenchScenes(void) {
+BX_REVIEW CTR_COLD_OS bool CtrBuilderx_hasBenchScenes(void) {
     if (bxReviewScenes < 0) {
         struct stat st;
         // Named first, as main's version did, so GCC emits the three strings in main's order.
@@ -54,12 +54,12 @@ CtrMenuAction Bx_menuActivateOriginal(CtrMenu* menu, uint32_t index, int32_t dir
 void Bx_menuRow(const CtrMenu* menu, uint32_t index, BxMenuRow* row);
 CtrMenuAction Bx_menuActivate(CtrMenu* menu, uint32_t index, int32_t direction);
 
-BX_REVIEW void Bx_menuRow(const CtrMenu* menu, uint32_t index, BxMenuRow* row) {
+BX_REVIEW CTR_COLD_OS void Bx_menuRow(const CtrMenu* menu, uint32_t index, BxMenuRow* row) {
     Bx_menuRowOriginal(menu, index, row);
     if (index == BX_MENU_DEBUG) row->dis = !CtrBuilderx_hasBenchScenes();
 }
 
-BX_REVIEW CtrMenuAction Bx_menuActivate(CtrMenu* menu, uint32_t index, int32_t direction) {
+BX_REVIEW CTR_COLD_OS CtrMenuAction Bx_menuActivate(CtrMenu* menu, uint32_t index, int32_t direction) {
     if (index == BX_MENU_DEBUG && direction >= 0 && !CtrBuilderx_hasBenchScenes()) return MENU_ACTION_NONE;
     return Bx_menuActivateOriginal(menu, index, direction);
 }
