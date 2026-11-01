@@ -163,18 +163,22 @@ UTS_LATE static float utsSilentLength(CtrAudioSystem* ca, int32_t soundIndex);
 
 // flowend burst (UNDERTALE): the vtable's playSound and update entries, late code at the end of ctr_audio_system.c
 // (flowendPlaySound: a step's plays past the first FLOWEND_BURST_FIRST start at the frame's audio update).
-// DELTARUNE keeps ctrPlaySound and pcmWaitUpdate.
+// DELTARUNE keeps ctrPlaySound and pcmWaitUpdate. sndcut (UNDERTALE): stopSound is sndcutStopSound, at the file's end.
 #if defined(ENABLE_WAD16)
 #define FLOWEND_BURST_DECL __attribute__((noinline, optimize("Os"), section(".text.flowburst_late"))) static int32_t \
     flowendPlaySound(AudioSystem* audio, int32_t soundIndex, int32_t priority, bool loop); \
     __attribute__((noinline, optimize("Os"), section(".text.flowburst_late"))) static void \
-    flowendBurstUpdate(AudioSystem* audio, float deltaTime);
+    flowendBurstUpdate(AudioSystem* audio, float deltaTime); \
+    __attribute__((noinline, optimize("Os"), section(".text.sndcut_late"))) static void \
+    sndcutStopSound(AudioSystem* audio, int32_t soundOrInstance);
 #define CTR_PLAY_ENTRY flowendPlaySound
 #define CTR_UPDATE_ENTRY flowendBurstUpdate
+#define CTR_STOP_ENTRY sndcutStopSound
 #else
 #define FLOWEND_BURST_DECL
 #define CTR_PLAY_ENTRY ctrPlaySound
 #define CTR_UPDATE_ENTRY pcmWaitUpdate
+#define CTR_STOP_ENTRY ctrStopSound
 #endif
 
 #endif

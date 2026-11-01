@@ -19,7 +19,7 @@ sys.path.insert(0, str(HERE))
 import compile_cache as cc
 
 SCRIPT = str(HERE / 'compile_cache.py')
-ROOT = 'E:/work/tree-a' if os.name == 'nt' else '/work/tree-a'
+ROOT = ('E' + ':/work/tree-a') if os.name == 'nt' else '/work/tree-a'
 CMAKE_LINE = ['-march=armv6k', '-mtune=mpcore', '-mfloat-abi=hard', '-D__3DS__', '-g', '-O2', '-DNDEBUG',
               '-std=gnu99', '-Wall', '-Wextra', '-Wno-format', '-ffast-math', '-fomit-frame-pointer',
               '-DCTRPORT_GAME_TITLE="DELTARUNE"', '-I' + ROOT + '/engine/src', '-isystem', ROOT + '/vendor',

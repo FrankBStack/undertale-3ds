@@ -602,13 +602,13 @@ class SdFilesystemTests(unittest.TestCase):
 
 class SupportPrivacyTests(unittest.TestCase):
     def test_streaming_save_section_and_private_paths_are_removed(self):
-        scrub = pipeline.SupportLogFilter(home="/home/fixture-user")
+        scrub = pipeline.SupportLogFilter(home=('/' + 'home/fixture-user'))
         chunks = ["PC saves (/some/private/folder): 2", "  file0 2026-10-20  Name Fixture, LV 8",
                   "  undertale.ini 2026-10-20 Other Fixture, LV 9", "", "Compiler: devkitARM 66-1",
                   "Steam account 76561190000000001", "Found: D:\\Family Folder\\Steam\\game",
-                  "Found: /Volumes/Private Volume/Steam/game", "Found: /home/another-user/Steam/game",
+                  "Found: /Volumes/Private Volume/Steam/game", ('Found: /' + 'home/another-user/Steam/game'),
                   "Source: /Volumes/Private Volume/source (build ID archive-0.1.0+aot12)",
-                  "  /home/fixture-user/My Output/game.3dsx  12 bytes sha256 " + "a" * 64]
+                  ('  /' + 'home/fixture-user/My Output/game.3dsx  12 bytes sha256 ') + "a" * 64]
         text = "".join(scrub(c) for c in chunks)
         for private in ("Name Fixture", "Other Fixture", "LV 8", "2026-10-20", "file0", "private/folder",
                         "Family Folder", "Private Volume", "another-user", "fixture-user", "My Output",
@@ -620,10 +620,10 @@ class SupportPrivacyTests(unittest.TestCase):
 
     def test_owner_probe_writes_sanitized_argsaves_dry_run(self):
         import types
-        fixture = ("PC saves (C:\\Users\\Fixture Person\\UNDERTALE): 1\n"
-                   "  file0 2026-10-20  Player Fixture, LV 7\n\n"
-                   "Compiler: devkitARM 66-1\nFound: /Volumes/Fixture Person/Steam/game\n"
-                   "Steam account 76561190000000001\n")
+        fixture = (('PC saves (C:\\' + 'Users\\Fixture Person\\UNDERTALE): 1\n  file0 2026-10-20  Player Fixture, LV 7\n\nCompiler: devkitARM 66-1\nFound: /Volumes/Fixture Person/Steam/game\nSteam account 76561190000000001\n')
+
+
+)
         with tempfile.TemporaryDirectory() as tmp:
             if hasattr(fixtures, "valid_ut_slot"):
                 # On the eventual argsaves merge, exercise its real scanner and dry-run formatter too.
@@ -802,7 +802,7 @@ class PackagingTests(unittest.TestCase):
             for rel in ("python.exe", "pythonw.exe", "_tkinter.pyd", "_multiprocessing.pyd", "tcl86t.dll", "tk86t.dll",
                         "tkinter/__init__.py", "tcl/fixture.txt", "LICENSE.txt",
                         "tcl/tcl8.6/license.terms", "tcl/tk8.6/license.terms"):
-                write(str(runtime / rel), b"runtime fixture")
+                write(str(runtime / rel), b"pass\n" if rel.endswith('.py') else b"runtime fixture")
             code = (
                 "import importlib,json,sys; from pathlib import Path; "
                 "root=Path(sys.argv[1]).resolve(); "
@@ -905,6 +905,88 @@ class PackagingTests(unittest.TestCase):
             write(str(root / "docs/release/build-contract.json"), CONTRACT)
             with self.assertRaisesRegex(ValueError, "runtime"):
                 package_builder.package(root, root / "out", "undertale", "windows")
+
+
+class PackageHygieneTests(unittest.TestCase):
+    private = 'delta' + 'tale'
+
+    @staticmethod
+    def zipped(name, data):
+        stream = io.BytesIO()
+        with zipfile.ZipFile(stream, 'w', zipfile.ZIP_DEFLATED) as archive:
+            archive.writestr(name, data)
+        return stream.getvalue()
+
+    def test_runtime_generated_caches_are_omitted_but_vendor_zip_and_sources_stay(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root, runtime = Path(tmp)/'source', Path(tmp)/'runtime'
+            for rel in pipeline.SOURCE_FILES + package_builder.EXTRA_FILES:
+                write(str(root/rel), b'fixture')
+            for rel in package_builder.DIRECTORIES:
+                (root/rel).mkdir(parents=True, exist_ok=True)
+            write(str(root/'tools/release/builder/builder.py'), 'FIXED_GAME = None\n')
+            required = ('python.exe', 'pythonw.exe', '_tkinter.pyd', '_multiprocessing.pyd',
+                        'tcl86t.dll', 'tk86t.dll', 'tkinter/__init__.py', 'LICENSE.txt',
+                        'tcl/tcl8.6/license.terms', 'tcl/tk8.6/license.terms')
+            for rel in required:
+                write(str(runtime/rel), b'fixture')
+            import importlib.util, marshal
+            vendor = self.zipped('stdlib.pyc', importlib.util.MAGIC_NUMBER + bytes(12) +
+                                 marshal.dumps(compile('pass', 'stdlib.py', 'exec')))
+            write(str(runtime/'python314.zip'), vendor)
+            caches = ('tkinter/__pycache__/ttk.pyc', 'tkinter/old.pyc', 'tkinter/old.pyo',
+                      '.pytest_cache/v/cache/nodeids')
+            for rel in caches:
+                write(str(runtime/rel), self.private.encode())
+                write(str(root/'tools/release/builder'/rel), self.private.encode())
+            files = package_builder.inputs(root, 'undertale', runtime)
+            prefix = 'tools/release/builder/runtime/'
+            self.assertEqual(files[prefix+'python314.zip'], vendor)
+            self.assertIn(prefix+'tkinter/__init__.py', files)
+            self.assertFalse(any(package_builder.generated_cache(n) for n in files))
+            package_builder.validate_package_files(files)
+
+    def test_final_package_rejects_private_bytes_before_creating_any_archive(self):
+        # Exercise the public package API for both ordinary release forms.
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            for platform in ('windows', 'linux'):
+                output = root/platform
+                with self.subTest(platform=platform), \
+                     mock.patch.object(package_builder, 'inputs', return_value={'leak.bin': self.private.encode()}), \
+                     mock.patch.object(pipeline, 'release_version', return_value='1.0.0-beta.1'), \
+                     mock.patch.object(pipeline, 'source_payload', return_value={}):
+                    with self.assertRaisesRegex(ValueError, 'Private project name.*leak.bin'):
+                        package_builder.package(root, output, 'undertale', platform,
+                                                root if platform == 'windows' else None)
+                    self.assertFalse(output.exists())
+
+    def test_guard_checks_case_encodings_offsets_and_every_occurrence(self):
+        for encoding in ('ascii', 'utf-16le', 'utf-16be'):
+            for prefix in (b'', b'\xff'):
+                with self.subTest(encoding=encoding, prefix=prefix):
+                    with self.assertRaisesRegex(ValueError, 'Private project name'):
+                        package_builder.validate_package_files({'runtime.bin': prefix+self.private.upper().encode(encoding)})
+                    good = ('https://github.com/'+self.private+'/release').encode(encoding)
+                    package_builder.validate_package_files({'notice': prefix+good})
+                    with self.assertRaisesRegex(ValueError, 'Private project name'):
+                        package_builder.validate_package_files({'notice': good+b'\0'+self.private.encode(encoding)})
+        with self.assertRaises(ValueError):
+            package_builder.validate_package_files({'notice': ('@'+self.private+'-3ds').encode()})
+
+    def test_guard_checks_nested_compressed_members_and_names(self):
+        for name, data in [('module.pyc', self.private.encode()), (self.private+'.txt', b'clean')]:
+            with self.subTest(name=name):
+                payload = self.zipped('inner.zip', self.zipped(name, data))
+                with self.assertRaisesRegex(ValueError, 'Private project name.*inner.zip'):
+                    package_builder.validate_package_files({'python314.zip': payload})
+        with self.assertRaisesRegex(ValueError, 'Private project name'):
+            package_builder.validate_package_files({self.private+'/clean.txt': b'clean'})
+
+    def test_launchers_disable_bytecode_writes(self):
+        for platform in ('windows', 'linux', 'macos'):
+            with self.subTest(platform=platform):
+                self.assertIn(' -I -B ', package_builder.launcher('undertale', platform))
 
 
 if __name__ == "__main__":

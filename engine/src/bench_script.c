@@ -614,7 +614,7 @@ static bool doCall(BenchScript* script, const Op* op, Runner* runner, Instance* 
     return ok;
 }
 
-typedef enum { STEP_DONE, STEP_BLOCKED, STEP_FAILED } StepResult;
+typedef enum { STEP_DONE, STEP_BLOCKED, STEP_FAILED } StepResult; StepResult benchcutKeepRun(BenchScript* script, Op* op, Runner* runner);
 
 static StepResult runOp(BenchScript* script, Op* op, Runner* runner) {
     DataWin* dw = runner->dataWin;
@@ -825,11 +825,36 @@ bool BenchScript_runNow(BenchScript* script, Runner* runner, const char* line) {
     return ok;
 }
 
+// benchcut (flowend r30, GO 11-01; bench only): a kept `set` whose source object has no instance this
+// frame (ut_flowey's keeps that put the heart on a SOUL's ACT button, once that button is gone: up to 12 such keeps
+// a frame by the fight's end) failed in evaluate's firstInstanceOf with no write done, then formatted an error twice
+// (vsnprintf into a buffer, vsnprintf again and a strdup) that BenchScript_tick freed unread. The same test is made
+// here first, and such a keep fails without the error text. Every other keep, and every keep whose object index is
+// not resolved yet (runOp resolves it), runs as before. BenchScript_tick's keep loop is the only caller.
+// Defined here, before BenchScript_tick: GCC emits a caller after its callees in this file, so BenchScript_tick
+// keeps its place in early text (check_layout).
+__attribute__((noinline, optimize("Os"), section(".text.benchcut_late"))) StepResult benchcutKeepRun(BenchScript* script, Op* op, Runner* runner) {
+    if (op->kind == BOP_SET && arrlen(op->args) > 1) {
+        const Value* source = &op->args[1];
+        if (source->kind == VALUE_REF && !source->global && source->objectIndex >= 0) {
+            // firstInstanceOf(runner, source->objectIndex) == nullptr, the way it pushes and pops the snapshot.
+            int32_t base = Runner_pushInstancesOfObject(runner, source->objectIndex);
+            bool none = true;
+            for (ptrdiff_t i = base; none && arrlen(runner->instanceSnapshots) > i; i++) {
+                if (!runner->instanceSnapshots[i]->destroyed) none = false;
+            }
+            Runner_popInstanceSnapshot(runner, base);
+            if (none) return STEP_FAILED;
+        }
+    }
+    return runOp(script, op, runner);
+}
+#line 828
 BenchScriptState BenchScript_tick(BenchScript* script, Runner* runner) {
     if (script->error != nullptr) return BENCH_SCRIPT_FAILED;
     for (ptrdiff_t i = 0; arrlen(script->keeps) > i; i++) {
         // A keep that can't run this frame (its instance is gone between phases, say) is skipped, not fatal.
-        runOp(script, script->keeps[i], runner);
+        benchcutKeepRun(script, script->keeps[i], runner);
         free(script->error);
         script->error = nullptr;
     }
@@ -1129,3 +1154,4 @@ bool BenchScript_takeShot(BenchScript* script) {
     script->shot = false;
     return shot;
 }
+

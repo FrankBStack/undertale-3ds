@@ -1075,8 +1075,94 @@ SECTIONS
        the loading screen still gives at least 4096 B (its end pad, above, moves the code after it by -4096 B).
        Late code added after this line moves nothing hot. Empty elsewhere. */
     *(.text.h1hole.end)
-    __late_text_end = ABSOLUTE(.);
+    /* uttc (uthunt T1, after freebytes H1's end pieces, merge order; UNDERTALE only, empty elsewhere): the tile pre-filter at
+       runner.c's end (uttcDrawTileRun, uttcBuild) and its constants (runner.o is excluded
+       from the catch-all above). Last, so no earlier late function moves. */
+    *(.text.late.uttc)
+    *(.rodata.uttc_in_text)
+    /* knightgpu d2 (last, merge order; DELTARUNE New only, empty elsewhere): tiled draws' tile quads out of view
+       culled and held additive passes made a texture tile at a time (ctr_renderer.c's end). Named outside .text.late.*
+       so ctr_renderer.o's own late line above leaves it here. */
+    *(.text.knightgpu_tiled_late)
+    /* knightgpu O9 (after d2, merge order; DELTARUNE New only, empty elsewhere): blend and fog calls held while a batch
+       is open, their check stubs and the stubs' table (ctr_renderer.c's end). */
+    *(.text.knightgpu_lazy_late)
+    *(.rodata.knightgpu_lazy_in_text)
+    /* depthmove (last, merge order; DELTARUNE only, empty in UNDERTALE): automatic depth layers' element lists as
+       deques: runner.o's Depthmove_free (z_depthmove.h; runner.o is out of the catch-all, and layerfix's input check
+       needs its late name), then z_depthmove.c, its constants and out-of-line copies. z_depthmove.c's code is named
+       outside .text.late.* so the catch-all leaves it here. Its message string, then dmRegrowTail (added after the
+       first queued rows, so placed after them to keep their addresses). */
+    *(.text.late.depthmove)
+    *(.text.depthmove_late)
+    *(.rodata.depthmove_late)
+    *(.text.depthmove_late_tail)
+    *z_depthmove.o(.text .text.* .rodata .rodata.*)
+    /* knightgpu T1 (after depthmove, merge order; DELTARUNE New only, empty elsewhere): O9's eager blend and fog
+       setters with citro3d's state written straight into the command buffer, and their table (ctr_renderer.c's end).
+       Inside .late.text, never an output section of its own (docs/3ds-hardware.md, 75zg). */
+    *(.text.knightgpu_texenv_late)
+    *(.rodata.knightgpu_texenv_in_text)
+    /* knsurf (last, merge order; DELTARUNE New only, empty elsewhere): strips appended to their live surface batch
+       (ctr_renderer_knsurf.inc). Inside .late.text, never in an output section of its own: a separate output section
+       after .late.text left the 3dsx with an absolute relocation on an instruction word, and the loader refused the
+       ROM (docs/3ds-hardware.md, 75zg). Only ld's ARM-to-Thumb veneer (____wrap_Crispart_drawTexture_from_arm, one
+       cold caller), which ld puts after the last code input, moves (lead 10-31 18:5x). */
+    *(.text.knsurf_late)
+    /* exitpanic argbind (last, after knsurf, merge order; DELTARUNE only, empty in UNDERTALE): argui's per-load
+       pointers emptied at a chapter's unload and set at its texture set-up and session start (z_argbind.c). Code
+       only: ld puts its ARM-to-Thumb veneer after the block's last code, and the word 8 B after that veneer must stay
+       reserve padding (3dsxtool writes a relocation there), so its names go to late rodata (.rodata.argbind_late). */
+    *(.text.argbind_late)
+    /* creddodge pop (creddodge 10-31; last, merge order; UNDERTALE only, empty elsewhere): aotSitePop's builtin
+       write through an instance id (vm.c's end, cdPop). Named outside .text.late.* so the catch-all above leaves it
+       here; last, so no other late function moves. */
+    *(.text.cdstep_late)
+    /* knightgpu A (last, merge order; DELTARUNE New only, empty elsewhere): bank A compaction, its moves and the
+       promotion after (ctr_renderer.c's end, ctr_memory.c's end). Last in .late.text, after argbind and cdPop, so
+       no earlier late function moves; only ld's ARM-to-Thumb veneer, which follows the last code input, moves. */
+    *(.text.knightgpu_compact_late)
+    /* dprank (uthunt; last, merge order; both games): drawPassFind, the draw pass's one responder read at its
+       recorded draw rank before the scan (runner.c's drawPassFirst calls it, padded to its old size). runner.o is
+       out of the catch-all above. Last in .late.text, after knightgpu A, so no earlier late function moves; only
+       ld's ARM-to-Thumb veneer, which follows the last code input, moves. */
+    *(.text.late.dprank)
+    /* creddodge presize (creddodge 10-31; last, after knightgpu A and dprank, merge order; UNDERTALE only, empty elsewhere):
+       a new instance's selfVars capacity (colline_gm14.c's end). Named outside .text.* so colline_gm14.o's line above
+       leaves it here. */
+    *(.cdcap_late)
+    /* benchcut (flowend r30, last, after creddodge presize, merge order; both games; bench only): the sweep's alive test by its cached
+       object index, its attack label described only when a read changes (ctr_benchmark.c's end), and a kept set
+       whose source has no instance failing without its error text (bench_script.c's end). Named outside
+       .text.late.* so no catch-all above takes it; last, so no earlier late function moves. */
+    *(.text.benchcut_late)
+    /* creddodge D2' (creddodge 11-01; last, after presize and benchcut, merge order; UNDERTALE only, empty elsewhere): Smart's
+       premultiplied text colour, out of utxEmitPageRegion so that its slot keeps 2504 B (ctr_renderer.c's end). */
+    *(.text.cdtail_late)
+    /* codeclose textcase (lever 1, last, after creddodge D2', merge order; UNDERTALE Old only, empty elsewhere): the dialogue script's
+       case-table front, its table read and its prefetchRoom link (z_textcase.c), then its constants (in late text:
+       UNDERTALE Old's late constants are short). Named outside .text.late.* so the catch-all above leaves it here;
+       last, so no earlier late function moves. */
+    *(.text.codeclose_case_late)
+    *(.rodata.codeclose_case_in_text)
+    *z_textcase.o(.text .text.* .rodata .rodata.*)
+    /* codeclose writerfirst (lever 2, last, merge order; UNDERTALE Old writerfront builds only, empty elsewhere): the
+       wrapper that gives a writer's first Draw writerfront's front, its prefetchRoom link (z_writerfirst.c) and vm.c's
+       VM_aotBoundFn, then its constants and that file's out-of-line copies of header functions. Named outside
+       .text.late.* so the catch-all above leaves it here; last, so no earlier late function moves. */
+    *(.text.codeclose_wf_late)
+    *(.rodata.codeclose_wf_in_text)
+    *z_writerfirst.o(.text .text.* .rodata .rodata.*)
+    /* sndcut (flowend r31; last, after codeclose writerfirst, merge order; UNDERTALE only, empty elsewhere): stopSound's late copy, a free
+       voice skipped without voiceLive's call (ctr_audio_system.c's end). Named outside .text.late.* so no catch-all
+       above takes it; last, so no earlier late function moves. */
+    *(.text.sndcut_late)
+    KEEP(*(.rodata.sndcut_in_text)) /* sndcutKeep: no code refers to it */
+    /* drpix (last, Old DELTARUNE): resolve native colour geometry and guard compact surface sampling.
+       Named outside .text.late.* so ctr_renderer.o's earlier catch-all leaves it here, inside .late.text. */
+    *(.text.drpix_late)
   }
+  __late_text_end = ABSOLUTE(.);
   /* 192 KiB (grown in whole 4 KiB pages from 16 KiB, each time late code outgrew it): screens' options page took
      12.3 KB on every target and colflip's UNDERTALE rules 3.5 KB; then noports left UNDERTALE o3DS about 2 KB
      with tpaggrow, texcache (2.3 KB), ring reuse, rdfix2 and utgrid still to come; then typed3, contention,
@@ -1269,6 +1355,11 @@ SECTIONS
        source URL, so a URL change moves no other constant. */
     KEEP(*ctr_legal.o(.rodata.late.relprep))
     *(.rodata.late.loadaudio)
+    /* exitpanic argbind (last, merge order; DELTARUNE only): the five argui asset names (z_argbind.c). Named outside
+       .rodata.late.* so the catch-all above leaves them here. */
+    *(.rodata.argbind_late)
+    /* knightgpu A (last, merge order; DELTARUNE New only): log formats, profile builds only (ctr_renderer.c's end). */
+    *(.rodata.knightgpu_compact_late)
     __late_rodata_end = ABSOLUTE(.);
   }
   /* 8 KiB (at first 4 KiB): late code's constants are mostly log formats; heapfrag's are 472 B, and
@@ -1750,6 +1841,30 @@ SECTIONS
     /* utrect (uthunt, after postkick, merge order; UNDERTALE only): the script's code index and its draw's
        function index (8 B). */
     *(.bss.utrect_late)
+    /* uttc (uthunt T1, after utrect, merge order; UNDERTALE only): the tile index's key and block pointer. */
+    *(.bss.uttc_late)
+    /* knightgpu d2 (last, merge order; DELTARUNE New only): the quads of a held pass kept to be made a tile at a time
+       (ctr_renderer.c's end). Named outside .bss.late.* so ctr_renderer.o's own late line above leaves it here. */
+    *(.bss.knightgpu_tiled_late)
+    /* knightgpu O9 (after d2, merge order; DELTARUNE New only): the held calls (ctr_renderer.c's end). */
+    *(.bss.knightgpu_lazy_late)
+    /* knightgpu A (after O9, merge order; DELTARUNE New only): the compaction's block lists and plan (ctr_renderer.c's
+       and ctr_memory.c's ends). */
+    *(.bss.knightgpu_compact_late)
+    /* creddodge presize (creddodge, last, after knightgpu A, merge order; UNDERTALE only): each object's last
+       selfVars capacity (1 KiB, colline_gm14.c's end). */
+    *(.bss.cdcap_late)
+    /* benchcut (flowend r30, after knightgpu A and creddodge presize, merge order; both games; bench only): the
+       label shadows. */
+    *(.bss.benchcut_late)
+    /* codeclose textcase (lever 1, after benchcut, merge order; UNDERTALE Old only): the table's header and
+       pointer, its state and the direct-jump count (z_textcase.c). */
+    *(.bss.codeclose_case_late)
+    *z_textcase.o(.bss .bss.* COMMON)
+    /* codeclose writerfirst (lever 2, after textcase, merge order; UNDERTALE Old writerfront builds only): the Draw's
+       code index, the wrapped function, the variables and the count (z_writerfirst.c). */
+    *(.bss.codeclose_wf_late)
+    *z_writerfirst.o(.bss .bss.* COMMON)
     /* 3dsxtool refuses a segment whose size isn't a multiple of 4 ("The segments is not word-aligned!"), and this
        block ends the RW segment: late statics of odd sizes (bools) would end it off a word. */
     . = ALIGN(4);

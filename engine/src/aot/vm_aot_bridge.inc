@@ -382,6 +382,38 @@ NOINLINE uint32_t aotSitePopVar(VMContext* ctx, int32_t top, uint32_t site, uint
     return 0;
 }
 
+// creddodge pop (vm.h, CD_SITE_HANDLE_POP; late text, defined here, before aotSitePop, so GCC emits vm.o's functions in
+// the stage's order): a Pop.v.v of a builtin variable through an instance id on the stack (`cb_a[i].x = x`). There
+// handlePop pops the id (vmToInt32Fast) and the value, coerces the value (coerceIntStoreToReal) and calls
+// resolveVariableWrite, whose builtin branch finds the instance (VM_findInstanceByTarget) and, unless it is a struct,
+// calls VMBuiltins_setVariable with no array index, then frees the value, which for a number frees nothing. The same
+// here, without the scope dispatch on the way, for a number id at or above INSTANCE_ID_BASE and a number value; any
+// other pop, and a variable index out of range (handlePop's require), goes to handlePop.
+#if defined(ENABLE_WAD16) && defined(__3DS__) && !defined(ENABLE_VM_TRACING)
+__attribute__((noinline, optimize("Os"), section(".text.cdstep_late"))) void cdPop(VMContext* ctx, uint8_t type1, uint8_t type2, uint32_t varRef, uint8_t varType, int32_t instanceType) {
+    uint32_t varIndex = varRef & 0x07FFFFFF;
+    if (varType == VARTYPE_STACKTOP && type1 == GML_TYPE_VARIABLE && ctx->stack.top >= 2 && ctx->dataWin->vari.variableCount > varIndex) {
+        Variable* varDef = &ctx->dataWin->vari.variables[varIndex];
+        RValue* value = &ctx->stack.slots[ctx->stack.top - 2];
+        const RValue* id = value + 1;
+        if (varDef->varID == VARIABLE_BUILTIN && (id->type == RVALUE_REAL || id->type == RVALUE_INT32) &&
+            (value->type == RVALUE_REAL || value->type == RVALUE_INT32)) {
+            int32_t target = id->type == RVALUE_INT32 ? id->int32 : (int32_t) id->real;
+            Instance* inst = target >= INSTANCE_ID_BASE ? VM_findInstanceByTarget(ctx, target) : nullptr;
+            if (inst != nullptr && inst->objectIndex != STRUCT_OBJECT_INDEX) {
+                // coerceIntStoreToReal for a number, in the popped slot
+                if (value->type == RVALUE_INT32 && (type2 == GML_TYPE_INT32 || type2 == GML_TYPE_INT64 || type2 == GML_TYPE_INT16))
+                    *value = RValue_makeReal((GMLReal) value->int32);
+                ctx->stack.top -= 2;
+                VMBuiltins_setVariable(ctx, inst, varDef->builtinVarId, varDef->name, *value, -1);
+                return;
+            }
+        }
+    }
+    handlePop(ctx, type1, type2, varRef, varType, instanceType);
+}
+#endif
+
 NOINLINE uint32_t aotSitePop(VMContext* ctx, int32_t top, uint32_t site) {
     ctx->stack.top = top;
     const uint8_t* bc = AOT_SITE_INSTR(ctx, site);
@@ -392,7 +424,7 @@ NOINLINE uint32_t aotSitePop(VMContext* ctx, int32_t top, uint32_t site) {
         tryPopStructMember(ctx, aotSiteVar(ctx, bc), instrType1(instr), (uint8_t) instrType2(instr), instrInstanceType(instr)))
         return aotSiteDone(ctx, top, site);
 #endif
-    aotSiteHandlePop(ctx, bc);
+    CD_SITE_HANDLE_POP(ctx, bc);
     return aotSiteDone(ctx, top, site);
 }
 

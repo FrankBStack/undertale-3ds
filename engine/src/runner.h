@@ -1208,4 +1208,39 @@ void Asgprobe_phase(const char* name);
 #define RUNNER_PHASE_PROBE(name) ((void) 0)
 #endif
 
+// uttc       uthunt T1, lead GO 2026-10-31; UNDERTALE 3DS only): drawRoom's and utkDrawRoom's tile runs go through
+// the tile pre-filter (runner.c's end), which draws exactly what drawLegacyTileRun draws and falls back to it. Other
+// builds (DELTARUNE, tracing, the AOT stress test) keep the call to drawLegacyTileRun, byte for byte.
+#if defined(ENABLE_WAD16) && defined(__3DS__) && !defined(ENABLE_VM_TRACING) && !defined(CTRPORT_AOT_STRESS) && \
+    !defined(CTRPORT_UTTC_OFF)
+#define UTTC_ON 1
+#define UTTC_TILE_RUN uttcDrawTileRun
+#define UTTC_DECL static __attribute__((noinline, optimize("Os"), section(".text.late.uttc"))) int32_t uttcDrawTileRun(Runner*, Room*, int32_t, int32_t, DrawKey*);
+#else
+#define UTTC_TILE_RUN drawLegacyTileRun
+#define UTTC_DECL
+#endif
+
+// dprank       uthunt, lead GO 2026-10-31): runner.c's drawPassFirst asks drawPassFind (runner.c's end) for the draw
+// pass's one responder entry, read at the instance's recorded draw rank before any scan. On the 3DS drawPassFind is
+// late code after every hot late function (late_reserve.ld's .text.late.dprank), and DPRANK_PAD keeps drawPassFirst
+// at its old size (164 B on every 3DS release target, nm -S), so nothing that existed moves. CTRPORT_DPRANK_OFF
+// (build.sh "dprank=off", test builds) always takes the scan; CTRPORT_DPRANK_DIAG ("dprank-diag", test builds, no
+// release URL) also counts the rank's hits and fallbacks into the log.
+#if defined(PLATFORM_3DS) && defined(__GNUC__)
+#define DPRANK_TAIL __attribute__((noinline, optimize("Os"), section(".text.late.dprank")))
+// Not volatile, with `only` as its operand: the asm then has no side effect, so drawPassFirst stays a pure function
+// to GCC (its caller fireDrawSubtype compiles as before). 56 B: 164 B less the 108 B without it, its branch included.
+#define DPRANK_PAD_ASM __asm__("b 1f\n\t.space 56\n1:" : "+r"(only))
+#else
+#define DPRANK_TAIL NOINLINE
+#define DPRANK_PAD_ASM ((void) only)
+#endif
+#ifdef CTRPORT_DPRANK_DIAG
+extern Runner* dprankRunner;
+#define DPRANK_PAD do { dprankRunner = runner; DPRANK_PAD_ASM; } while (0)
+#else
+#define DPRANK_PAD DPRANK_PAD_ASM
+#endif
+
 #endif /* _BS_RUNNER_H_ */

@@ -12,6 +12,7 @@
 #include "aot/vm_aot_hooks.h"
 #include "runner_layerfix_layout.inc" // layerfix: retained input slots
 #include "z_utexact_alarm.h"
+#include "z_depthmove.h" // depthmove: automatic layers' element lists (DELTARUNE)
 #line 13
 #include <stdint.h>
 #include "stdio_compat.h"
@@ -59,7 +60,7 @@ void Runner_freeRuntimeLayer(RuntimeLayer* runtimeLayer) {
             el->tileElementOwned = false;
         }
     }
-    arrfree(runtimeLayer->elements);
+    DEPTHMOVE_ARRFREE(runtimeLayer->elements);
     runtimeLayer->elements = nullptr;
 }
 
@@ -1402,7 +1403,7 @@ void Runner_draw(Runner* runner) {
     UTK_DRAW_ROOM(runner);
     RUNNER_ZONE_EXIT(runner);
 }
-static LAYERFIX_LATE void drawLayerInstances(Runner*, int32_t, int32_t, uint32_t); static LAYERFIX_LATE int32_t flushPendingDrawDepthChanges(Runner*, int32_t); static TILERUN_LATE int32_t drawLegacyTileRun(Runner*, Room*, int32_t, int32_t, DrawKey*);
+static LAYERFIX_LATE void drawLayerInstances(Runner*, int32_t, int32_t, uint32_t); static LAYERFIX_LATE int32_t flushPendingDrawDepthChanges(Runner*, int32_t); static TILERUN_LATE int32_t drawLegacyTileRun(Runner*, Room*, int32_t, int32_t, DrawKey*); UTTC_DECL
 static void drawRoom(Runner* runner) {
     Room* room = runner->currentRoom;
 
@@ -1509,7 +1510,7 @@ static void drawRoom(Runner* runner) {
             //
             //
             // keep every later line number (the __LINE__ of the checks further down) as it was.
-            if (runner->renderer != nullptr) i = drawLegacyTileRun(runner, room, i, drawableCount, &lastProcessedDrawKey);
+            if (runner->renderer != nullptr) i = UTTC_TILE_RUN(runner, room, i, drawableCount, &lastProcessedDrawKey);
         } else if (d->type == DRAWABLE_INSTANCE) {
             Instance* inst = d->instance;
             if (d->layerOrder != 0) continue;
@@ -1946,7 +1947,7 @@ static Instance* createAndInitInstance(Runner* runner, int32_t instanceId, int32
 
     GameObject* objDef = &dataWin->objt.objects[objectIndex];
 
-    Instance* inst = Instance_create(instanceId, objectIndex, x, y);
+    Instance* inst = CD_INSTANCE_CREATE(instanceId, objectIndex, x, y);
     inst->roomIndex = runner->currentRoomIndex;
     if (runner->createCounts != nullptr) runner->createCounts[objectIndex]++;
 
@@ -3375,7 +3376,7 @@ LAYERFIX_LATE void Runner_addInstanceLayerElement(Runner* runner, int32_t layerI
     RuntimeLayer* runtimeLayer = Runner_findRuntimeLayerById(runner, layerId);
     if (runtimeLayer == nullptr) return;
     RuntimeLayerElement el = makeInstanceLayerElement(runner, instanceId);
-    arrins(runtimeLayer->elements, 0, el); Runner_layerElementInserted(runner, layerId, 0, false);
+    DEPTHMOVE_INSFRONT(runtimeLayer, el); Runner_layerElementInserted(runner, layerId, 0, false);
     Instance* inst = RUNNER_INSTANCE_BY_ID(runner, instanceId);
     if (inst != nullptr) inst->layerElementCount++;
     runner->drawableListSortDirty = true;
@@ -3415,7 +3416,7 @@ static LAYERFIX_LATE void moveInstanceToDepthLayer(Runner* runner, Instance* ins
                     Instance* member = RUNNER_INSTANCE_BY_ID(runner, el.instanceId);
                     if (member != nullptr) member->layer = (int32_t) previous->id;
                 }
-                arrput(previous->elements, el);
+                DEPTHMOVE_APPEND(previous, el);
             }
             arrsetlen(other->elements, 0);
             Runner_freeRuntimeLayer(other);
@@ -3469,10 +3470,10 @@ LAYERFIX_LATE void Runner_removeInstanceLayerElement(Runner* runner, int32_t ins
         RuntimeLayer* ownLayer = Runner_findRuntimeLayerById(runner, inst->layer);
         if (ownLayer != nullptr) {
             size_t elementCount = arrlenu(ownLayer->elements);
-            repeat(elementCount, j) {
+            repeat(elementCount, DEPTHMOVE_J) { DEPTHMOVE_SCAN(j, elementCount)
                 RuntimeLayerElement* el = &ownLayer->elements[j];
                 if (el->type == RuntimeLayerElementType_Instance && el->instanceId == instanceId) {
-                    arrdel(ownLayer->elements, j); Runner_layerElementRemoved(runner, (int32_t) ownLayer->id, (size_t) j);
+                    DEPTHMOVE_DEL(ownLayer, j); Runner_layerElementRemoved(runner, (int32_t) ownLayer->id, (size_t) j);
                     inst->layerElementCount = 0;
                     return;
                 }
@@ -6610,7 +6611,7 @@ static __attribute__((noinline, section(".text.late.utkill"))) void utkDrawRoom(
         if (d->type == DRAWABLE_TILE) {
             // The whole run of tiles from here, as drawRoom draws it (drawLegacyTileRun; utkDrawableKey is its key).
             run.on = false;
-            if (runner->renderer != nullptr) i = drawLegacyTileRun(runner, room, i, drawableCount, &lastProcessedDrawKey);
+            if (runner->renderer != nullptr) i = UTTC_TILE_RUN(runner, room, i, drawableCount, &lastProcessedDrawKey);
         } else if (d->type == DRAWABLE_INSTANCE) {
             Instance* inst = d->instance;
             if (d->layerOrder != 0) continue;
@@ -6960,6 +6961,7 @@ static FREEWINS_LATE Instance* drawPassOnly(Runner* runner, int32_t slot) {
     return only;
 }
 
+static DPRANK_TAIL uint64_t drawPassFind(const Instance* only, const Drawable* drawables, int32_t n);
 static FREEWINS_LATE uint64_t drawPassFirst(Runner* runner, int32_t slot, const Drawable* drawables, int32_t n) {
     const ResolvedEventTable* table = &runner->eventTable;
     if (table->bySlotStart[slot + 1] - table->bySlotStart[slot] > (uint32_t) n || runner->instancesByExactObject == nullptr)
@@ -6983,9 +6985,42 @@ static FREEWINS_LATE uint64_t drawPassFirst(Runner* runner, int32_t slot, const 
 #endif
     Instance* only = drawPassOnly(runner, slot);
     if (only == (Instance*) 1) return DRAW_PASS_PART(0, -1);
-    for (int32_t k = 0; only != nullptr && n > k; k++) {
-        if (drawables[k].type == DRAWABLE_INSTANCE && drawables[k].instance == only) return DRAW_PASS_PART(k, k + 1);
+    DPRANK_PAD; // dprank (runner.h): keeps this function's size, so nothing after it in this section moves
+    return drawPassFind(only, drawables, n);
+}
+// dprank (uthunt, GO 2026-10-31; runner.h): the draw pass's one responder entry for drawPassFirst. The scan
+// walked the list from the start (28 B an entry, a room's tiles first: 1,078 in snowpuzz) for every Draw Begin/End,
+// GUI, Pre and Post pass with exactly one responder instance, every frame. Each instance is in the list once, so the
+// entry at the instance's draw rank, when it holds the instance, is the entry the scan finds. A stale or unset rank
+// (the keep merges new entries without recording ranks; a new instance has -1) fails the check and takes the scan.
+#ifdef CTRPORT_DPRANK_DIAG
+static DPRANK_TAIL void dprankCount(int kind, int32_t n); // this file's end
+#endif
+static DPRANK_TAIL uint64_t drawPassFind(const Instance* only, const Drawable* drawables, int32_t n) {
+    if (only == nullptr) return DRAW_PASS_PART(n, -1);
+#ifndef CTRPORT_DPRANK_OFF
+    int32_t r = only->drawRank;
+    if ((uint32_t) n > (uint32_t) r && drawables[r].type == DRAWABLE_INSTANCE && drawables[r].instance == only) {
+#ifdef CTRPORT_DPRANK_DIAG
+        // Diagnostic build only: the scan as well, to count any entry it would have found instead.
+        int32_t k = 0;
+        while (n > k && !(drawables[k].type == DRAWABLE_INSTANCE && drawables[k].instance == only)) k++;
+        dprankCount(k == r ? 0 : 3, n);
+#endif
+        return DRAW_PASS_PART(r, r + 1);
     }
+#endif
+    for (int32_t k = 0; n > k; k++) {
+        if (drawables[k].type == DRAWABLE_INSTANCE && drawables[k].instance == only) {
+#ifdef CTRPORT_DPRANK_DIAG
+            dprankCount(1, n);
+#endif
+            return DRAW_PASS_PART(k, k + 1);
+        }
+    }
+#ifdef CTRPORT_DPRANK_DIAG
+    dprankCount(2, n);
+#endif
     return DRAW_PASS_PART(n, -1);
 }
 
@@ -7108,5 +7143,244 @@ __asm__(".pushsection .text.Collision_computeBBox,\"ax\",%progbits\n.subsection 
 __attribute__((noinline, section(".text.late.colexact")))
 InstanceBBox Colexact_sharedBBox(Runner* runner, Instance* inst) {
     return Collision_computeBBox(runner, inst);
+}
+#endif
+
+// ===[ uttc: the tile pre-filter (uthunt T1, GO 2026-10-31; UNDERTALE 3DS only) ]===
+// drawLegacyTileRun tests every tile of a run against the view rectangle: 600 to 1,894 tiles a frame in the big
+// rooms, of which the 320x240 view shows a fifth. Here each depth's tiles have bitmaps by 128 px column and row band
+// of the room (without the layer offset), built once per room, and a run visits only the tiles of the bands the view
+// rectangle touches, in their order, each through the unchanged legacyTileVisible. So a tile is left out only if
+// legacyTileVisible would refuse it, and the draws, their order and the draw state are drawLegacyTileRun's:
+//   - Order: drawables sort by depth, then type (tiles first), then the tile's index, and the list holds every room
+//     tile once (rebuild; Utk_keepDrawList keeps them all or fails), so a depth's tiles are one block in index order.
+//     A block is used only if its first and last drawables are the depth's first and last tiles, n apart.
+//   - The view: the rectangle is Runner_visibleWorldRect's (rotated or scaled views included); no rectangle (a
+//     non-flat transform) means the stock loop, which then draws every tile.
+//   - Bands: a tile's columns and rows cover its extent (x + width * scaleX, as legacyTileVisible works it out)
+//     widened by 2 px. With a scale of exactly 1 and coordinates and sizes within 2^16 that extent is x .. x + width
+//     in whole pixels, so the tile's bands come from integers; any other tile is in every band. The rectangle's bands
+//     come from floats, against errors below 0.1 px with every layer offset within 2^16 and the rectangle within 2^20;
+//     an offset or rectangle past that takes the stock loop. Band numbers are clamped to the room's bands on both
+//     sides, for the tiles and for the rectangle alike, which keeps every overlap.
+//   - Layers: visibility and offset are read per block from the layer map, as the stock loop reads them per tile
+//     (tile_layer_hide/show/shift; nothing between two tiles runs GML).
+//   - Tile writers: the index is used only when the game's function table has none of tile_add, tile_delete,
+//     tile_layer_delete(_at) and tile_layer_depth, the builtins that move, re-depth or remove tiles; then a room's tiles
+//     are its data's, and the index is kept per room, tile array and count.
+// Memory: one malloc'd block per room (at most UTTC_BYTES, else none), replaced at the next room's first tile draw;
+// a room past the caps or a failed allocation takes the stock loop. CTRPORT_UTTC_FORCE (test builds only) takes the
+// stock loop on odd frames and on even frames rebuilds the index with every tile in every band.
+#if defined(UTTC_ON)
+#define UTTC_LATE __attribute__((noinline, optimize("Os"), section(".text.late.uttc")))
+#define UTTC_BSS __attribute__((section(".bss.uttc_late")))
+#define UTTC_SHIFT 7
+#define UTTC_GROUPS 16
+#define UTTC_BANDS 64
+#define UTTC_BYTES 8192u
+#define UTTC_LIMIT 65536.0f
+#define UTTC_ILIMIT 65536
+#define UTTC_RECT 1048576.0f
+#define UTTC_BIAS 2097152
+
+typedef struct {
+    int32_t depth, first, last, n;
+    uint32_t* bits; // the room's column bands, then its row bands, each (n + 31) / 32 words
+} UttcGroup;
+
+static struct {
+    const Room* room;
+    const RoomTile* tiles;
+    uint32_t count;
+    int32_t groups; // 0: no index for this room (the stock loop)
+    int32_t cols, rows;
+    UttcGroup* group;
+    int32_t writers; // 0 not looked at yet, 1 none in the game, -1 some (the stock loop)
+#if defined(CTRPORT_UTTC_FORCE)
+    uint32_t frame;
+#endif
+} uttc UTTC_BSS;
+
+static const char uttcWriters[] __attribute__((section(".rodata.uttc_in_text"))) =
+    "tile_add\0tile_delete\0tile_layer_delete\0tile_layer_delete_at\0tile_layer_depth\0";
+
+// The band of v (|v| < 2^21), clamped to 0..count-1: floor(v) within one, then by 128, so monotonic in v, which is all
+// the bands need (the 2 px margin takes the error).
+static inline __attribute__((always_inline)) int32_t uttcBand(float v, int32_t count) {
+    int32_t b = ((int32_t) (v + (float) UTTC_BIAS) - UTTC_BIAS) >> UTTC_SHIFT;
+    return 0 > b ? 0 : b >= count ? count - 1 : b;
+}
+
+// The band of a whole pixel v (|v| < 2^17), clamped as uttcBand's: an arithmetic shift is floor(v / 128)
+static inline __attribute__((always_inline)) int32_t uttcIBand(int32_t v, int32_t count) {
+    int32_t b = v >> UTTC_SHIFT;
+    return 0 > b ? 0 : b >= count ? count - 1 : b;
+}
+
+static inline __attribute__((always_inline)) int32_t uttcFind(const UttcGroup* g, int32_t count, int32_t depth) {
+    for (int32_t k = 0; count > k; k++)
+        if (g[k].depth == depth) return k;
+    return -1;
+}
+
+static UTTC_LATE void uttcBuild(Runner* runner, Room* room) {
+    free(uttc.group);
+    uttc.group = nullptr;
+    uttc.groups = 0;
+    uttc.room = room;
+    uttc.tiles = room->tiles;
+    uttc.count = room->tileCount;
+    if (uttc.writers == 0) {
+        Func* func = &runner->dataWin->func;
+        uttc.writers = 1;
+        for (uint32_t f = 0; func->functionCount > f; f++) {
+            const char* name = func->functions[f].name;
+            if (name == nullptr || name[0] != 't') continue;
+            for (const char* w = uttcWriters; *w != 0; w += strlen(w) + 1)
+                if (strcmp(name, w) == 0) uttc.writers = -1;
+        }
+    }
+    int32_t cols = (int32_t) (room->width >> UTTC_SHIFT) + 1, rows = (int32_t) (room->height >> UTTC_SHIFT) + 1;
+    if (0 > uttc.writers || cols > UTTC_BANDS || rows > UTTC_BANDS) return;
+
+    UttcGroup g[UTTC_GROUPS];
+    int32_t pos[UTTC_GROUPS];
+    int32_t count = 0;
+    repeat(room->tileCount, i) {
+        int32_t depth = room->tiles[i].tileDepth;
+        int32_t k = uttcFind(g, count, depth);
+        if (0 > k) {
+            if (count == UTTC_GROUPS) return;
+            k = count++;
+            g[k].depth = depth;
+            g[k].first = (int32_t) i;
+            g[k].n = 0;
+            pos[k] = 0;
+        }
+        g[k].n++;
+        g[k].last = (int32_t) i;
+    }
+    uint32_t words = 0;
+    for (int32_t k = 0; count > k; k++) words += (uint32_t) ((g[k].n + 31) >> 5);
+    size_t bytes = (size_t) count * sizeof(UttcGroup) + (size_t) words * (size_t) (cols + rows) * sizeof(uint32_t);
+    if (bytes > UTTC_BYTES) return;
+    UttcGroup* block = malloc(bytes);
+    if (block == nullptr) return;
+    memset(block, 0, bytes);
+    uint32_t* bits = (uint32_t*) &block[count];
+    for (int32_t k = 0; count > k; k++) {
+        g[k].bits = bits;
+        bits += (uint32_t) (cols + rows) * (uint32_t) ((g[k].n + 31) >> 5);
+    }
+    repeat(room->tileCount, i) {
+        const RoomTile* t = &room->tiles[i];
+        int32_t k = uttcFind(g, count, t->tileDepth);
+        int32_t at = pos[k]++, stride = (g[k].n + 31) >> 5;
+        uint32_t* word = g[k].bits + (at >> 5);
+        uint32_t bit = 1u << (at & 31);
+        // The extent as legacyTileVisible works it out, without a layer offset: with a scale of exactly 1, x .. x + width
+        // and y .. y + height, exact in floats as in integers within 2^16
+        int32_t c0 = 0, c1 = cols - 1, r0 = 0, r1 = rows - 1;
+#if !defined(CTRPORT_UTTC_FORCE)
+        if (t->scaleX == 1.0f && t->scaleY == 1.0f && t->x >= -UTTC_ILIMIT && UTTC_ILIMIT >= t->x && t->y >= -UTTC_ILIMIT &&
+            UTTC_ILIMIT >= t->y && (uint32_t) UTTC_ILIMIT >= t->width && (uint32_t) UTTC_ILIMIT >= t->height) {
+            c0 = uttcIBand(t->x - 2, cols);
+            c1 = uttcIBand(t->x + (int32_t) t->width + 2, cols);
+            r0 = uttcIBand(t->y - 2, rows);
+            r1 = uttcIBand(t->y + (int32_t) t->height + 2, rows);
+        }
+#endif
+        for (int32_t c = c0; c1 >= c; c++) word[c * stride] |= bit;
+        for (int32_t r = r0; r1 >= r; r++) word[(cols + r) * stride] |= bit;
+    }
+    memcpy(block, g, (size_t) count * sizeof(UttcGroup));
+    uttc.group = block;
+    uttc.groups = count;
+    uttc.cols = cols;
+    uttc.rows = rows;
+}
+
+// drawLegacyTileRun's contract: the run from cachedDrawables[i - 1] (taken by the caller, its key and draw depth set),
+// returning the cursor past it with the last tile's key set.
+static int32_t uttcDrawTileRun(Runner* runner, Room* room, int32_t i, int32_t drawableCount, DrawKey* lastProcessedDrawKey) {
+    float rect[4];
+#if defined(CTRPORT_UTTC_FORCE)
+    if (runner->frameCount & 1) goto stock;
+    if (uttc.frame != (uint32_t) runner->frameCount) {
+        uttc.frame = (uint32_t) runner->frameCount;
+        uttc.room = nullptr;
+    }
+#endif
+    if (!Runner_visibleWorldRect(runner, &rect[0], &rect[1], &rect[2], &rect[3])) goto stock;
+    if (!(rect[0] >= -UTTC_RECT && rect[1] >= -UTTC_RECT && UTTC_RECT >= rect[2] && UTTC_RECT >= rect[3])) goto stock;
+    if (uttc.room != room || uttc.tiles != room->tiles || uttc.count != room->tileCount) uttcBuild(runner, room);
+    if (uttc.groups == 0) goto stock;
+    Drawable* list = runner->cachedDrawables;
+    while (true) {
+        Drawable* d = &list[i - 1];
+        int32_t k = uttcFind(uttc.group, uttc.groups, d->depth);
+        if (0 > k) goto stock;
+        const UttcGroup* g = &uttc.group[k];
+        int32_t start = i - 1, end = start + g->n;
+        if (d->tileIndex != g->first || end > drawableCount) goto stock;
+        Drawable* e = &list[end - 1];
+        if (e->type != DRAWABLE_TILE || e->tileIndex != g->last || e->depth != g->depth) goto stock;
+        ptrdiff_t layerIdx = hmgeti(runner->tileLayerMap, g->depth);
+        TileLayerState layer = { true, 0.0f, 0.0f };
+        if (layerIdx >= 0) layer = runner->tileLayerMap[layerIdx].value;
+        if (layer.visible) {
+            float ox = layer.offsetX, oy = layer.offsetY;
+            if (!(ox >= -UTTC_LIMIT && UTTC_LIMIT >= ox && oy >= -UTTC_LIMIT && UTTC_LIMIT >= oy)) goto stock;
+            int32_t cols = uttc.cols, rows = uttc.rows, stride = (g->n + 31) >> 5;
+            int32_t c0 = uttcBand(rect[0] - ox, cols), c1 = uttcBand(rect[2] - ox, cols);
+            int32_t r0 = uttcBand(rect[1] - oy, rows), r1 = uttcBand(rect[3] - oy, rows);
+            for (int32_t w = 0; stride > w; w++) {
+                uint32_t m = 0, rm = 0;
+                for (int32_t c = c0; c1 >= c; c++) m |= g->bits[c * stride + w];
+                for (int32_t r = r0; r1 >= r; r++) rm |= g->bits[(cols + r) * stride + w];
+                m &= rm;
+                while (m != 0) {
+                    // The stock loop's test and draw for this tile, with the block's layer offset (drawDepth is the
+                    // block's depth, as the stock loop has it for each of the block's tiles)
+                    RoomTile* tile = &room->tiles[list[start + (w << 5) + __builtin_ctz(m)].tileIndex];
+                    m &= m - 1;
+                    if (legacyTileVisible(rect, tile, ox, oy)) Renderer_drawTile(runner->renderer, tile, ox, oy);
+                }
+            }
+        }
+        runner->drawDepth = e->depth;
+        *lastProcessedDrawKey = drawableKey(e);
+        i = end;
+        if (i >= drawableCount || list[i].type != DRAWABLE_TILE) return i;
+        d = &list[i++];
+        *lastProcessedDrawKey = drawableKey(d);
+        runner->drawDepth = d->depth;
+    }
+stock:
+    return drawLegacyTileRun(runner, room, i, drawableCount, lastProcessedDrawKey);
+}
+#endif
+
+// dprank-diag (drawPassFind, after drawPassFirst): the counts it logs.
+#ifdef CTRPORT_DPRANK_DIAG
+Runner* dprankRunner;
+// Counts per room (0 rank hit, 1 scan found it, 2 not in the list, 3 rank hit but the scan finds another entry: must
+// stay 0), logged at each room change and every 600 calls.
+static DPRANK_TAIL void dprankCount(int kind, int32_t n) {
+    static uint32_t c[4], calls, scanned;
+    static int32_t room = -1;
+    int32_t now = dprankRunner != nullptr ? dprankRunner->currentRoomIndex : -1;
+    if (now != room || calls >= 600) {
+        if (calls != 0)
+            fprintf(stderr, "dprank: room %d calls %lu hit %lu scan %lu none %lu wrong %lu scanned %lu n %ld\n", (int) room,
+                    (unsigned long) calls, (unsigned long) c[0], (unsigned long) c[1], (unsigned long) c[2],
+                    (unsigned long) c[3], (unsigned long) scanned, (long) n);
+        c[0] = c[1] = c[2] = c[3] = 0;
+        calls = scanned = 0;
+        room = now;
+    }
+    calls++;
+    c[kind]++;
+    if (kind != 0) scanned += (uint32_t) n;
 }
 #endif

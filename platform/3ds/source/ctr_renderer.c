@@ -15588,11 +15588,18 @@ static void drawSurfaceImpl(CtrRenderer* r, int32_t surfaceId, int32_t srcLeft, 
     drawSurfaceQuad(r, surfaceId, s, sx0, sy0, sx1, sy1, px, py, cs);
 }
 
+#if defined(CTRPORT_KNSURF)
+static void knsurfSurfaceImpl(CtrRenderer* r, int32_t surfaceId, int32_t srcLeft, int32_t srcTop, int32_t srcWidth, int32_t srcHeight,
+                              float x, float y, float xscale, float yscale, float angleDeg, const CtrColor* cs);
+#else
+#define knsurfSurfaceImpl drawSurfaceImpl
+#endif
+#line 14222
 static void ctrDrawSurface(Renderer* renderer, int32_t surfaceId, int32_t srcLeft, int32_t srcTop, int32_t srcWidth, int32_t srcHeight, float x,
                            float y, float xscale, float yscale, float angleDeg, uint32_t color, float alpha) {
     CtrColor c = makeColor(color, alpha);
     CtrColor cs[4] = { c, c, c, c };
-    drawSurfaceImpl((CtrRenderer*) renderer, surfaceId, srcLeft, srcTop, srcWidth, srcHeight, x, y, xscale, yscale, angleDeg, cs);
+    knsurfSurfaceImpl((CtrRenderer*) renderer, surfaceId, srcLeft, srcTop, srcWidth, srcHeight, x, y, xscale, yscale, angleDeg, cs);
 }
 
 static void ctrDrawSurfaceColor(Renderer* renderer, int32_t surfaceId, int32_t srcLeft, int32_t srcTop, int32_t srcWidth, int32_t srcHeight,
@@ -19406,19 +19413,19 @@ E5X_DECLARE
     X(drawLineColor, e5xDrawLineColor, skipDrawLineColor)                                                                                            \
     X(drawTriangle, e5xDrawTriangle, skipDrawTriangle)                                                                                               \
     X(drawTriangleFan, e5xDrawTriangleFan, skipDrawTriangleFan)                                                                                      \
-    X(drawLines, ctrDrawLines, skipDrawLines)                                                                                                        \
+    X(drawLines, KGL_CHKS(ctrDrawLines), skipDrawLines)                                                                                              \
     X(rectOutsideView, ctrRectOutsideView, skipRectOutsideView)                                                                                      \
     X(drawText, e5xDrawText, skipDrawText)                                                                                                           \
     X(drawTextColor, e5xDrawTextColor, skipDrawTextColor)                                                                                            \
-    X(primitiveEnd, ctrPrimitiveEnd, skipPrimitiveEnd)                                                                                               \
-    X(drawVertexBuffer, ctrDrawVertexBuffer, skipDrawVertexBuffer)                                                                                   \
-    X(clearScreen, ctrClearScreen, skipClearScreen)                                                                                                  \
+    X(primitiveEnd, KGL_CHKS(ctrPrimitiveEnd), skipPrimitiveEnd)                                                                                     \
+    X(drawVertexBuffer, KGL_CHKS(ctrDrawVertexBuffer), skipDrawVertexBuffer)                                                                         \
+    X(clearScreen, KGL_CHKS(ctrClearScreen), skipClearScreen)                                                                                        \
     X(drawSpriteTiled, e5xDrawSpriteTiled, skipDrawSpriteTiled)                                                                                      \
-    X(drawSurface, ctrDrawSurface, skipDrawSurface)                                                                                                  \
-    X(drawSurfaceColor, ctrDrawSurfaceColor, skipDrawSurfaceColor)                                                                                   \
-    X(drawSurfaceTiled, ctrDrawSurfaceTiled, skipDrawSurfaceTiled)                                                                                   \
-    X(surfaceCopy, ctrSurfaceCopy, skipSurfaceCopy)                                                                                                  \
-    X(createSpriteFromSurface, ctrCreateSpriteFromSurface, skipCreateSpriteFromSurface)                                                              \
+    X(drawSurface, KGL_CHKS(ctrDrawSurface), skipDrawSurface)                                                                                        \
+    X(drawSurfaceColor, KGL_CHKS(ctrDrawSurfaceColor), skipDrawSurfaceColor)                                                                         \
+    X(drawSurfaceTiled, KGL_CHKS(ctrDrawSurfaceTiled), skipDrawSurfaceTiled)                                                                         \
+    X(surfaceCopy, KGL_CHKS(ctrSurfaceCopy), skipSurfaceCopy)                                                                                        \
+    X(createSpriteFromSurface, KGL_CHKS(ctrCreateSpriteFromSurface), skipCreateSpriteFromSurface)                                                    \
     X(surfaceGetTexture, ctrSurfaceGetTexture, skipSurfaceGetTexture)
 
 // A wrapper of the vtable (the state hash) calls through ctrVtable for what
@@ -22219,14 +22226,14 @@ Renderer* CtrRenderer_create(FileSystem* fileSystem, int32_t appW, int32_t appH,
     ctrVtable.init = ctrInit;
     ctrVtable.destroy = ctrDestroy;
     ctrVtable.beginFrame = ctrBeginFrame;
-    ctrVtable.endFrameInit = ctrEndFrameInit;
-    ctrVtable.endFrameEnd = ctrEndFrameEnd;
-    ctrVtable.beginView = ctrBeginView;
-    ctrVtable.endView = ctrEndView;
-    ctrVtable.applyProjection = ctrApplyProjection;
-    ctrVtable.beginGUI = ctrBeginGUI;
-    ctrVtable.setGuiProjection = ctrSetGuiProjection;
-    ctrVtable.endGUI = ctrEndGUI;
+    ctrVtable.endFrameInit = KGL_CHK(ctrEndFrameInit);
+    ctrVtable.endFrameEnd = KGL_CHK(ctrEndFrameEnd);
+    ctrVtable.beginView = KGL_CHK(ctrBeginView);
+    ctrVtable.endView = KGL_CHK(ctrEndView);
+    ctrVtable.applyProjection = KGL_CHK(ctrApplyProjection);
+    ctrVtable.beginGUI = KGL_CHK(ctrBeginGUI);
+    ctrVtable.setGuiProjection = KGL_CHK(ctrSetGuiProjection);
+    ctrVtable.endGUI = KGL_CHK(ctrEndGUI);
     ctrVtable.drawSprite = e5xDrawSprite;
     ctrVtable.drawSpritePart = e5xDrawSpritePart;
     ctrVtable.drawSpritePartColor = e5xDrawSpritePartColor;
@@ -22236,68 +22243,68 @@ Renderer* CtrRenderer_create(FileSystem* fileSystem, int32_t appW, int32_t appH,
     ctrVtable.drawLine = e5xDrawLine;
     ctrVtable.drawTriangle = e5xDrawTriangle;
     ctrVtable.drawTriangleFan = e5xDrawTriangleFan;
-    ctrVtable.drawLines = ctrDrawLines;
+    ctrVtable.drawLines = KGL_CHK(ctrDrawLines);
     ctrVtable.rectOutsideView = ctrRectOutsideView;
     ctrVtable.drawLineColor = e5xDrawLineColor;
     ctrVtable.drawText = e5xDrawText;
     ctrVtable.drawTextColor = e5xDrawTextColor;
     ctrVtable.drawTextUI = nullptr;
-    ctrVtable.primitiveBegin = ctrPrimitiveBegin;
-    ctrVtable.primitiveBeginTexture = ctrPrimitiveBeginTexture;
-    ctrVtable.primitiveEnd = ctrPrimitiveEnd;
-    ctrVtable.drawVertex = ctrDrawVertex;
-    ctrVtable.drawVertexBuffer = ctrDrawVertexBuffer;
-    ctrVtable.flush = ctrFlush;
-    ctrVtable.clearScreen = ctrClearScreen;
-    ctrVtable.createSpriteFromSurface = ctrCreateSpriteFromSurface;
-    ctrVtable.deleteSprite = ctrDeleteSprite;
+    ctrVtable.primitiveBegin = KGL_CHK(ctrPrimitiveBegin);
+    ctrVtable.primitiveBeginTexture = KGL_CHK(ctrPrimitiveBeginTexture);
+    ctrVtable.primitiveEnd = KGL_CHK(ctrPrimitiveEnd);
+    ctrVtable.drawVertex = KGL_CHK(ctrDrawVertex);
+    ctrVtable.drawVertexBuffer = KGL_CHK(ctrDrawVertexBuffer);
+    ctrVtable.flush = KGL_CHK(ctrFlush);
+    ctrVtable.clearScreen = KGL_CHK(ctrClearScreen);
+    ctrVtable.createSpriteFromSurface = KGL_CHK(ctrCreateSpriteFromSurface);
+    ctrVtable.deleteSprite = KGL_CHK(ctrDeleteSprite);
     ctrVtable.gpuGetBlendFactors = ctrGpuGetBlendFactors;
     ctrVtable.gpuGetBlendMode = ctrGpuGetBlendMode;
-    ctrVtable.gpuSetBlendMode = ctrGpuSetBlendMode;
-    ctrVtable.gpuSetBlendModeExt = ctrGpuSetBlendModeExt;
-    ctrVtable.gpuSetBlendEnable = ctrGpuSetBlendEnable;
-    ctrVtable.gpuSetTexFilter = ctrGpuSetTexFilter;
-    ctrVtable.gpuSetAlphaTestEnable = ctrGpuSetAlphaTestEnable;
+    ctrVtable.gpuSetBlendMode = KGL_SET(ctrGpuSetBlendMode);
+    ctrVtable.gpuSetBlendModeExt = KGL_SET(ctrGpuSetBlendModeExt);
+    ctrVtable.gpuSetBlendEnable = KGL_SET(ctrGpuSetBlendEnable);
+    ctrVtable.gpuSetTexFilter = KGL_CHK(ctrGpuSetTexFilter);
+    ctrVtable.gpuSetAlphaTestEnable = KGL_CHK(ctrGpuSetAlphaTestEnable);
     ctrVtable.gpuGetAlphaTestEnable = ctrGpuGetAlphaTestEnable;
-    ctrVtable.gpuSetAlphaTestRef = ctrGpuSetAlphaTestRef;
-    ctrVtable.gpuSetColorWriteEnable = ctrGpuSetColorWriteEnable;
+    ctrVtable.gpuSetAlphaTestRef = KGL_CHK(ctrGpuSetAlphaTestRef);
+    ctrVtable.gpuSetColorWriteEnable = KGL_CHK(ctrGpuSetColorWriteEnable);
     ctrVtable.gpuGetColorWriteEnable = ctrGpuGetColorWriteEnable;
     ctrVtable.gpuGetBlendEnable = ctrGpuGetBlendEnable;
-    ctrVtable.gpuSetFog = ctrGpuSetFog;
+    ctrVtable.gpuSetFog = KGL_SET(ctrGpuSetFog);
     ctrVtable.drawTile = nullptr;
     ctrVtable.drawSpriteTiled = e5xDrawSpriteTiled;
-    ctrVtable.createSurface = ctrCreateSurface;
+    ctrVtable.createSurface = KGL_CHK(ctrCreateSurface);
     ctrVtable.surfaceExists = ctrSurfaceExists;
-    ctrVtable.setRenderTarget = ctrSetRenderTarget;
-    ctrVtable.ensureApplicationSurface = ctrEnsureApplicationSurface;
+    ctrVtable.setRenderTarget = KGL_CHK(ctrSetRenderTarget);
+    ctrVtable.ensureApplicationSurface = KGL_CHK(ctrEnsureApplicationSurface);
     ctrVtable.getSurfaceWidth = ctrGetSurfaceWidth;
     ctrVtable.getSurfaceHeight = ctrGetSurfaceHeight;
-    ctrVtable.drawSurface = ctrDrawSurface;
-    ctrVtable.drawSurfaceColor = ctrDrawSurfaceColor;
-    ctrVtable.drawSurfaceTiled = ctrDrawSurfaceTiled;
-    ctrVtable.surfaceResize = ctrSurfaceResize;
-    ctrVtable.surfaceFree = ctrSurfaceFree;
-    ctrVtable.surfaceCopy = ctrSurfaceCopy;
-    ctrVtable.surfaceGetPixels = ctrSurfaceGetPixels;
-    ctrVtable.surfaceSetPixels = ctrSurfaceSetPixels;
+    ctrVtable.drawSurface = KGL_CHK(ctrDrawSurface);
+    ctrVtable.drawSurfaceColor = KGL_CHK(ctrDrawSurfaceColor);
+    ctrVtable.drawSurfaceTiled = KGL_CHK(ctrDrawSurfaceTiled);
+    ctrVtable.surfaceResize = KGL_CHK(ctrSurfaceResize);
+    ctrVtable.surfaceFree = KGL_CHK(ctrSurfaceFree);
+    ctrVtable.surfaceCopy = KGL_CHK(ctrSurfaceCopy);
+    ctrVtable.surfaceGetPixels = KGL_CHK(ctrSurfaceGetPixels);
+    ctrVtable.surfaceSetPixels = KGL_CHK(ctrSurfaceSetPixels);
     ctrVtable.surfaceUploadPixels = nullptr;
     ctrVtable.drawTiledPart = nullptr;
-    ctrVtable.gpuSetShader = ctrGpuSetShader;
-    ctrVtable.gpuResetShader = ctrGpuResetShader;
+    ctrVtable.gpuSetShader = KGL_CHK(ctrGpuSetShader);
+    ctrVtable.gpuResetShader = KGL_CHK(ctrGpuResetShader);
     ctrVtable.shaderGetUniform = ctrShaderGetUniform;
     ctrVtable.shaderGetSamplerIndex = ctrShaderGetSamplerIndex;
-    ctrVtable.shaderSetUniformF = ctrShaderSetUniformF;
-    ctrVtable.shaderSetUniformFArray = ctrShaderSetUniformFArray;
-    ctrVtable.shaderSetUniformI = ctrShaderSetUniformI;
+    ctrVtable.shaderSetUniformF = KGL_CHK(ctrShaderSetUniformF);
+    ctrVtable.shaderSetUniformFArray = KGL_CHK(ctrShaderSetUniformFArray);
+    ctrVtable.shaderSetUniformI = KGL_CHK(ctrShaderSetUniformI);
     ctrVtable.spriteGetTexture = ctrSpriteGetTexture;
     ctrVtable.surfaceGetTexture = ctrSurfaceGetTexture;
-    ctrVtable.textureGetTexelWidth = ctrTextureGetTexelWidth;
-    ctrVtable.textureGetTexelHeight = ctrTextureGetTexelHeight;
-    ctrVtable.textureGetUVs = ctrTextureGetUVs;
-    ctrVtable.textureSetStage = ctrTextureSetStage;
+    ctrVtable.textureGetTexelWidth = KGL_CHK(ctrTextureGetTexelWidth);
+    ctrVtable.textureGetTexelHeight = KGL_CHK(ctrTextureGetTexelHeight);
+    ctrVtable.textureGetUVs = KGL_CHK(ctrTextureGetUVs);
+    ctrVtable.textureSetStage = KGL_CHK(ctrTextureSetStage);
     ctrVtable.shaderIsCompiled = ctrShaderIsCompiled;
     ctrVtable.shadersSupported = ctrShadersSupported;
-    ctrVtable.setMatrix = ctrSetMatrix;
+    ctrVtable.setMatrix = KGL_CHK(ctrSetMatrix);
 
     return base;
 }
@@ -22517,7 +22524,7 @@ bool CtrRenderer_selfTest(Renderer* renderer, const char* name) {
 // through E5X_OPAQUE, so GCC can't inline it here: the small ones (ctrDrawLine, ctrDrawText, ...) keep their
 // own bodies at main's addresses. The prototypes come from E5X_DECLARE (ctr_renderer.h), so no line above the warm
 // functions moves.
-#define E5X_OPAQUE(fn) ({ __typeof__(&fn) opaque_ = fn; __asm__("" : "+r"(opaque_)); opaque_; })
+#define E5X_OPAQUE(fn) ({ __typeof__(&fn) opaque_ = KGL_CHK(fn); __asm__("" : "+r"(opaque_)); opaque_; })
 static bool E5X_LATE e5xNoop(const Renderer* renderer) {
     const CtrRenderer* r = (const CtrRenderer*) renderer;
     return r->shaderFx == SHADER_FX_NONE && transparentDrawIsNoop(r);
@@ -22594,10 +22601,20 @@ static void E5X_LATE e5xDrawTextColor(Renderer* renderer, const char* text, floa
     E5X_OPAQUE(ctrDrawTextColor)(renderer, text, x, y, xscale, yscale, angleDeg, c1, c2, c3, c4, alpha, lineSeparation);
 }
 
+// Knight GPU d2 (DELTARUNE New only): tiled draws go through kgDrawSpriteTiled (this file's end).
+#if defined(ENABLE_WAD17) && defined(CTRPORT_KNIGHTGPU_TILED_ON)
+static void __attribute__((noinline, section(".text.knightgpu_tiled_late")))
+kgDrawSpriteTiled(Renderer* renderer, int32_t tpagIndex, float originX, float originY, float x, float y, float xscale, float yscale, bool tileX,
+                  bool tileY, float roomW, float roomH, uint32_t color, float alpha);
+#define KG_TILED_DRAW kgDrawSpriteTiled
+#else
+#define KG_TILED_DRAW ctrDrawSpriteTiled
+#endif
+#line 21157
 static void E5X_LATE e5xDrawSpriteTiled(Renderer* renderer, int32_t tpagIndex, float originX, float originY, float x, float y, float xscale,
                                         float yscale, bool tileX, bool tileY, float roomW, float roomH, uint32_t color, float alpha) {
     if (makeColor(0, alpha).a == 0 && e5xNoop(renderer)) return;
-    E5X_OPAQUE(ctrDrawSpriteTiled)(renderer, tpagIndex, originX, originY, x, y, xscale, yscale, tileX, tileY, roomW, roomH, color, alpha);
+    E5X_OPAQUE(KG_TILED_DRAW)(renderer, tpagIndex, originX, originY, x, y, xscale, yscale, tileX, tileY, roomW, roomH, color, alpha);
 }
 
 // ===[ The game on either screen: the entry points (screens-port, late) ]===
@@ -26380,17 +26397,26 @@ void Utold_continueBlack(Renderer* renderer) {
 // memory frees nothing (it is the lender's): libctru's vramFree ignores an address no block starts at. Deferred frees are done at the
 // start of each frame (beginFrame), before slots are filled, and the GPU runs what used a slot's memory before them in
 // order. 640x480 gives two slots.
+//
+// L-E: a third. 640x480's full texture is 1952 KB (1024 x 488 rows), and three slots past the half view end 32 KB past
+// it (4 x 496 KB). VRAM is first fit from a bank's bottom, so the gap right after the lender's block (bank B's start) is
+// often free: in ch3_roar 128 KB stay free there, while bank A's 585 KB free are in two pieces too small for a 496 KB
+// afterimage. When a hot spilled surface finds both slots taken, those 32 KB are allocated (kgReserve), kept only if
+// they land right at the lender's end, and the third slot is lent. The block goes with the lending (kgGiveBack), freed
+// at the next frame's begin and held until the GPU is done. Nothing else is ever in it: the allocator gave it for this.
 // Nothing drawn changes: the same pixels are drawn and sampled, from VRAM instead of linear memory. Built at -Os; its
 // log lines are in profile builds only.
 #if defined(ENABLE_WAD17) && defined(CTRPORT_KNIGHTGPU_LENDER)
-// Two slots: 640x480's half view is 496 KB of the full texture's 1952.
-#define KG_SLOTS 2u
+// Two slots: 640x480's half view is 496 KB of the full texture's 1952. A third (L-E) reaches past it.
+#define KG_SLOTS 3u
 #define KG_LATE __attribute__((optimize("Os"), section(".text.knightgpu_late")))
 #ifdef CTRPORT_RENDER_TIMING
 static const char kgLendText[] __attribute__((section(".rodata.knightgpu_late"))) =
     "Renderer: lending %u slots of the application surface's full-resolution texture\n";
 static const char kgBackText[] __attribute__((section(".rodata.knightgpu_late"))) =
     "Renderer: lent texture memory given back (%u moved in so far)\n";
+static const char kgReserveText[] __attribute__((section(".rodata.knightgpu_late"))) =
+    "Renderer: lending a third slot, %u KB of VRAM taken past the application surface's texture\n";
 static const char kgSwapText[] __attribute__((section(".rodata.knightgpu_late"))) =
     "Renderer: idle surface %d moved to linear memory, its VRAM to spilled surface %d\n";
 #define KG_LOG(...) logInfo(__VA_ARGS__)
@@ -26415,6 +26441,10 @@ static struct {
     int32_t keepId[KG_SLOTS];                  // that surface (while keep[i].data is set)
     C3D_Tex zombie;                            // the lender's texture, deleted in a frame: freed once given back
     bool zombieFree;                           // given back: zombie goes at the next frame's begin
+    uint32_t slots;                            // slots lent now: 2, or KG_SLOTS with the reserve (L-E)
+    void* reserve;                             // the VRAM block right after the lender's that the third slot reaches into
+    void* reserveGone;                         // a reserve given back, freed at the next frame's begin
+    uint32_t reserveFrame;                     // kg.r's frame of the last try
 } kg __attribute__((section(".bss.knightgpu_late")));
 
 void __real_CtrRenderer_beginFrame(Renderer* renderer);
@@ -26439,8 +26469,8 @@ static bool KG_LATE kgBoundInSlot(CtrRenderer* r) {
     int32_t k = r->surfaces[r->spillBound].scratch;
     if (0 > k || k >= arrlen(r->scratches)) return false;
     int32_t root = 0 <= r->scratches[k].base ? r->scratches[k].base : k;
-    return kgIn(r->scratches[k].tex.data, kg.base + kg.slotSize, KG_SLOTS * kg.slotSize) ||
-           kgIn(r->scratches[root].tex.data, kg.base + kg.slotSize, KG_SLOTS * kg.slotSize);
+    return kgIn(r->scratches[k].tex.data, kg.base + kg.slotSize, kg.slots * kg.slotSize) ||
+           kgIn(r->scratches[root].tex.data, kg.base + kg.slotSize, kg.slots * kg.slotSize);
 }
 
 // Everything in a slot back to linear memory; nothing is lent after. It runs in a frame (KnightGpu_beginFrame after the
@@ -26490,7 +26520,7 @@ static void KG_LATE kgGiveBack(CtrRenderer* r) {
         // (deferSurfaceFree, which leaves it used): ctrDestroy's, at a chapter's end, or a resize's. Moved out, its new
         // linear texture would be lost (arglcreview's review: up to 496 KB a slot at every chapter change).
         if (!s->used || s->spilled || s->recorded || s->parked != nullptr || s->target == nullptr ||
-            !kgIn(s->tex.data, slots, KG_SLOTS * kg.slotSize)) continue;
+            !kgIn(s->tex.data, slots, kg.slots * kg.slotSize)) continue;
         if (r->boundTarget == s->target) {
             r->boundTarget = nullptr;
             r->boundSurface = -1;
@@ -26533,6 +26563,10 @@ static void KG_LATE kgGiveBack(CtrRenderer* r) {
         if (kg.keep[j].data != nullptr) queueDeferredFree(r, (CtrDeferredFree) { .tex = kg.keep[j] });
         kg.keep[j].data = nullptr;
     }
+    // L-E's block: what is queued may still use the third slot, so it goes at the next frame's begin.
+    if (kg.reserve != nullptr) kg.reserveGone = kg.reserve;
+    kg.reserve = nullptr;
+    kg.slots = 2u;
     KG_LOG(kgBackText, (unsigned) kg.moved);
 }
 
@@ -26639,7 +26673,7 @@ static void KG_LATE kgSwap(CtrRenderer* r, int32_t id) {
             v->lazy != nullptr || v->lazyRefs != 0 || v->skipRec != nullptr || v->skipRealRefs != 0 ||
             (int32_t) i == appId || (int32_t) i == r->boundSurface || v->tex.width != s->tex.width ||
             v->tex.height != s->tex.height || v->tex.size != s->tex.size || SCRATCH_IDLE_FRAMES > r->frame - v->touchedFrame ||
-            kgIn(v->tex.data, kg.base, (KG_SLOTS + 1u) * kg.slotSize)) continue;
+            kgIn(v->tex.data, kg.base, (kg.slots + 1u) * kg.slotSize)) continue;
         C3D_Tex lin;
         if (!initLinearTexture(r, &lin, v->tex.width, v->tex.height, (int32_t) (v->tex.size / ((uint32_t) v->tex.width * 4u)))) return;
         kgSplit(r);
@@ -26670,10 +26704,10 @@ static void KG_LATE kgSurfaceFree(Renderer* renderer, int32_t id) {
     if (kg.base != nullptr && 0 <= id && r->surfaceCount > (uint32_t) id) {
         CtrSurface* s = &r->surfaces[id];
         if (s->used && !s->spilled && !s->recorded && !s->windowed && s->parked == nullptr && s->target != nullptr) {
-            slot = kgIn(s->tex.data, kg.base + kg.slotSize, KG_SLOTS * kg.slotSize);
+            slot = kgIn(s->tex.data, kg.base + kg.slotSize, kg.slots * kg.slotSize);
             // L-D: or a VRAM surface of its own of a slot's size (not the lender's memory), while none is kept.
             if (slot || (kg.spare.target == nullptr && ((s->tex.size + 127u) & ~127u) == kg.slotSize &&
-                         !kgIn(s->tex.data, kg.base, (KG_SLOTS + 1u) * kg.slotSize))) {
+                         !kgIn(s->tex.data, kg.base, (kg.slots + 1u) * kg.slotSize))) {
                 target = s->target;
             }
         }
@@ -26738,6 +26772,24 @@ void __wrap_C3D_FrameBufClear(C3D_FrameBuf* fb, C3D_ClearBits clearBits, u32 cle
     __real_C3D_FrameBufClear(fb, clearBits, clearColor, clearDepth);
 }
 
+// L-E: the VRAM from the lender's block's end to the third slot's end, kept only if the allocator gives exactly that (it
+// is first fit from the bank's bottom, so a lower gap that fits gets it instead: it goes back, and two slots stay).
+#define KG_RESERVE_FRAMES 30u
+static void KG_LATE kgReserve(CtrRenderer* r) {
+    kg.reserveFrame = r->frame;
+    uintptr_t base = (uintptr_t) kg.base, end = base + (KG_SLOTS + 1u) * kg.slotSize, blockEnd = base + vramGetSize(kg.base);
+    uintptr_t bank = (base - (uintptr_t) OS_VRAM_VADDR) / VRAM_BANK_BYTES;
+    if (1u < bank || blockEnd >= end || end > vramBankStart((int32_t) bank) + VRAM_BANK_BYTES) return;
+    void* p = vramAllocAt(end - blockEnd, bank == 0 ? VRAM_ALLOC_A : VRAM_ALLOC_B);
+    if ((uintptr_t) p != blockEnd) {
+        if (p != nullptr) vramFree(p);
+        return;
+    }
+    kg.reserve = p;
+    kg.slots = KG_SLOTS;
+    KG_LOG(kgReserveText, (unsigned) ((end - blockEnd) / 1024u));
+}
+
 // Knight GPU-1's beginFrame wrapper (z_knightnew_history.c) calls this in place of the real one.
 void KnightGpu_beginFrame(Renderer* renderer) KG_LATE;
 void KnightGpu_beginFrame(Renderer* renderer) {
@@ -26758,6 +26810,9 @@ void KnightGpu_beginFrame(Renderer* renderer) {
                 if (kg.keep[j].data != nullptr) C3D_TexDelete(&kg.keep[j]);
                 kg.keep[j].data = nullptr;
             }
+            if (kg.reserve != nullptr) kg.reserveGone = kg.reserve;
+            kg.reserve = nullptr;
+            kg.slots = 2u;
         }
     }
     if (kg.zombieFree) {
@@ -26765,6 +26820,11 @@ void KnightGpu_beginFrame(Renderer* renderer) {
         __real_C3D_TexDelete(&kg.zombie);
         kg.zombie.data = nullptr;
         kg.zombieFree = false;
+    }
+    if (kg.reserveGone != nullptr) {
+        // Outside the frame; held until the GPU has run what used the third slot.
+        vramFree(kg.reserveGone);
+        kg.reserveGone = nullptr;
     }
     kg.r = r;
     kg.frame = r->frame;
@@ -26798,22 +26858,387 @@ void KnightGpu_beginFrame(Renderer* renderer) {
     }
     if (kg.base == nullptr) {
         uint32_t slot = ((uint32_t) app->tex.size + 127u) & ~127u;
-        if ((KG_SLOTS + 1u) * slot > (uint32_t) r->appView.tex.size) return;
+        if (3u * slot > (uint32_t) r->appView.tex.size) return;
         kg.base = (uint8_t*) app->tex.data;
         kg.slotSize = slot;
-        KG_LOG(kgLendText, (unsigned) KG_SLOTS);
+        kg.slots = 2u;
+        KG_LOG(kgLendText, (unsigned) kg.slots);
     }
     kgKeepCheck(r);
-    for (uint32_t i = 1; KG_SLOTS >= i; i++) {
+    for (uint32_t i = 1; kg.slots >= i; i++) {
         uint8_t* at = kg.base + i * kg.slotSize;
         if (!kgSlotFree(r, at)) continue;
         int32_t id = kgCandidate(r);
         if (0 > id || !kgPromote(r, id, at)) break;
     }
+    // L-E: both slots taken and another hot one spilled (a try every KG_RESERVE_FRAMES at most).
+    if (KG_SLOTS > kg.slots && kg.reserveGone == nullptr && r->frame - kg.reserveFrame >= KG_RESERVE_FRAMES &&
+        !kgSlotFree(r, kg.base + kg.slotSize) && !kgSlotFree(r, kg.base + 2u * kg.slotSize) && 0 <= kgCandidate(r)) {
+        kgReserve(r);
+        uint8_t* at = kg.base + KG_SLOTS * kg.slotSize;
+        int32_t id = KG_SLOTS == kg.slots && kgSlotFree(r, at) ? kgCandidate(r) : -1;
+        if (0 <= id) kgPromote(r, id, at);
+    }
     // One trade a frame with an idle VRAM surface (L-B), while another hot one stays spilled.
     int32_t id = kgCandidate(r);
     if (0 <= id) kgSwap(r, id);
 }
+
+// A       knightgpu, DELTARUNE New only): bank compaction. In the Knight's scenes bank A keeps 585 KB free in two
+// pieces, 176 KB below surface s1 (128 KB) and 409 KB above s3 (496 KB), too small apiece for a 640x480 afterimage
+// (496 KB), so all but the ones in the lent slots stay in linear memory and pay a load and a store copy (about 1.2 ms of
+// GPU) every frame       knightgpu's GPU census, 10-31). When a hot spilled surface (kgCandidate's) finds no free gap of
+// its size, the surfaces of one stretch of a bank (between blocks that stay) slide down to its bottom, which leaves the
+// stretch's free bytes in one gap at its top, and the spilled surface moves into that gap (kgMoveIn). Each moved texture
+// is copied by the GPU queue, after everything queued before (what reads or writes its old place) and before anything
+// queued after: in pieces no bigger than how far it moves, from the end it moves toward, so no piece writes over bytes
+// not yet copied (memmove order). Its render target keeps its place in memory and only its buffer address changes;
+// nothing else points into a surface that moves (kgcMovable). The same bytes, so nothing drawn changes. VRAM is given
+// back and taken again at once (CtrMemory_vramMoveTo, ctr_memory.c's end), never waiting for the GPU. A try that finds
+// nothing to do waits KGC_PAUSE_FRAMES. In its own late section after T1's, so no code before it moves; the frame's
+// begin reaches it through GPU-1's wrapper (z_knightnew_history.c). Its log lines are in profile builds only.
+#ifdef CTRPORT_KNIGHTGPU_COMPACT_ON
+#define KGC_LATE __attribute__((noinline, optimize("Os"), section(".text.knightgpu_compact_late")))
+#define KGC_BLOCKS 160
+#define KGC_MOVES 16
+#define KGC_PAUSE_FRAMES 30u
+#define KGC_CHUNKS_MAX 48u // GX copies one compaction may queue
+#ifdef CTRPORT_RENDER_TIMING
+static const char kgcCompactText[] __attribute__((section(".rodata.knightgpu_compact_late"))) =
+    "Renderer: VRAM compacted in bank %c: %d surfaces (%u KB) moved, %u GX copies, a %u KB gap for spilled surface %d\n";
+static const char kgcPromoteText[] __attribute__((section(".rodata.knightgpu_compact_late"))) =
+    "Renderer: spilled surface %d moved into free VRAM at bank %c +%u KB\n";
+#define KGC_LOG(...)                                \
+    do {                                            \
+        if (64u > kgc.logged) {                     \
+            kgc.logged++;                           \
+            logInfo(__VA_ARGS__);                   \
+        }                                           \
+    } while (0)
+#else
+#define KGC_LOG(...) ((void) 0)
+#endif
+int32_t CtrMemory_vramTaken(CtrVramBlock* out, int32_t max);
+void* CtrMemory_vramMoveTo(void* old, uintptr_t to);
+void* CtrMemory_vramAllocNow(size_t size);
+// ctr_vram_touch.c's vramTouch: Azahar only, one word per 4 KB rewritten so the emulator drops dead surfaces there.
+void* CtrVramTouch_touch(void* mem, size_t bytes);
+typedef struct {
+    int32_t id;
+    uintptr_t to;
+} KgcMove;
+static struct {
+    uint32_t tryFrame;      // kg.r's frame of the last try that moved nothing
+    const CtrRenderer* r;   // the renderer tryFrame counts in
+    uint32_t logged;
+    uint32_t chunks;        // GX copies of the plan
+    int32_t count;          // its moves
+    uint32_t bytes;         // their bytes
+    CtrVramBlock blocks[KGC_BLOCKS];
+    KgcMove moves[KGC_MOVES];
+#ifdef CTRPORT_KNIGHTGPU_COMPACT_FORCE_ON
+    uint32_t forced;
+#endif
+} kgc __attribute__((section(".bss.knightgpu_compact_late")));
+
+// The surface whose texture is VRAM block [addr, addr + size), if it may move; -1 if it may not or none is (screens,
+// scratches, the shrink's strip, tiles' copies, the lender, a spare). As relocatableAt, and also: nothing else's texture
+// lies in the block (a scratch over its VRAM, a second surface), and no draw is held that samples it (lazy draws, frame
+// skip's recordings).
+static int32_t KGC_LATE kgcMovable(const CtrRenderer* r, uintptr_t addr, uint32_t size) {
+    int32_t appId = r->base.runner != nullptr ? r->base.runner->applicationSurfaceId : -1;
+    int32_t found = -1;
+    for (uint32_t i = 0; r->surfaceCount > i; i++) {
+        const CtrSurface* s = &r->surfaces[i];
+        uintptr_t d = (uintptr_t) s->tex.data;
+        if (!s->used || addr > d || d >= addr + size) continue;
+        if (0 <= found || d != addr || s->spilled || s->recorded || s->windowed || s->target == nullptr || s->parked != nullptr ||
+            s->lazy != nullptr || s->lazyRefs != 0 || s->skipRec != nullptr || s->skipRealRefs != 0 || (int32_t) i == appId ||
+            (int32_t) i == r->boundSurface || s->tex.size > size || (uintptr_t) s->target->frameBuf.colorBuf != addr) {
+            return -1;
+        }
+        found = (int32_t) i;
+    }
+    if (0 > found) return -1;
+    for (ptrdiff_t k = 0; arrlen(r->scratches) > k; k++) {
+        uintptr_t d = (uintptr_t) r->scratches[k].tex.data;
+        if (r->scratches[k].target != nullptr && d >= addr && addr + size > d) return -1;
+    }
+    for (ptrdiff_t k = 0; arrlen(r->surfaceSprites) > k; k++) {
+        if (r->surfaceSprites[k] != nullptr && r->surfaceSprites[k]->surfaceId == found) return -1;
+    }
+    return found;
+}
+
+// GX copies to move `size` bytes by `delta`: one if the two places don't overlap.
+static uint32_t KGC_LATE kgcChunks(uint32_t size, uint32_t delta) {
+    return delta >= size ? 1u : (size + delta - 1u) / delta;
+}
+
+// The largest free gap in VRAM (blocks sorted, those held back for the GPU among them).
+static uint32_t KGC_LATE kgcLargestGap(int32_t n) {
+    uint32_t best = 0;
+    for (int32_t bank = 0; 2 > bank; bank++) {
+        uintptr_t lo = vramBankStart(bank), hi = lo + VRAM_BANK_BYTES, at = lo;
+        for (int32_t i = 0; n >= i && hi > at; i++) {
+            uintptr_t a = n > i ? kgc.blocks[i].addr : hi, e = n > i ? a + kgc.blocks[i].size : hi;
+            if (a > hi) a = hi;
+            uintptr_t start = vramAlignUp(at);
+            if (a > start && a - start > best) best = (uint32_t) (a - start);
+            if (e > at) at = e;
+        }
+    }
+    return best;
+}
+
+// Into kgc.moves: the slide of the stretch whose free bytes, gathered at its top, hold `need`, and whose moves copy
+// least; with `need` 0 (the forced control), every stretch's slide. kgc.count moves (0: none).
+static void KGC_LATE kgcPlan(const CtrRenderer* r, int32_t n, uint32_t need) {
+    KgcMove moves[KGC_MOVES];
+    uint32_t best = UINT32_MAX;
+    kgc.count = 0;
+    kgc.chunks = 0;
+    kgc.bytes = 0;
+    for (int32_t bank = 0; 2 > bank; bank++) {
+        uintptr_t lo = vramBankStart(bank), hi = lo + VRAM_BANK_BYTES, pos = lo;
+        int32_t count = 0;
+        uint32_t bytes = 0, chunks = 0;
+        bool ok = true;
+        for (int32_t i = 0; n >= i; i++) {
+            bool end = n == i || kgc.blocks[i].addr >= hi;
+            if (!end && lo > kgc.blocks[i].addr) {
+                // From the bank below; one reaching into this bank stays.
+                if (kgc.blocks[i].addr + kgc.blocks[i].size > pos) pos = kgc.blocks[i].addr + kgc.blocks[i].size;
+                continue;
+            }
+            int32_t id = end ? -1 : kgcMovable(r, kgc.blocks[i].addr, kgc.blocks[i].size);
+            if (0 > id) {
+                // A block that stays (or the bank's end) ends the stretch.
+                uintptr_t top = end ? hi : kgc.blocks[i].addr, start = vramAlignUp(pos);
+                if (0 == need && ok && 0 < count && KGC_MOVES >= kgc.count + count && KGC_CHUNKS_MAX >= kgc.chunks + chunks) {
+                    memcpy(&kgc.moves[kgc.count], moves, sizeof(moves[0]) * (size_t) count);
+                    kgc.count += count;
+                    kgc.chunks += chunks;
+                    kgc.bytes += bytes;
+                } else if (0 != need && ok && 0 < count && top > start && top - start >= need && best > bytes) {
+                    memcpy(kgc.moves, moves, sizeof(moves[0]) * (size_t) count);
+                    best = bytes;
+                    kgc.count = count;
+                    kgc.chunks = chunks;
+                    kgc.bytes = bytes;
+                }
+                if (end) break;
+                pos = kgc.blocks[i].addr + kgc.blocks[i].size;
+                count = 0;
+                bytes = 0;
+                chunks = 0;
+                ok = true;
+                continue;
+            }
+            uintptr_t to = vramAlignUp(pos);
+            if (to != kgc.blocks[i].addr) {
+                uint32_t size = r->surfaces[id].tex.size;
+                chunks += r->surfaces[id].needsClear ? 0u : kgcChunks(size, (uint32_t) (kgc.blocks[i].addr - to));
+                ok = ok && KGC_MOVES > count && KGC_CHUNKS_MAX >= chunks;
+                if (KGC_MOVES > count) moves[count++] = (KgcMove) { id, to };
+                bytes += size;
+            }
+            pos = to + kgc.blocks[i].size;
+        }
+    }
+}
+
+// `size` bytes from `from` to `to` by the GPU queue, in memmove order: pieces no bigger than the distance, from the
+// end it moves toward.
+static void KGC_LATE kgcCopy(CtrRenderer* r, uint8_t* from, uint8_t* to, uint32_t size) {
+    bool down = from > to;
+    uint32_t delta = (uint32_t) (down ? from - to : to - from), chunk = delta >= size ? size : delta;
+    for (uint32_t done = 0; size > done;) {
+        uint32_t c = size - done < chunk ? size - done : chunk;
+        uint32_t at = down ? done : size - done - c;
+        reserveGxCommands(r, 1);
+        GX_TextureCopy((u32*) (from + at), 0, (u32*) (to + at), 0, c, GX_TRANSFER_RAW_COPY(1));
+        done += c;
+    }
+}
+
+// The moves planned, in order (each one's place is free once those before it are made). The caller has split the
+// frame. False at the first that can't be made (it and those after stay where they are).
+static bool KGC_LATE kgcRun(CtrRenderer* r) {
+    for (int32_t m = 0; kgc.count > m; m++) {
+        CtrSurface* s = &r->surfaces[kgc.moves[m].id];
+        uint8_t* old = (uint8_t*) s->tex.data;
+        uint8_t* p = (uint8_t*) CtrMemory_vramMoveTo(old, kgc.moves[m].to);
+        if (p == nullptr) return false;
+        if (p == old) continue;
+        // As every new VRAM block is (docs/3ds-hardware.md, "In Azahar, a GX copy out of reused VRAM can return a freed
+        // surface's pixels"). Old's own bytes there read back as they are.
+        CtrVramTouch_touch(p, s->tex.size);
+        // Undefined until its first bind clears it: nothing to copy.
+        if (!s->needsClear) kgcCopy(r, old, p, s->tex.size);
+        s->tex.data = p;
+        s->target->frameBuf.colorBuf = p;
+    }
+    return true;
+}
+
+// Spilled surface id into free VRAM of its texture's size, if there is a gap that holds it.
+static bool KGC_LATE kgcPromote(CtrRenderer* r, int32_t id) {
+    C3D_Tex tex = r->surfaces[id].tex;
+    tex.data = CtrVramTouch_touch(CtrMemory_vramAllocNow(tex.size), tex.size);
+    if (tex.data == nullptr) return false;
+    C3D_RenderTarget* target = C3D_RenderTargetCreateFromTex(&tex, GPU_TEXFACE_2D, 0, -1);
+    if (target == nullptr) {
+        vramFree(tex.data);
+        return false;
+    }
+    target->frameBuf.height = (u16) (tex.size / ((uint32_t) tex.width * 4u));
+    kgSplit(r);
+    kgMoveIn(r, id, &tex, target, nullptr);
+    KGC_LOG(kgcPromoteText, (int) id, 'A' + (int) (((uintptr_t) tex.data - (uintptr_t) OS_VRAM_VADDR) / VRAM_BANK_BYTES),
+            (unsigned) ((((uintptr_t) tex.data - (uintptr_t) OS_VRAM_VADDR) % VRAM_BANK_BYTES) / 1024u));
+    return true;
+}
+
+static void KGC_LATE kgCompact(CtrRenderer* r) {
+    if (kgc.r == r && KGC_PAUSE_FRAMES > r->frame - kgc.tryFrame) return;
+    int32_t id = kgCandidate(r);
+    if (0 > id) return;
+    uint32_t need = (uint32_t) vramAlignUp(r->surfaces[id].tex.size);
+    int32_t n = CtrMemory_vramTaken(kgc.blocks, KGC_BLOCKS);
+    bool fits = 0 <= n && kgcLargestGap(n) >= need;
+    if (0 <= n && !fits) {
+        kgcPlan(r, n, need);
+        if (0 < kgc.count) {
+            kgSplit(r);
+            fits = kgcRun(r);
+            KGC_LOG(kgcCompactText, 'A' + (int) ((kgc.moves[0].to - (uintptr_t) OS_VRAM_VADDR) / VRAM_BANK_BYTES),
+                    (int) kgc.count, (unsigned) (kgc.bytes / 1024u), (unsigned) kgc.chunks, (unsigned) (need / 1024u), (int) id);
+        }
+    }
+    if (fits && kgcPromote(r, id)) return; // another may follow next frame
+    kgc.r = r;
+    kgc.tryFrame = r->frame;
+}
+
+#ifdef CTRPORT_KNIGHTGPU_COMPACT_FORCE_ON
+// The forced control (build.sh knightgpu-compact=force; tests only): every KGC_FORCE_FRAMES frames, in turn, one
+// movable surface moves up to the top of the highest gap that holds it (its own bytes counted free, so the two places
+// may overlap: copies from the top down), or every stretch of both banks slides down (copies from the bottom up). Any
+// byte a move got wrong shows in the pictures.
+#define KGC_FORCE_FRAMES 4u
+#ifdef CTRPORT_RENDER_TIMING
+// The forced control's byte check (profile builds only): before the moves, with the GPU idle, a CPU copy of each moved
+// surface; at the next frame's start, with the GPU idle again, its new place compared with it, unless the surface was
+// drawn or cleared since (its version moved on). Every BYTES DIFFER is logged, with a running count.
+typedef struct {
+    int32_t id;
+    uint32_t version, size;
+    void* copy;
+} KgcCheck;
+static struct {
+    KgcCheck checks[KGC_MOVES];
+    int32_t count;
+    uint32_t same, differ, drawn, logged;
+} kgcCheck __attribute__((section(".bss.knightgpu_compact_late")));
+
+static void KGC_LATE kgcCheckSave(CtrRenderer* r) {
+    CtrGpu_waitIdle();
+    kgcCheck.count = 0;
+    for (int32_t m = 0; kgc.count > m; m++) {
+        CtrSurface* s = &r->surfaces[kgc.moves[m].id];
+        if (s->needsClear) continue;
+        void* copy = malloc(s->tex.size);
+        if (copy == nullptr) continue;
+        GSPGPU_InvalidateDataCache(s->tex.data, s->tex.size);
+        memcpy(copy, s->tex.data, s->tex.size);
+        kgcCheck.checks[kgcCheck.count++] = (KgcCheck) { kgc.moves[m].id, s->version, s->tex.size, copy };
+    }
+}
+
+static void KGC_LATE kgcCheckMoves(CtrRenderer* r) {
+    if (0 == kgcCheck.count) return;
+    CtrGpu_waitIdle();
+    for (int32_t k = 0; kgcCheck.count > k; k++) {
+        KgcCheck* c = &kgcCheck.checks[k];
+        CtrSurface* s = &r->surfaces[c->id];
+        if (!s->used || s->spilled || s->recorded || s->version != c->version || s->tex.size != c->size) {
+            kgcCheck.drawn++;
+        } else {
+            GSPGPU_InvalidateDataCache(s->tex.data, c->size);
+            bool same = memcmp(s->tex.data, c->copy, c->size) == 0;
+            if (same) kgcCheck.same++;
+            else kgcCheck.differ++;
+            if (!same || 32u > kgcCheck.logged) {
+                kgcCheck.logged++;
+                logInfo("Renderer: forced move of surface %d (%u KB) frame %u: %s (checked %u the same, %u BYTES DIFFER, %u drawn since)\n",
+                        (int) c->id, (unsigned) (c->size / 1024u), (unsigned) r->frame, same ? "the same bytes" : "BYTES DIFFER",
+                        (unsigned) kgcCheck.same, (unsigned) kgcCheck.differ, (unsigned) kgcCheck.drawn);
+            }
+        }
+        free(c->copy);
+    }
+    kgcCheck.count = 0;
+}
+#endif
+static void KGC_LATE kgcForce(CtrRenderer* r) {
+#ifdef CTRPORT_RENDER_TIMING
+    kgcCheckMoves(r);
+#endif
+    if (0 != r->frame % KGC_FORCE_FRAMES) return;
+    int32_t n = CtrMemory_vramTaken(kgc.blocks, KGC_BLOCKS);
+    if (0 > n) return;
+    kgc.forced++;
+    kgc.count = 0;
+    if (kgc.forced & 1u) {
+        for (int32_t i = 0; n > i && 0 == kgc.count; i++) {
+            int32_t id = kgcMovable(r, kgc.blocks[i].addr, kgc.blocks[i].size);
+            if (0 > id) continue;
+            uint32_t size = kgc.blocks[i].size;
+            uintptr_t to = 0;
+            for (int32_t bank = 0; 2 > bank; bank++) {
+                uintptr_t lo = vramBankStart(bank), hi = lo + VRAM_BANK_BYTES, at = lo;
+                for (int32_t j = 0; n >= j && hi > at; j++) {
+                    if (j == i) continue;
+                    uintptr_t a = n > j ? kgc.blocks[j].addr : hi, e = n > j ? a + kgc.blocks[j].size : hi;
+                    if (a > hi) a = hi;
+                    if (a >= vramAlignUp(at) + size && ((a - size) & ~(VRAM_ALIGN - 1)) > to) to = (a - size) & ~(VRAM_ALIGN - 1);
+                    if (e > at) at = e;
+                }
+            }
+            uint32_t delta = (uint32_t) (to > kgc.blocks[i].addr ? to - kgc.blocks[i].addr : kgc.blocks[i].addr - to);
+            if (0 == to || 0 == delta || KGC_CHUNKS_MAX < kgcChunks(r->surfaces[id].tex.size, delta)) continue;
+            kgc.moves[0] = (KgcMove) { id, to };
+            kgc.count = 1;
+            kgc.bytes = r->surfaces[id].tex.size;
+            kgc.chunks = r->surfaces[id].needsClear ? 0u : kgcChunks(r->surfaces[id].tex.size, delta);
+        }
+    } else {
+        kgcPlan(r, n, 0);
+    }
+    if (0 == kgc.count) return;
+#ifdef CTRPORT_RENDER_TIMING
+    kgcCheckSave(r);
+#endif
+    kgSplit(r);
+    kgcRun(r);
+    KGC_LOG(kgcCompactText, 'F', (int) kgc.count, (unsigned) (kgc.bytes / 1024u), (unsigned) kgc.chunks, 0u, -1);
+}
+#endif
+
+// GPU-1's beginFrame wrapper (z_knightnew_history.c) calls this in place of KnightGpu_beginFrame: the same, then the
+// compaction, while something is lent (kgCandidate's sizes are the slots').
+void KnightGpu_compactBeginFrame(Renderer* renderer) KGC_LATE;
+void KnightGpu_compactBeginFrame(Renderer* renderer) {
+    KnightGpu_beginFrame(renderer);
+    CtrRenderer* r = (CtrRenderer*) renderer;
+    if (!r->inFrame || gpuCmdBuf == nullptr) return;
+#ifdef CTRPORT_KNIGHTGPU_COMPACT_FORCE_ON
+    kgcForce(r);
+#endif
+    if (kg.base != nullptr && kg.r == r) kgCompact(r);
+}
+#endif
 
 void __wrap_C3D_TexDelete(C3D_Tex* tex) KG_LATE;
 void __wrap_C3D_TexDelete(C3D_Tex* tex) {
@@ -26888,6 +27313,19 @@ static inline __attribute__((always_inline)) void utxQuadPosition(const float* p
     *outX = topX + (botX - topX) * t;
     *outY = topY + (botY - topY) * t;
 }
+// creddodge D2: 2^-k for a tile side of 2^k (as a float), from its bits: the exponent field 127 + k becomes 127 - k.
+// x / 2^k and x * 2^-k are the same real number, so the same float, rounding included.
+static inline __attribute__((always_inline)) float utxPow2Rcp(float side) {
+    uint32_t bits;
+    memcpy(&bits, &side, sizeof bits);
+    bits = 0x7f000000u - bits;
+    float f;
+    memcpy(&f, &bits, sizeof f);
+    return f;
+}
+// D2'       creddodge, 11-01): Smart's premultiplied colour (a text that isn't one colour) is worked out in cdPremul, at
+// the end of the late text, so that utxEmitPageRegion keeps its 2504 B slot with D2 in it (the pad after it).
+static CtrColor cdPremul(CtrColor cc);
 static __attribute__((noinline, noclone, section(".text.utext_late"))) void utxEmitPageRegion(CtrRenderer* r, CtrPage* page, float sx0,
                                                                                              float sy0, float sx1, float sy1,
                                                                                              const float* px, const float* py,
@@ -26939,12 +27377,7 @@ static __attribute__((noinline, noclone, section(".text.utext_late"))) void utxE
                 px = gx;
                 py = gy;
             }
-            if (!r->smart.straight) {
-                // (v * a + 127) / 255 for bytes v and a: t / 255 is (t + 1 + (t >> 8)) >> 8 for t up to 65534 (here t <= 65152).
-                uint32_t a = cc.a, tr = cc.r * a + 127u, tg = cc.g * a + 127u, tb = cc.b * a + 127u;
-                cc = (CtrColor) { (uint8_t) ((tr + 1u + (tr >> 8)) >> 8), (uint8_t) ((tg + 1u + (tg >> 8)) >> 8),
-                                  (uint8_t) ((tb + 1u + (tb >> 8)) >> 8), cc.a };
-            }
+            if (!r->smart.straight) cc = cdPremul(cc);
         }
         // reserveBatch's tests that don't need the texture, before the tile's sums (the cast roll's batches often fail them).
         if (r->addHold.mode == ADD_HOLD_HELD || !r->inFrame || (bound != nullptr && (bound->skipRec != nullptr || bound->lazy != nullptr)) ||
@@ -26955,16 +27388,21 @@ static __attribute__((noinline, noclone, section(".text.utext_late"))) void utxE
         float tileH = (float) page->tileH;
         CtrTile* tile;
         float qx[4], qy[4], uv[4];
+        // creddodge D2: a data page's tile sides are powers of two from 8 (tileSizeFor: every data page's layout is
+        // CtrPack_layoutGrid's, set by setLayout, a view's copied from such a page; the pages made elsewhere with
+        // other sides are not data pages, which go the full way above), so the tile pick multiplies by their
+        // reciprocals, to the bit (see utxPow2Rcp). regionTilePart keeps its divisions (code room).
         if (page->tilesX == 1 && page->tilesY == 1) {
             goto full;
         } else {
+            float rcpW = utxPow2Rcp(tileW), rcpH = utxPow2Rcp(tileH);
             float w = sx1 - sx0;
             float h = sy1 - sy0;
             if (w == 0.0f || h == 0.0f) goto full;
             float minX = sx0 < sx1 ? sx0 : sx1, maxX = sx0 < sx1 ? sx1 : sx0;
             float minY = sy0 < sy1 ? sy0 : sy1, maxY = sy0 < sy1 ? sy1 : sy0;
-            int32_t tx0 = (int32_t) (minX / tileW), tx1 = (int32_t) ((maxX - 0.001f) / tileW);
-            int32_t ty0 = (int32_t) (minY / tileH), ty1 = (int32_t) ((maxY - 0.001f) / tileH);
+            int32_t tx0 = (int32_t) (minX * rcpW), tx1 = (int32_t) ((maxX - 0.001f) * rcpW);
+            int32_t ty0 = (int32_t) (minY * rcpH), ty1 = (int32_t) ((maxY - 0.001f) * rcpH);
             if (0 > tx0) tx0 = 0;
             if (0 > ty0) ty0 = 0;
             if (tx1 >= page->tilesX) tx1 = page->tilesX - 1;
@@ -27047,6 +27485,12 @@ full:
 #endif
     emitPageRegion(r, page, sx0, sy0, sx1, sy1, ax, ay, c);
 }
+// D2' keeps utxEmitPageRegion's section at its former 2504 bytes, so that no late function after it moves (subsection
+// 1 follows the body and its literal pool; the assembler stops if they ever pass that).
+__asm__(".pushsection .text.utext_late, 1\n"
+        "utxEmitPageRegion_pad:\n"
+        ".org 2504\n"
+        ".popsection\n");
 #undef quadOutsideView
 #if defined(ENABLE_WAD16) && !defined(CTRPORT_RENDER_TIMING)
 // ===[ Glyph view test with integer compares (creddodge) ]===
@@ -27068,22 +27512,39 @@ static __attribute__((noinline, noclone, section(".text.creddodge_late"))) bool 
                                                                                                const float* py) {
     const C3D_Mtx* m = &r->projection;
     if (!r->depth.active && cdBits(m->r[3].x) == 0 && cdBits(m->r[3].y) == 0 && cdBits(m->r[3].w) == 0x3f800000u) {
-        uint32_t ok = 1, left = 1, right = 1, top = 1, bottom = 1;
+        // The edges every corner so far is past: bit 0 left, 1 right, 2 top, 3 bottom. D1       creddodge, 11-01):
+        // the answer is known false once no edge has every corner so far past it, so the loop stops there (a glyph
+        // in view, at its first corner). That is quadOutsideView's answer too when a later corner isn't finite: the
+        // corners so far have w exactly 1 there and the same x and y (the same two products, added in the other
+        // order), so no edge can count all four.
+        uint32_t all = 15;
         for (int32_t i = 0; 4 > i; i++) {
             uint32_t x = cdBits(m->r[0].y * py[i] + m->r[0].x * px[i] + m->r[0].w);
             uint32_t y = cdBits(m->r[1].y * py[i] + m->r[1].x * px[i] + m->r[1].w);
             // A non-finite px or py makes x non-finite (0 * inf is NaN), and w with it.
-            ok &= (x & 0x7fffffffu) < 0x7f800000u && (y & 0x7fffffffu) < 0x7f800000u;
-            left &= x > 0xbf800000u;
-            right &= (int32_t) x > 0x3f800000;
-            top &= y > 0xbf800000u;
-            bottom &= (int32_t) y > 0x3f800000;
+            if ((x & 0x7fffffffu) >= 0x7f800000u || (y & 0x7fffffffu) >= 0x7f800000u) return cdOutsideFull(r, px, py);
+            all &= (uint32_t) (x > 0xbf800000u) | (uint32_t) ((int32_t) x > 0x3f800000) << 1 | (uint32_t) (y > 0xbf800000u) << 2 |
+                   (uint32_t) ((int32_t) y > 0x3f800000) << 3;
+            if (all == 0) return false;
         }
-        if (ok) return (left | right | top | bottom) != 0;
+        return true;
     }
     return cdOutsideFull(r, px, py);
 }
-// ===[ String box fitted to the alignment (creddodge, tbox) ]===
+// D1 keeps this section at its former 320 bytes, so that no late function after it moves (subsection 1 follows the
+// body and its literal pool; the assembler stops if they ever pass that).
+__asm__(".pushsection .text.creddodge_late, 1\n"
+        "cdGlyphOutside_pad:\n"
+        ".org 320\n"
+        ".popsection\n");
+// Smart's premultiplied colour for utxEmitPageRegion (D2', above), the sums it made in place before.
+static __attribute__((noinline, noclone, section(".text.cdtail_late"))) CtrColor cdPremul(CtrColor cc) {
+    // (v * a + 127) / 255 for bytes v and a: t / 255 is (t + 1 + (t >> 8)) >> 8 for t up to 65534 (here t <= 65152).
+    uint32_t a = cc.a, tr = cc.r * a + 127u, tg = cc.g * a + 127u, tb = cc.b * a + 127u;
+    return (CtrColor) { (uint8_t) ((tr + 1u + (tr >> 8)) >> 8), (uint8_t) ((tg + 1u + (tg >> 8)) >> 8),
+                        (uint8_t) ((tb + 1u + (tb >> 8)) >> 8), cc.a };
+}
+// ===[ String box fitted to the alignment       creddodge, tbox) ]===
 // drawTextImpl drops a string whose box is wholly out of view. The box is +-reachX across, reachX = textLen x advance
 // x (2 when aligned) + extent: room for the alignment to move the start by a whole line's width either way and for
 // the cursor to move a whole advance either way per character. In the credits dodger that box is about four times as
@@ -27183,4 +27644,594 @@ __attribute__((noinline, section(".text.late.utasgore.probe"))) uint32_t CtrRend
     *tex = r->batchTex;
     return r->frameStats.drawCalls;
 }
+#endif
+
+// ===[ Knight GPU d2: tiled draws make no tile quads out of view, and repeated additive passes go a tile at a time ]===
+//
+// DELTARUNE Chapter 3's Roaring Knight fills its 640x480 ball surface each frame with one tiled sprite drawn under
+// bm_normal, then four times under bm_add (Repeated additive passes). The sprite lies on four texture tiles, and a tiled
+// draw makes each repetition's part of each tile as its own quad, so a pass is some 27 batches: each texture change
+// draws the batch made so far. Some 12 of them draw nothing: the repetition is partly in view (the per-repetition test
+// in emitPageRegionDirect lets it through), but its part of a tile isn't.
+//
+// For tiled draws that take the plain path (a data page, no shader effect, no recorded surface, no Smart smoothing, no
+// palette, no pattern being kept, one eye), kgDrawSpriteTiled is ctrDrawSpriteTiled with emitPageTiles' loop made
+// here. (1) A tile's quad wholly outside the view (quadOutsideView, as for whole repetitions) isn't made: the GPU would
+// draw none of it. (2) In a pass that addHoldGate lets be held, blended (src_alpha, one) for colour and alpha with no
+// alpha test, the quads are made a tile at a time (each repetition's part of the first tile, then of the next): one
+// batch a tile instead of one a repetition and tile. Such blending adds each fragment's colour and alpha to the
+// target's, clamped at 1, and min(1, min(1, d + a) + b) = min(1, d + a + b) for a, b >= 0, so the order of the quads
+// doesn't change a pixel, even where two of them meet. bm_normal passes keep their order: whichever quad comes last
+// wins a pixel two of them cover. Everything else is ctrDrawSpriteTiled's: the same quads, texture coordinates and
+// colours, tiles loaded per repetition as before, and the held passes' bookkeeping.
+#if defined(ENABLE_WAD17) && defined(CTRPORT_KNIGHTGPU_TILED_ON)
+#define KGT_LATE __attribute__((noinline, section(".text.knightgpu_tiled_late")))
+#define KGT_QUADS 48u
+typedef struct {
+    C3D_Tex* tex;
+    float x[4], y[4], uv[4];
+    uint32_t k; // the tile's place in the region's tile range, row by row
+} KgtQuad;
+static struct {
+    uint32_t count;
+    KgtQuad q[KGT_QUADS];
+} kgt __attribute__((section(".bss.knightgpu_tiled_late")));
+
+// Makes the quads kept so far, a tile at a time, each tile's in the order they came.
+static void KGT_LATE kgtFlush(CtrRenderer* r, CtrColor c) {
+    CtrColor qc[4] = { c, c, c, c };
+    uint32_t n = kgt.count, done = 0;
+    for (uint32_t k = 0; n > done; k++) {
+        for (uint32_t i = 0; n > i; i++) {
+            KgtQuad* q = &kgt.q[i];
+            if (q->k != k) continue;
+            emitQuad(r, q->tex, q->x, q->y, q->uv[0], q->uv[1], q->uv[2], q->uv[3], qc);
+            r->palNextB = nullptr;
+            done++;
+        }
+    }
+    kgt.count = 0;
+}
+
+// emitPageTiles for one repetition, with no palette (palKind PAL_NONE) and a uniform colour c: the tiles' quads in
+// view, made at once, or kept for kgtFlush when `keep`.
+static void KGT_LATE kgtTiles(CtrRenderer* r, CtrPage* page, bool keep, float sx0, float sy0, float sx1, float sy1, const float* px,
+                              const float* py, CtrColor c) {
+    CtrColor cs[4] = { c, c, c, c };
+    if (page->tilesX == 1 && page->tilesY == 1) {
+        emitPageTiles(r, page, sx0, sy0, sx1, sy1, px, py, cs);
+        return;
+    }
+    float tileW = (float) page->tileW;
+    float tileH = (float) page->tileH;
+    float w = sx1 - sx0;
+    float h = sy1 - sy0;
+    if (w == 0.0f || h == 0.0f) return;
+    float minX = sx0 < sx1 ? sx0 : sx1, maxX = sx0 < sx1 ? sx1 : sx0;
+    float minY = sy0 < sy1 ? sy0 : sy1, maxY = sy0 < sy1 ? sy1 : sy0;
+    int32_t tx0 = (int32_t) (minX / tileW), tx1 = (int32_t) ((maxX - 0.001f) / tileW);
+    int32_t ty0 = (int32_t) (minY / tileH), ty1 = (int32_t) ((maxY - 0.001f) / tileH);
+    if (0 > tx0) tx0 = 0;
+    if (0 > ty0) ty0 = 0;
+    if (tx1 >= page->tilesX) tx1 = page->tilesX - 1;
+    if (ty1 >= page->tilesY) ty1 = page->tilesY - 1;
+    if (tx0 > tx1 || ty0 > ty1) return;
+    CtrTextures_ensureTilesBut(&r->textures, page, tx0, ty0, tx1, ty1, 0);
+    uint32_t k = 0;
+    for (int32_t ty = ty0; ty1 >= ty; ty++) {
+        for (int32_t tx = tx0; tx1 >= tx; tx++, k++) {
+            CtrTile* tile = &page->tiles[ty * page->tilesX + tx];
+            float s[4], uv[4];
+            if (!tile->valid || !regionTilePart(sx0, sy0, w, h, minX, minY, maxX, maxY, tileW, tileH, tx, ty, s, uv)) continue;
+            float qx[4], qy[4];
+            quadPosition(px, py, s[0], s[1], &qx[0], &qy[0]);
+            quadPosition(px, py, s[2], s[1], &qx[1], &qy[1]);
+            quadPosition(px, py, s[2], s[3], &qx[2], &qy[2]);
+            quadPosition(px, py, s[0], s[3], &qx[3], &qy[3]);
+            if (quadOutsideView(r, qx, qy)) continue;
+            // palTileTex without a palette (kgtPlain).
+            C3D_Tex* tex = CtrTextures_drawTex(tile);
+            if (!keep) {
+                emitQuad(r, tex, qx, qy, uv[0], uv[1], uv[2], uv[3], cs);
+                r->palNextB = nullptr;
+                continue;
+            }
+            if (kgt.count == KGT_QUADS) kgtFlush(r, c);
+            KgtQuad* q = &kgt.q[kgt.count++];
+            q->tex = tex;
+            memcpy(q->x, qx, sizeof(qx));
+            memcpy(q->y, qy, sizeof(qy));
+            memcpy(q->uv, uv, sizeof(uv));
+            q->k = k;
+        }
+    }
+}
+
+// Whether a tiled draw takes the plain path kgDrawSpriteTiled makes: decided before its page is acquired, from state
+// the draw doesn't change.
+static bool KGT_LATE kgtPlain(CtrRenderer* r, int32_t tpagIndex) {
+    DataWin* dw = r->base.dataWin;
+    if (0 > tpagIndex || dw->tpag.count <= (uint32_t) tpagIndex || 0 > dw->tpag.items[tpagIndex].texturePageId) return false;
+    if (r->shaderFx != SHADER_FX_NONE || r->smart.emitting || r->palKind != PAL_NONE || recordingSurface(r) != nullptr || drawingBothEyes(r))
+        return false;
+    if (0 <= r->boundSurface && r->surfaces[r->boundSurface].pattern.version == r->surfaces[r->boundSurface].version) return false;
+    return true;
+}
+
+// addHoldEndPass, with addHoldRepeats. Both are inlined into ctrDrawSpriteTiled, their one caller, and a call from here
+// would take them out of line there: this is their copy.
+static void KGT_LATE kgtEndPass(CtrRenderer* r) {
+    CtrAddHold* h = &r->addHold;
+    addHoldClose(r);
+    if (h->mode != ADD_HOLD_EMITTING) return; // out of room, drawn
+    h->mode = ADD_HOLD_HELD;
+    if (h->passes == 0) {
+        h->passes = 1;
+        h->firstCount = h->count;
+        return;
+    }
+    uint32_t n = h->firstCount;
+    bool repeats = h->count - n == n;
+    for (uint32_t i = 0; repeats && n > i; i++) {
+        const CtrHeldBatch* a = &h->batches[i];
+        const CtrHeldBatch* b = &h->batches[n + i];
+        repeats = a->count == b->count && a->texCount == b->texCount && a->quads == b->quads && a->plainOnly == b->plainOnly &&
+                  memcmp(a->texes, b->texes, a->texCount * sizeof(a->texes[0])) == 0 &&
+                  memcmp(&r->vertices[a->start], &r->vertices[b->start], a->count * sizeof(CtrVertex)) == 0;
+    }
+    if (!repeats) {
+        flushBatch(r);
+        return;
+    }
+    uint32_t dropped = r->vertexCount - h->passStart;
+    r->vertexCount = h->passStart;
+    r->vertexUsed -= dropped;
+    r->batchStart = r->vertexCount;
+    if (r->vertexFlushed > r->vertexCount) r->vertexFlushed = r->vertexCount;
+    h->count = h->firstCount;
+    h->passes++;
+}
+
+static void kgDrawSpriteTiled(Renderer* renderer, int32_t tpagIndex, float originX, float originY, float x, float y, float xscale, float yscale,
+                              bool tileX, bool tileY, float roomW, float roomH, uint32_t color, float alpha) {
+    CtrRenderer* r = (CtrRenderer*) renderer;
+    if (!kgtPlain(r, tpagIndex)) {
+        E5X_OPAQUE(ctrDrawSpriteTiled)(renderer, tpagIndex, originX, originY, x, y, xscale, yscale, tileX, tileY, roomW, roomH, color, alpha);
+        return;
+    }
+    // From here on, ctrDrawSpriteTiled's steps (its direct path), but for the loop's region draw.
+    RENDER_TIMED(r, TIME_DRAW);
+    TexturePageItem* tpag;
+    CtrPage* page = acquireTpagPage(r, tpagIndex, &tpag);
+    if (page == nullptr) return;
+
+    float axScale = fabsf(xscale);
+    float ayScale = fabsf(yscale);
+    float tileW = (float) tpag->boundingWidth * axScale;
+    float tileH = (float) tpag->boundingHeight * ayScale;
+    if (0 >= tileW || 0 >= tileH) return;
+
+    float startX, endX, startY, endY;
+    if (tileX) {
+        startX = fmodf(x - originX * axScale, tileW);
+        if (startX > 0) startX -= tileW;
+        endX = roomW;
+    } else {
+        startX = x - originX * axScale;
+        endX = startX + tileW;
+    }
+    if (tileY) {
+        startY = fmodf(y - originY * ayScale, tileH);
+        if (startY > 0) startY -= tileH;
+        endY = roomH;
+    } else {
+        startY = y - originY * ayScale;
+        endY = startY + tileH;
+    }
+    float visX0, visY0, visX1, visY1;
+    if (visibleWorldRect(renderer, &visX0, &visY0, &visX1, &visY1)) {
+        if (tileX && visX0 - tileW > startX) startX += floorf((visX0 - tileW - startX) / tileW) * tileW;
+        if (tileX && endX > visX1 + tileW) endX = visX1 + tileW;
+        if (tileY && visY0 - tileH > startY) startY += floorf((visY0 - tileH - startY) / tileH) * tileH;
+        if (tileY && endY > visY1 + tileH) endY = visY1 + tileH;
+    }
+
+    float lx0 = (float) tpag->targetX - originX;
+    float ly0 = (float) tpag->targetY - originY;
+    float sx0 = xscale * lx0;
+    float sy0 = yscale * ly0;
+    float sx1 = xscale * (lx0 + (float) tpag->targetWidth);
+    float sy1 = yscale * (ly0 + (float) tpag->targetHeight);
+
+    CtrColor c = makeColor(color, alpha);
+
+    CtrAddHold* h = &r->addHold;
+    bool dataPage = page >= r->textures.pages && page < r->textures.pages + r->textures.pageCount;
+    bool hold = addHoldGate(r, dataPage, c);
+    CtrTiledArgs args = { tpagIndex, originX, originY, x, y, xscale, yscale, roomW, roomH, alpha, color, (tileX ? 1u : 0u) | (tileY ? 2u : 0u) };
+    if (h->mode == ADD_HOLD_HELD && !(hold && page == h->page && memcmp(&args, &h->args, sizeof(args)) == 0)) flushBatch(r);
+    if (hold) {
+        if (h->mode == ADD_HOLD_OFF) {
+            flushBatch(r);
+            h->args = args;
+            h->page = page;
+#ifdef CTRPORT_RENDER_TIMING
+            h->stateHash = addHoldStateHash(r);
+#endif
+        }
+        h->mode = ADD_HOLD_EMITTING;
+        h->passStart = r->vertexCount;
+    }
+
+    float srcX0 = tpag->sourceX, srcY0 = tpag->sourceY;
+    float srcX1 = srcX0 + tpag->sourceWidth, srcY1 = srcY0 + tpag->sourceHeight;
+    snapItemBegin(r, tpagIndex, tpag, page);
+    for (float dy = startY; endY > dy; dy += tileH) {
+        float cy = dy + originY * ayScale;
+        for (float dx = startX; endX > dx; dx += tileW) {
+            float cx = dx + originX * axScale;
+            float px[4] = { cx + sx0, cx + sx1, cx + sx1, cx + sx0 };
+            float py[4] = { cy + sy0, cy + sy0, cy + sy1, cy + sy1 };
+            // emitPageRegionDirect, then emitPageRegionVisible without Smart smoothing or a pattern (kgtPlain).
+            if (quadOutsideView(r, px, py)) continue;
+            float gx[4], gy[4];
+            if (gridSnapQuad(r, px, py, srcX1 - srcX0, srcY1 - srcY0, gx, gy)) kgtTiles(r, page, hold, srcX0, srcY0, srcX1, srcY1, gx, gy, c);
+            else kgtTiles(r, page, hold, srcX0, srcY0, srcX1, srcY1, px, py, c);
+        }
+    }
+    if (kgt.count != 0) kgtFlush(r, c);
+    snapItemEnd(r);
+    if (hold && h->mode == ADD_HOLD_EMITTING) kgtEndPass(r);
+}
+#endif
+
+// ===[ Knight GPU O9: lazy blend and fog state (DELTARUNE New only) ]===
+//
+// DELTARUNE Chapter 3's Roaring Knight wave (ch3_kspit) toggles blending and fog some 300 times a frame, most often
+// around draws that draw nothing (roaring2's outlines: alpha 0, e5x drops them) or around nothing at all. Each eager
+// toggle draws the open batch and applies the state, so a frame is cut into some 330 batches where the same draws in
+// the same order with the same state per draw make some 255       knightgpu's census, o9/sim.py).
+//
+// Here the four setters (kglL_, KGL_SET) still make their own early return and set the renderer's fields as the eager
+// setter does, but while a batch is open in a Draw event (kglHold's test) they hold the call instead of drawing the
+// batch and applying the state: the state the batch is being drawn with, and the calls since, are kept. Anything else
+// that can reach the renderer's state enters ctr_renderer.c through a kglC_ check stub first (kglChk): every other
+// ctrVtable entry (KGL_CHK in CtrRenderer_create and SKIP_WRAPPERS), every draw an e5x wrapper hands on (E5X_OPAQUE),
+// and the exports other files draw with (__wrap_ below). A stub that finds calls held settles them (kglSettle): when
+// the fields are back to the held batch's state the calls did nothing in the end, and nothing is done; otherwise the
+// held batch's state is put back in the fields and the calls run as the eager setters, in their order, now. Same draws,
+// same order, same state per draw: only flushes and applies that change nothing are left out.
+// Plain (no stub): init, destroy and beginFrame, which no held call can reach (calls are held only inside a Draw
+// event, and every one is closed by a checked endView, endGUI or endFrame entry), and the texture and shader lookups
+// (spriteGetTexture, surfaceGetTexture, shaderGetUniform, shaderGetSamplerIndex, shaderIsCompiled), which neither
+// draw nor read the blend or fog state.
+// The list of every reader of the held state, and why each stays exact: knightgpu's O9 audit.
+#ifdef CTRPORT_KNIGHTGPU_LAZY_ON
+// Which builds get this is CMake's one condition (CTRPORT_KNIGHTGPU_LAZY). What only DELTARUNE has is guarded here:
+// d2's tiled draw (KGL_TILED_X) and Crispart's export (KGL_CRISPART_W). The pads at the end fit both games.
+#if defined(ENABLE_WAD17) && defined(CTRPORT_KNIGHTGPU_TILED_ON)
+#define KGL_TILED_X(X) X(KG_TILED_DRAW)
+#else
+#define KGL_TILED_X(X)
+#endif
+#ifdef ENABLE_WAD17
+#define KGL_CRISPART_W(W) W(Crispart_drawTexture)
+#else
+#define KGL_CRISPART_W(W)
+#endif
+// The shader entries CtrRenderer_create's vtable names: DELTARUNE's are the pillar ones (its #defines there, undone
+// before this point), UNDERTALE's the ctr ones.
+#ifdef ENABLE_WAD17
+#define KGL_SHADER_X(X) X(pillarGpuSetShader) X(ctrGpuResetShader) X(pillarShaderSetUniformF)                         \
+    X(pillarShaderSetUniformFArray) X(pillarShaderSetUniformI)
+#else
+#define KGL_SHADER_X(X) X(ctrGpuSetShader) X(ctrGpuResetShader) X(ctrShaderSetUniformF) X(ctrShaderSetUniformFArray)  \
+    X(ctrShaderSetUniformI)
+#endif
+#define KGL_OPT noinline, optimize("Os", "no-tree-switch-conversion", "no-jump-tables")
+// kglSettle and kglSet go where CtrRenderer_selfTest shrank, after its code (see the pads at the end): space the warm
+// text keeps anyway. The rest is late code, after d2's.
+#define KGL_LATE __attribute__((KGL_OPT, section(".text.CtrRenderer_selfTest")))
+#define KGL_TAIL __attribute__((KGL_OPT, section(".text.knightgpu_lazy_late")))
+#define KGL_LOG 8
+// A setter's call, as kglSetA lays it out: its arguments after the renderer (r1, r2, r3, then the stack word), with
+// the setter's kind (KGL_KIND) between the third and the fourth.
+#define KGL_KIND 3
+enum { KGL_MODE, KGL_EXT, KGL_ENABLE, KGL_FOG };
+typedef void (*KglEagerFn)(Renderer* renderer, int32_t a, int32_t b, int32_t c, int32_t d);
+#ifdef CTRPORT_KNIGHTGPU_TEXENV_ON
+// knightgpu T1 (DELTARUNE New, with O9): cheaper blend and fog switches. Every blend or fog call O9 lets through
+// reaches its eager setter by kglEagerFns, which here names kteSet: the batch is flushed first (the setter's own flush
+// then finds nothing to draw), then the setter runs as before, then, if citro3d's state was as our last draw left it
+// (drawWithTexture's shortcut condition) and the setter changed only the blend word (effect flag) or only combiner
+// stages (stage flags), those registers are written straight into the command buffer and the flags cleared, so the
+// next batch keeps drawWithTexture's shortcut instead of C3D_DrawArrays (C3Di_UpdateContext sending the whole effect
+// and all six stages). setBlendFunc already does this for smart smoothing's blends. The GPU holds the same registers
+// at every draw as before: they go in after the flushed batch, where C3D_DrawArrays put them, and citro3d's context
+// holds the new values, so a later full send matches. Anything else changed (another flag, another effect word, a
+// stage flag already set, FLICKER_SLOW, a recorded surface, a held additive pass, no room) is left to citro3d as
+// before. Measured cause (Azahar, Chapter 3's starchild wave): ~145 of ~245 batches a frame took C3D_DrawArrays,
+// each after a fog/blend switch (effect + six stage flags). The setters are called through kteFns (kglEager's way),
+// so they stay as they are and where they are. Its own output section, .late.text.kte (late_reserve.ld), as O10's.
+#define KTE_TAIL __attribute__((KGL_OPT, section(".text.knightgpu_texenv_late")))
+#define KTE_EFFECT_FLAG (1u << 4) // citro3d's C3DiF_Effect
+#define KTE_STAGE_FLAGS (0x3Fu << 26) // citro3d's C3DiF_TexEnv(0) to (5)
+#define KTE_FX_FIRST 0x24 // the context words initBlendShortcut searches for the blend word
+#define KTE_FX_END 0x118
+static void* const kteFns[] __attribute__((used, aligned(4), section(".rodata.knightgpu_texenv_in_text"))) = {
+    (void*) ctrGpuSetBlendMode, (void*) ctrGpuSetBlendModeExt, (void*) ctrGpuSetBlendEnable, (void*) ctrGpuSetFog
+};
+
+static void KTE_TAIL kteSet(Renderer* renderer, const int32_t* c) {
+    CtrRenderer* r = (CtrRenderer*) renderer;
+    int32_t kind = c[KGL_KIND], a = c[0];
+    const BlendFactors* f = &renderer->blendFactors;
+    // The setter's own early return (as kglSet's), before the flush.
+    if (kind == KGL_MODE ? r->blendMode == a
+        : kind == KGL_EXT ? r->blendMode == bm_complex && f->src == a && f->dst == c[1] && f->srcAlpha == c[2] && f->dstAlpha == c[4]
+        : kind == KGL_ENABLE ? r->blendEnable == (a != 0)
+        : r->fogEnable == (a != 0) && (a == 0 || r->fogColor == (uint32_t) c[1]))
+        return;
+    void* const* fns = kteFns;
+    __asm__("" : "+r"(fns));
+    KglEagerFn set = (KglEagerFn) fns[kind];
+    uint32_t at = r->citroBlendAt;
+    if (!r->inFrame || r->addHold.mode != ADD_HOLD_OFF || (r->flicker.flags & FLICKER_SLOW) || (kind != KGL_FOG && at == 0) ||
+        recordingSurface(r) != nullptr) {
+        set(renderer, c[0], c[1], c[2], c[4]);
+        return;
+    }
+    flushBatch(r);
+    uint32_t flags = CITRO_FLAGS;
+    if (!r->citroCleanValid || flags != r->citroCleanFlags || (flags & (KTE_EFFECT_FLAG | KTE_STAGE_FLAGS)) != 0 ||
+        gpuCmdBuf == nullptr || gpuCmdBufSize < gpuCmdBufOffset + 6 * 6) {
+        set(renderer, c[0], c[1], c[2], c[4]);
+        return;
+    }
+    if (kind != KGL_FOG) {
+        uint32_t fx[(KTE_FX_END - KTE_FX_FIRST) / 4];
+        memcpy(fx, __C3D_Context + KTE_FX_FIRST, sizeof(fx));
+        set(renderer, c[0], c[1], c[2], c[4]);
+        uint32_t now = CITRO_FLAGS;
+        if ((now & ~KTE_EFFECT_FLAG) != flags) return;
+        uint32_t word = CITRO_WORD(at);
+        fx[(at - KTE_FX_FIRST) / 4] = word;
+        if (memcmp(fx, __C3D_Context + KTE_FX_FIRST, sizeof(fx)) != 0) return; // more than the blend word
+        if (now != flags) {
+            gpuCmdBuf[gpuCmdBufOffset++] = word;
+            gpuCmdBuf[gpuCmdBufOffset++] = GPUREG_BLEND_FUNC | 0xF0000u;
+            CITRO_FLAGS = flags;
+        }
+        return;
+    }
+    C3D_TexEnv* env[6];
+    C3D_TexEnv before[6];
+    for (int32_t i = 0; 6 > i; i++) {
+        env[i] = C3D_GetTexEnv(i);
+        before[i] = *env[i];
+    }
+    CITRO_FLAGS = flags;
+    set(renderer, c[0], c[1], c[2], c[4]);
+    if ((CITRO_FLAGS & ~KTE_STAGE_FLAGS) != flags) return; // more than the stages: citro3d sends it all
+    uint32_t* w = &gpuCmdBuf[gpuCmdBufOffset];
+    for (int32_t i = 0; 6 > i; i++) {
+        if (memcmp(&before[i], env[i], sizeof(C3D_TexEnv)) == 0) continue;
+        // As putTexEnv (C3Di_TexEnvBind): the five registers from the stage's first.
+        uint32_t s[5];
+        memcpy(s, env[i], sizeof(s));
+        w[0] = s[0];
+        w[1] = (GPUREG_TEXENV0_SOURCE + 8u * (uint32_t) (3 < i ? i + 2 : i)) | 0xF0000u | (4u << 20) | 0x80000000u;
+        w[2] = s[1];
+        w[3] = s[2];
+        w[4] = s[3];
+        w[5] = s[4];
+        w += 6;
+    }
+    gpuCmdBufOffset = (uint32_t) (w - gpuCmdBuf);
+    CITRO_FLAGS = flags;
+}
+// kglEager's calls, by kind: back to kglSet's layout for kteSet.
+#define KTE_ENTRY(name, kind)                                                                                              static void KTE_TAIL name(Renderer* renderer, int32_t a, int32_t b, int32_t c, int32_t d) {                                int32_t k[5] = { a, b, c, kind, d };                                                                                   kteSet(renderer, k);                                                                                               }
+KTE_ENTRY(kteMode, KGL_MODE)
+KTE_ENTRY(kteExt, KGL_EXT)
+KTE_ENTRY(kteEnable, KGL_ENABLE)
+KTE_ENTRY(kteFog, KGL_FOG)
+#define KTE_EAGER(fn, kte) kte
+#else
+#define KTE_EAGER(fn, kte) fn
+#endif
+// The eager setters in KGL_ kind order. Called through this table only, so neither they nor their callers change.
+static void* const kglEagerFns[] __attribute__((used, aligned(4), section(".rodata.knightgpu_lazy_in_text"))) = {
+    (void*) KTE_EAGER(ctrGpuSetBlendMode, kteMode), (void*) KTE_EAGER(ctrGpuSetBlendModeExt, kteExt),
+    (void*) KTE_EAGER(ctrGpuSetBlendEnable, kteEnable), (void*) KTE_EAGER(ctrGpuSetFog, kteFog)
+};
+
+// r first: kglChk reads it (null = nothing held).
+static struct {
+    CtrRenderer* r;
+    int32_t blendMode;
+    BlendFactors factors;
+    uint32_t fogColor;
+    bool blendEnable;
+    bool fogEnable;
+    int8_t filterOverride;
+    uint32_t n;
+    int32_t calls[KGL_LOG][5];
+} kglState __attribute__((used, section(".bss.knightgpu_lazy_late")));
+
+// A call as the eager setter makes it. Each setter's arguments are words in r1-r3 and the stack word as the caller
+// passed them (bools 0 or 1), so all four are called the same way.
+static void KGL_TAIL kglEager(Renderer* renderer, const int32_t* c) {
+    void* const* fns = kglEagerFns;
+    __asm__("" : "+r"(fns));
+    ((KglEagerFn) fns[c[KGL_KIND]])(renderer, c[0], c[1], c[2], c[4]);
+}
+
+// Puts in the calls held, as the eager setters would have made them. natsurf6's draws of its surfaces set
+// filterOverride just before they call down (NS6_SOFTLY), so the replay sees the value the calls were made with.
+static void KGL_LATE __attribute__((used)) kglSettle(void) {
+    CtrRenderer* r = kglState.r;
+    if (r == nullptr) return;
+    kglState.r = nullptr;
+    const BlendFactors* f = &r->base.blendFactors;
+    if (r->blendMode == kglState.blendMode && r->blendEnable == kglState.blendEnable && r->fogEnable == kglState.fogEnable &&
+        r->fogColor == kglState.fogColor && f->src == kglState.factors.src && f->dst == kglState.factors.dst &&
+        f->srcAlpha == kglState.factors.srcAlpha && f->dstAlpha == kglState.factors.dstAlpha) {
+        return;
+    }
+    int8_t filterOverride = r->filterOverride;
+    r->filterOverride = kglState.filterOverride;
+    r->blendMode = kglState.blendMode;
+    r->base.blendFactors = kglState.factors;
+    r->fogColor = kglState.fogColor;
+    r->blendEnable = kglState.blendEnable;
+    r->fogEnable = kglState.fogEnable;
+    for (uint32_t i = 0; kglState.n > i; i++) kglEager(&r->base, kglState.calls[i]);
+    r->filterOverride = filterOverride;
+}
+
+// The four setters' one body (kglSetA calls it). First the eager setter's own early return (on the same fields, which
+// a held call sets as the eager setter does). Then the call is held only in a Draw event with a nonempty batch on a
+// real target: no recorded surface (boundTarget, not dialogue's recording, so the eager setters' windowRecordedSurface
+// is not due), no held additive pass, no frame-skip wrappers, no blend set directly. Otherwise what is held is settled
+// and the eager setter makes the call.
+static void KGL_LATE __attribute__((used)) kglSet(Renderer* renderer, const int32_t* c) {
+    CtrRenderer* r = (CtrRenderer*) renderer;
+    BlendFactors* f = &renderer->blendFactors;
+    int32_t kind = c[KGL_KIND], a = c[0];
+    if (kind == KGL_MODE ? r->blendMode == a
+        : kind == KGL_EXT ? r->blendMode == bm_complex && f->src == a && f->dst == c[1] && f->srcAlpha == c[2] && f->dstAlpha == c[4]
+        : kind == KGL_ENABLE ? r->blendEnable == (a != 0)
+        : r->fogEnable == (a != 0) && (a == 0 || r->fogColor == (uint32_t) c[1]))
+        return;
+    Runner* runner = renderer->runner;
+    if (!r->inFrame || r->vertexCount == r->batchStart || r->batchTex == nullptr || r->addHold.mode != ADD_HOLD_OFF ||
+        r->boundTarget == nullptr || r->dlg.armed || r->skip.wrapped || r->blendOverridden || runner == nullptr ||
+        runner->vmContext->currentEventType != EVENT_DRAW || (kglState.r != nullptr && kglState.n == KGL_LOG)) {
+        kglSettle();
+        kglEager(renderer, c);
+        return;
+    }
+    if (kglState.r == nullptr) {
+        kglState.r = r;
+        kglState.n = 0;
+        kglState.blendMode = r->blendMode;
+        kglState.factors = *f;
+        kglState.fogColor = r->fogColor;
+        kglState.blendEnable = r->blendEnable;
+        kglState.fogEnable = r->fogEnable;
+        kglState.filterOverride = r->filterOverride;
+    }
+    memcpy(kglState.calls[kglState.n++], c, sizeof(kglState.calls[0]));
+    if (kind == KGL_MODE) {
+        // blendModeFactors' table.
+        int32_t src = bm_src_alpha, dst = bm_inv_src_alpha;
+        if (a == bm_add || a == bm_reverse_subtract) dst = bm_one;
+        else if (a == bm_subtract) src = bm_zero, dst = bm_inv_src_color;
+        else if (a == bm_min) src = bm_one, dst = bm_one;
+        else if (a == bm_max) dst = bm_inv_src_color;
+        r->blendMode = a;
+        *f = (BlendFactors) { src, dst, src, dst };
+    } else if (kind == KGL_EXT) {
+        r->blendMode = bm_complex;
+        *f = (BlendFactors) { a, c[1], c[2], c[4] };
+    } else if (kind == KGL_ENABLE) {
+        r->blendEnable = a != 0;
+    } else {
+        r->fogEnable = a != 0;
+        r->fogColor = (uint32_t) c[1];
+    }
+}
+
+// What the check stubs hand on to, in their order: ctrVtable's checked entries (KGL_CHK in CtrRenderer_create; the
+// pillar ones are what its #defines name there), the draws behind E5X_OPAQUE, then the exports other files draw with
+// (--wrap'd, CMakeLists.txt). The table also keeps each one's address taken, as the vtable and E5X_OPAQUE did.
+#define KGL_TARGETS(X, W)                                                                                            \
+    X(ctrEndFrameInit) X(ctrEndFrameEnd) X(ctrBeginView) X(ctrEndView) X(ctrApplyProjection) X(ctrBeginGUI)          \
+    X(ctrSetGuiProjection) X(ctrEndGUI) X(ctrDrawLines) X(ctrPrimitiveBegin) X(ctrPrimitiveBeginTexture)             \
+    X(ctrPrimitiveEnd) X(ctrDrawVertex) X(ctrDrawVertexBuffer) X(ctrFlush) X(ctrClearScreen)                         \
+    X(ctrCreateSpriteFromSurface) X(ctrDeleteSprite) X(ctrGpuSetTexFilter) X(ctrGpuSetAlphaTestEnable)               \
+    X(ctrGpuSetAlphaTestRef) X(ctrGpuSetColorWriteEnable) X(ctrCreateSurface) X(ctrSetRenderTarget)                  \
+    X(ctrEnsureApplicationSurface) X(ctrDrawSurface) X(ctrDrawSurfaceColor) X(ctrDrawSurfaceTiled)                   \
+    X(ctrSurfaceResize) X(ctrSurfaceFree) X(ctrSurfaceCopy) X(ctrSurfaceGetPixels) X(ctrSurfaceSetPixels)            \
+    KGL_SHADER_X(X) X(ctrTextureGetTexelWidth) X(ctrTextureGetTexelHeight) X(ctrTextureGetUVs)                       \
+    X(ctrTextureSetStage) X(ctrSetMatrix) X(UTK_DRAW_SPRITE) X(partDrawSprite) X(ctrDrawSpritePart)                  \
+    X(ctrDrawSpritePartColor) X(ctrDrawSpritePos) X(ctrDrawRectangle) X(ctrDrawRectangleColor) X(ctrDrawLine)        \
+    X(ctrDrawLineColor) X(ctrDrawTriangle) X(ctrDrawTriangleFan) X(ctrDrawText) X(ctrDrawTextColor)                  \
+    KGL_TILED_X(X) X(ctrDrawSpriteTiled)                                                                             \
+    KGL_CRISPART_W(W) W(CtrRenderer_uploadVideoFrame) W(CtrRenderer_fillVideoSurface)                                \
+    W(CtrRenderer_createVideoSurface) W(CtrRenderer_releaseVideo)
+#define KGL_TARGET(fn) (const void*) &fn,
+#define KGL_TARGETW(fn) (const void*) &__real_##fn,
+#define KGL_REALDECL(fn) extern __typeof__(fn) __real_##fn;
+#define KGL_NONE(fn)
+KGL_TARGETS(KGL_NONE, KGL_REALDECL)
+static const void* const kglTargets[] __attribute__((used, aligned(4), section(".rodata.knightgpu_lazy_in_text"))) = {
+    KGL_TARGETS(KGL_TARGET, KGL_TARGETW)
+};
+#define KGL_STR_(x) #x
+#define KGL_STR(x) KGL_STR_(x)
+// Stub k, at kglStubs + 4k, is Thumb: ip = its address + 4, then kglChk. Callers reach it by blx (a pointer, or a bl
+// the linker makes a blx); the target is ARM code, reached by bx.
+#define KGL_STUB(fn) "\t.thumb_func\n\t.type " KGL_STR(KGL_NAME(fn)) ", %function\n" KGL_STR(KGL_NAME(fn)) ":\n\tmov ip, pc\n\tb kglChkT\n"
+#define KGL_WRAP(fn) "\t.global __wrap_" #fn "\n\t.thumb_func\n\t.type __wrap_" #fn ", %function\n__wrap_" #fn ":\n\tmov ip, pc\n\tb kglChkT\n"
+// The setters, ARM: ip = kind, then kglSetA.
+#define KGL_SETTER(fn, k) "\t.type kglL_" #fn ", %function\nkglL_" #fn ":\n\tmov ip, #" #k "\n\tb kglSetA\n"
+__asm__("\t.pushsection .text.knightgpu_lazy_late,\"ax\",%progbits\n"
+        "\t.syntax unified\n"
+        "\t.balign 4\n"
+        "\t.thumb\n"
+        "kglStubs:\n" KGL_TARGETS(KGL_STUB, KGL_WRAP)
+        "\t.balign 4\n"
+        "kglChkT:\n"
+        "\tbx pc\n"
+        "\tnop\n"
+        "\t.arm\n"
+        // ip = stub k's address + 4.
+        "\tpush {r0, r1}\n"
+        "\tldr r0, =kglStubs + 4\n"
+        "\tsub ip, ip, r0\n"
+        "\tldr r0, =kglTargets\n"
+        "\tldr ip, [r0, ip]\n"
+        "\tldr r0, =kglState\n"
+        "\tldr r0, [r0]\n"
+        "\tcmp r0, #0\n"
+        "\tpop {r0, r1}\n"
+        "\tbxeq ip\n"
+        // Calls held: settle them, then the target with every argument register as it came.
+        "\tpush {r0, r1, r2, r3, ip, lr}\n"
+        "\tvpush {d0-d7}\n"
+        "\tbl kglSettle\n"
+        "\tvpop {d0-d7}\n"
+        "\tpop {r0, r1, r2, r3, ip, lr}\n"
+        "\tbx ip\n"
+        KGL_SETTER(ctrGpuSetBlendMode, 0) KGL_SETTER(ctrGpuSetBlendModeExt, 1) KGL_SETTER(ctrGpuSetBlendEnable, 2)
+        KGL_SETTER(ctrGpuSetFog, 3)
+        // r0 = the renderer, r1-r3 and the stack word = the setter's arguments, ip = its kind. c = { r1, r2, r3, kind,
+        // stack word } (the stack word is the caller's either way: only Ext has a fourth argument).
+        "kglSetA:\n"
+        "\tpush {lr}\n"
+        "\tldr lr, [sp, #4]\n"
+        "\tpush {r1, r2, r3, ip, lr}\n"
+        "\tmov r1, sp\n"
+        "\tbl kglSet\n"
+        "\tadd sp, sp, #20\n"
+        "\tpop {pc}\n"
+        "\t.ltorg\n"
+        "\t.syntax divided\n"
+        "\t.popsection\n");
+// CtrRenderer_selfTest and probeRead call vtable entries. With ctrVtable's entries plain functions, GCC also calls the
+// one it expects directly, after comparing; with the stubs there it can't expect one, so both come out shorter. Their
+// sections are padded back to their size after their code (subsection 1), so no code after them moves; the C half
+// above (KGL_LATE) fills most of selfTest's. check_layout --allow names both. Measured the same (nm -S against each
+// base) on DELTARUNE New and on UNDERTALE New and Old with the CMake condition widened (TEST ONLY 524f7a42c):
+// selfTest 9,072 -> 7,996 B, probeRead 596 -> 572 B. A changed selfTest/probeRead or compiler re-measures.
+__asm__("\t.pushsection .text.CtrRenderer_selfTest,\"ax\",%progbits\n\t.subsection 1\n\t.space 120\n\t.popsection\n"
+        "\t.pushsection .text.probeRead,\"ax\",%progbits\n\t.subsection 1\n\t.space 24\n\t.popsection\n");
+#endif
+
+// Append only: retain every earlier __LINE__ and compiler layout slot.
+#include "ctr_renderer_knsurf.inc"
+#if defined(ENABLE_WAD17) && defined(CTRPORT_TARGET_O3DS) && defined(CTRPORT_VINE_DIAGNOSTIC_HELPER)
+#include "drpix_replay.inc"
 #endif

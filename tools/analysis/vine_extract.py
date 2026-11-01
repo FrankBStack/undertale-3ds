@@ -19,7 +19,7 @@ PREFIX = 'Flowery_dispatch_'
 WRAPPER = 'Flowery_wrap_'
 CONDITION = r'(?:eq|ne|cs|cc|mi|pl|vs|vc|hi|ls|ge|lt|gt|le|al)?'
 LATE = re.compile(r'^\.(?:text|rodata|data|bss)\.late\.perfflowery$')
-LATE_LANES = {'perfflowery': LATE,
+LATE_LANES = {'perfflowery': re.compile(r'^\.(?:text|rodata|data|bss)\.late\.perfflowery$|^\.text\.drpix_late$'),
               # DELTARUNE New's tower face retention (vine_new_retain.inc), its own late sections, and climbnoise's
               # Azahar-only free of the tower textures there (cnTowerFree, its own line in late_reserve.ld).
               'flowergpu': re.compile(r'^\.(?:text|rodata|data|bss)\.late\.flowergpu$|^\.text\.climbnoise_late$')}

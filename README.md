@@ -42,16 +42,17 @@ Asriel, Mad Dummy and Lemon Bread were measured before the 29 October sound fix,
 
 We also measured every room of a full playthrough on the older models, on an earlier build: 589 of 595 rooms pass on a 3DS.
 
-## What changed since the last update (30 October)
+## What changed since the last update (31 October)
 
-- Older models: music and sounds no longer go silent after the game has been started many times. Each launch left one system thread slot in use until the console was turned off; the game now gives it back.
-- Older models: 4 KB more room for engine code, with no loss of speed in our console tests. It makes room for the next fixes.
-- New 3DS: a tour of every room of a full playthrough dropped no frames.
+- Older models: in Asriel's fight, the scene where you save Alphys no longer holds one frame on screen for three refreshes. Our test runs on a 2DS, a 3DS and a 3DS XL show none now.
+- Older models: the Omega Flowey finale has slightly fewer slow frames in our test runs on the 2DS and the 3DS. The difference is small, and the 3DS XL didn't show it.
+- Older models: the part of the ending credits where you dodge the names, and Mettaton's opera, measured the same as before.
+- Coming in the next build: an object created while alarms were being run could fire its own alarm one frame early. We found this on PC; the fix is done and checked there.
 
 ## Setbacks
 
-- We found a slowdown in Hotland: code that moved between builds landed on different 4 KB sets of the processor's cache, costing up to 9 ms in a frame. Our build checks now catch this.
-- Older models: in the ending credits, the part where you dodge the names drops one frame each time a new wave of names appears (about every 2.5 seconds). Work on it is ongoing.
+- Older models: the Omega Flowey finale still doesn't run at a locked 30 fps.
+- Older models: in the ending credits, the part where you dodge the names still drops one frame each time a new wave of names appears.
 - The beta is still not out. The hardest scenes on the older models, above all the ending credits, still drop frames.
 
 ## Known issues

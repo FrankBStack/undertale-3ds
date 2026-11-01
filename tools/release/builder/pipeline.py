@@ -134,6 +134,9 @@ def source_wanted(relative, game=None):
             # simplefix's board-grid front (CMake compiles it for DELTARUNE New only; Policy E).
             if parts[-1] == "z_boardgrid.c":
                 return game != "undertale"
+            # depthmove's layer element deques (CMake compiles it for DELTARUNE only).
+            if parts[-1] == "z_depthmove.c":
+                return game != "undertale"
             return parts[-1] != "loop.c"
         sub = parts[2:]
         if sub[0] == "cli":
@@ -165,6 +168,8 @@ def source_wanted(relative, game=None):
             or (parts[-1] in ("gog_smart.py", "gog-smart-1.08.json") and game != "deltarune")
             # offkill.py: the early destroy's entries (build.sh runs it; UNDERTALE only).
             or (parts[-1] == "offkill.py" and game != "deltarune")
+            # textcase.py: the dialogue script's case table (build.sh runs it; UNDERTALE Old only).
+            or (parts[-1] == "textcase.py" and game != "deltarune")
             or (parts[-1] == "chapter_manifest.py" and game != "undertale"))
     if parts[:2] == ["tools", "analysis"]:
         # The renderer launcher's helpers (SOURCE_FILES too), and UNDERTALE's half-resolution art packer with its list
@@ -218,6 +223,9 @@ def source_wanted(relative, game=None):
         # knightnew's afterimage history (build.sh knightnew-history, DELTARUNE New only; Policy E).
         if parts[2:] == ["source", "z_knightnew_history.c"]:
             return game != "undertale"
+        # freebytes G3's collision rules (CMake builds it in place of collision_gm14.c for DELTARUNE only; Policy E).
+        if parts[2:] == ["source", "collision_gm14_dr.c"]:
+            return game != "undertale"
         # credfix's dodge list front (CMake compiles it for UNDERTALE Old only; Policy E).
         if parts[2:] == ["source", "z_dodgefront.c"]:
             return game != "deltarune"
@@ -232,6 +240,12 @@ def source_wanted(relative, game=None):
             return game != "deltarune"
         # asrfight's item-name fronts (CMake compiles it for UNDERTALE Old writerfront builds only; Policy E).
         if parts[2:] == ["source", "z_itemfront.c"]:
+            return game != "deltarune"
+        # codeclose's dialogue case jump (CMake compiles it for UNDERTALE Old only; Policy E).
+        if parts[2:] == ["source", "z_textcase.c"]:
+            return game != "deltarune"
+        # codeclose's first-Draw wrapper over writerfront (CMake compiles it for UNDERTALE Old writerfront builds only).
+        if parts[2:] == ["source", "z_writerfirst.c"]:
             return game != "deltarune"
         # credfix's exit trail (build.sh exittrail): an o2DS panic diagnosis build, never a release.
         if parts == ["platform", "3ds", "source", "z_exittrail.c"]:

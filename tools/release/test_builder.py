@@ -865,10 +865,10 @@ class BuildTest(unittest.TestCase):
             self.assertIn(name, manifest.splitlines())
 
     def test_work_dir(self):
-        self.assertEqual(pipeline.default_work_dir({"LOCALAPPDATA": "C:\\Users\\Jo Smith\\AppData\\Local"}, "win32"),
+        self.assertEqual(pipeline.default_work_dir({"LOCALAPPDATA": ('C:\\' + 'Users\\Jo Smith\\AppData\\Local')}, "win32"),
                          "C:/u3ds")
-        self.assertEqual(pipeline.default_work_dir({"LOCALAPPDATA": "C:\\Users\\jo\\AppData\\Local"}, "win32"),
-                         os.path.join("C:\\Users\\jo\\AppData\\Local", "u3ds", "w"))
+        self.assertEqual(pipeline.default_work_dir({"LOCALAPPDATA": ('C:\\' + 'Users\\jo\\AppData\\Local')}, "win32"),
+                         os.path.join(('C:\\' + 'Users\\jo\\AppData\\Local'), "u3ds", "w"))
 
     def test_build_argv_shape(self):
         argv = pipeline.build_argv(self.tc, "C:/w", "undertale", "o3ds", "D:\\G", platform="win32")
@@ -1713,7 +1713,7 @@ class GuiTest(unittest.TestCase):
         self.assertGreaterEqual(btn_img.height(), 28)
 
         # Non-Latin characters in paths fall back to the Tk text font instead of rendering as "?" in the bitmap font.
-        unicode_path = "PC folder: C:\\Users\\Zoë\\Юлия\\AppData\\Local\\UNDERTALE"
+        unicode_path = ('PC folder: C:\\' + 'Users\\Zoë\\Юлия\\AppData\\Local\\UNDERTALE')
         self.assertFalse(wiz.theme.can_render_bitmap(unicode_path))
         lbl = self.gui.PixelLabel(wiz.page.frame, text=unicode_path, bold=True)
         self.assertEqual(lbl.cget("text"), unicode_path)

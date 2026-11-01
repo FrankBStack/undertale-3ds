@@ -68,7 +68,10 @@ def main():
     parent.INTERNAL = internal
     parent.EXTERNAL = ()
     parent.ENTRIES = internal
-    parent.SCOPED = SCOPED_NEW if internal is not INTERNAL else ()
+    parent.SCOPED = SCOPED_NEW if internal is not INTERNAL else (
+        ('drawSurfaceQuad', 'replayRecorded', 'Drpix_replay', 1, 'b'),
+        ('drawSurfaceQuad', 'pillarSurfaceQuad.isra.0', 'Drpix_surfaceQuad', 1, 'b'),
+    )
     return parent.main(retain_oomport_slots if internal is INTERNAL else None)
 
 

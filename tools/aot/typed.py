@@ -47,6 +47,7 @@ too: read only, guarded like the others, absent (nullptr, the guard fails) when 
 """
 import re
 import struct
+import sys
 
 G = None   # the gmlaot module (bind)
 
@@ -117,6 +118,17 @@ STRAIGHT_MIN = 12    # instructions in a straight-line region, at least
 INLINE_DEPTH = 3     # scripts inlined within one another, at most
 INLINE_STEPS = 200   # instructions followed in one inlined body, at most
 _callees = {}
+_effects_refused = set()   # EFFECTS builtins already warned about (effects_refused)
+
+
+def effects_refused(name):
+    """Warns once when builtin_audit refuses a builtin EFFECTS lists: every typed region calling it then falls back to
+    generic AOT without another word. A test-only edit to its body (a log, an fopen) is the usual cause; that cost
+    Knight's starchild wave 3.1 ms (docs/3ds-hardware.md)."""
+    if name in EFFECTS and name not in _effects_refused:
+        _effects_refused.add(name)
+        print("typed: warning: builtin_audit refuses %s (%s), which EFFECTS lists: typed regions that call it fall back "
+              "to generic AOT" % (name, G.builtin_audit().get(name, "not a builtin")), file=sys.stderr)
 
 # INLINE_MATH builtins a region computes inline: one library call or one operation, the same in any compile unit.
 # The others go through aotTypedMath<name> (vm_aot_bridge.inc), compiled with the engine's flags.
@@ -1045,6 +1057,7 @@ class Gen:
         if em.script_callee(idx):
             return self.inline(ins, st, before)
         if name.startswith("@@") or G.builtin_audit().get(name, "not a builtin") is not None:
+            effects_refused(name)
             raise Unsupported("call of %s at %04X" % (name, a))
         if argc > len(S):
             raise Unsupported("call with %d arguments at %04X" % (argc, a))

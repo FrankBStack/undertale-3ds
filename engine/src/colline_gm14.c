@@ -150,4 +150,83 @@ COLLINE14_LATE void Colline14_registerAll(VMContext* ctx) {
     colline14Previous.makeColorRgb = colline14Replace(ctx, colline14NameMakeColorRgb, builtin_make_color_rgb_gm14);
 }
 
+#if defined(__3DS__)
+// ===[ selfVars presize       creddodge, 10-31) ]===
+// A credits-dodger bullet's Create event makes 11 stores, and its selfVars map grows from nothing to 8 entries and then
+// to 16 under them: two allocations, two fills, a 6-entry rehash and a free per bullet, 20-24 bullets per spawn.
+// Each object's map size when its last instance was freed is kept here (log2 of the capacity, 4 bits per object, the
+// first 2048 objects), and a new instance of that object starts with an empty map of that capacity.
+//
+// Exact: the map holds the same keys and values either way; only the slot each key sits in can differ (the table's
+// size picks it), which changes nothing UNDERTALE can see. Nothing in UNDERTALE walks an instance's variables in slot
+// order: it calls none of instance_copy, variable_instance_get_names, struct_get_names or instance_create_layer, the
+// runner's reference clears give the same result in any order, the identity state hash sums its entries, and the
+// state dumps are F12 debug only       creddodge, lever 3 proof). A map that would pass a load of 0.75 still grows as
+// before. A failed allocation leaves the map empty, as without this.
+#define CD_CAP_OBJECTS 2048
+static uint8_t cdCapLog2[CD_CAP_OBJECTS / 2] __attribute__((section(".bss.cdcap_late")));
+// selfVars table reuse       creddodge p23 lever 1, 11-01): a freed instance's table of 8, 16 or 32 entries is kept
+// (up to CD_POOL_DEPTH a size) instead of freed, its values freed as IntRValueHashMap_freeAllValues frees them, and the
+// next new instance of an object whose last map had that size takes it, filled with the empty key as a fresh one is.
+// The tables are malloc's own blocks of the same size, so nothing but which block an instance gets changes; at most
+// CD_POOL_DEPTH x (8 + 16 + 32) entries (32 KiB) stay allocated between rooms.
+#define CD_POOL_MIN 3
+#define CD_POOL_MAX 5
+#define CD_POOL_DEPTH 24
+static IntRValueEntry* cdPool[CD_POOL_MAX - CD_POOL_MIN + 1][CD_POOL_DEPTH] __attribute__((section(".bss.cdcap_late")));
+static uint8_t cdPoolCount[CD_POOL_MAX - CD_POOL_MIN + 1] __attribute__((section(".bss.cdcap_late")));
+
+__attribute__((noinline, noipa, optimize("Os"), section(".cdcap_late"))) Instance* cdInstanceCreate(uint32_t instanceId, int32_t objectIndex,
+                                                                                                   GMLReal x, GMLReal y) {
+    Instance* inst = Instance_create(instanceId, objectIndex, x, y);
+    uint32_t object = (uint32_t) objectIndex;
+    if (CD_CAP_OBJECTS > object) {
+        uint32_t k = (uint32_t) (cdCapLog2[object / 2] >> (object % 2 * 4)) & 15u;
+        if (k != 0) {
+            uint32_t capacity = 1u << k;
+            IntRValueEntry* entries = nullptr;
+            if (k >= CD_POOL_MIN && CD_POOL_MAX >= k && cdPoolCount[k - CD_POOL_MIN] != 0)
+                entries = cdPool[k - CD_POOL_MIN][--cdPoolCount[k - CD_POOL_MIN]];
+            else
+                entries = (IntRValueEntry*) malloc(capacity * sizeof(IntRValueEntry));
+            if (entries != nullptr) {
+                memset(entries, 0xFF, capacity * sizeof(IntRValueEntry)); // every key the empty sentinel, as allocEmpty
+                inst->selfVars.entries = entries;
+                inst->selfVars.capacity = capacity;
+                inst->selfVars.mask = capacity - 1;
+                inst->selfVars.count = 0;
+            }
+        }
+    }
+    return inst;
+}
+
+__attribute__((noinline, noipa, optimize("Os"), section(".cdcap_late"))) void cdFreeSelfVars(IntRValueHashMap* map) {
+    const Instance* inst = (const Instance*) (const void*) ((const char*) map - offsetof(Instance, selfVars));
+    uint32_t object = (uint32_t) inst->objectIndex, capacity = map->capacity, k = 0;
+    if (CD_CAP_OBJECTS > object) {
+        while (capacity > 1u) {
+            capacity >>= 1;
+            k++;
+        }
+        if (k > 15) k = 0; // past 32,768 entries: start empty
+        uint8_t* cell = &cdCapLog2[object / 2];
+        uint32_t shift = object % 2 * 4;
+        *cell = (uint8_t) ((*cell & ~(15u << shift)) | (k << shift));
+        if (map->entries != nullptr && k >= CD_POOL_MIN && CD_POOL_MAX >= k && CD_POOL_DEPTH > cdPoolCount[k - CD_POOL_MIN]) {
+            for (uint32_t i = 0; map->capacity > i; i++) {
+                if (map->entries[i].key != INT_RVALUE_HASHMAP_EMPTY_KEY) RValue_free(&map->entries[i].value);
+            }
+            cdPool[k - CD_POOL_MIN][cdPoolCount[k - CD_POOL_MIN]++] = map->entries;
+            map->entries = nullptr;
+            map->capacity = 0;
+            map->mask = 0;
+            map->count = 0;
+            return;
+        }
+    }
+    IntRValueHashMap_freeAllValues(map);
+}
+#endif
+
 #endif /* ENABLE_WAD16 */

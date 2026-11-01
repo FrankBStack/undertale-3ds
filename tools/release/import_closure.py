@@ -29,7 +29,9 @@ GAME_ONLY = {'tools/aot/pixgrid.py': 'undertale', 'tools/aot/btnprompt_build.py'
              # flowfull's chapter-5 code plan (build.sh flowcode, DELTARUNE New only).
              'tools/roomplan/build_flowcode.py': 'deltarune',
              # offkill's early-destroy entries (build.sh runs it for UNDERTALE only; pipeline.py's source_wanted agrees).
-             'tools/aot/offkill.py': 'undertale'}
+             'tools/aot/offkill.py': 'undertale',
+             # the dialogue script's case table (build.sh runs it for UNDERTALE Old only; pipeline.py's source_wanted agrees).
+             'tools/aot/textcase.py': 'undertale'}
 GAME_ONLY.update({
     'tools/audio/' + name: 'undertale' for name in
     ('sfxpack.py',)})

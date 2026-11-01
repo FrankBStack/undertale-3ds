@@ -425,6 +425,8 @@ platform/3ds/source/z_builderx_review.c
 platform/3ds/source/z_chapterleak.c
 platform/3ds/source/z_freewins.c
 platform/3ds/source/z_leavekeep.c
+# argbind: argui's per-load pointers at a chapter switch (DELTARUNE only; compiles empty for UNDERTALE)
+platform/3ds/source/z_argbind.c
 platform/3ds/source/z_loadscreen.c
 platform/3ds/source/z_roomload.c
 platform/3ds/source/z_roomload_trace.c
@@ -916,6 +918,13 @@ tools/release/licenses/bannertool-MIT.txt
 platform/3ds/source/z_offkill.c
 tools/aot/offkill.py
 tools/aot/test_offkill.py
+# textcase       codeclose, lever 1): the dialogue script's switch jumps straight to its case (UNDERTALE Old only) and
+# its builder table
+platform/3ds/source/z_textcase.c
+tools/aot/textcase.py
+tools/aot/test_textcase.py
+# writerfirst       codeclose, lever 2): a text writer's first Draw takes writerfront's front (UNDERTALE Old only)
+platform/3ds/source/z_writerfirst.c
 
 # freebies restart preload: restarting the room into another planned scene gets the room load (UNDERTALE only;
 # compiled empty for DELTARUNE, listed for the build inputs)
@@ -947,3 +956,17 @@ tools/buildcache/test_fpsbox_compile.py
 platform/3ds/source/z_labcut.c
 tools/buildcache/labcut_compile.py
 engine/src/z_utrect.c
+# depthmove: runner.c includes its macros (the original code without CTRPORT_DEPTHMOVE); z_depthmove.c is DELTARUNE only
+engine/src/z_depthmove.h
+# knsurf: ctr_renderer.c always includes it (the body is DELTARUNE New only, under CTRPORT_KNSURF)
+platform/3ds/source/ctr_renderer_knsurf.inc
+# drpix: ctr_renderer.c's OBJECT_DEPENDS names it on every target; only the Old DELTARUNE helper pass includes its body
+platform/3ds/source/drpix_replay.inc
+
+tools/release/check_kit_hygiene.py
+
+tools/release/test_kit_hygiene.py
+
+tools/release/export_scrub.py
+
+tools/release/test_export_scrub.py

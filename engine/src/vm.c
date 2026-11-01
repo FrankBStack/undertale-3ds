@@ -5833,3 +5833,24 @@ bool VM_aotBindFront(VMContext* ctx, int32_t codeIndex, AotFn fn) {
 #endif
 }
 #endif
+
+// writerfirst       codeclose, lever 2; UNDERTALE Old 3DS writerfront builds, CMakeLists.txt): the function bound to a
+// code entry in this context (platform/3ds/source/z_writerfirst.c wraps the one writerfront bound), or nullptr for an
+// entry not looked up yet (AOT_UNBOUND), interpreted, outside the context bound now, with generated code off (BS_AOT=0)
+// and in tracing or stress builds. Reads aotDispatch's binding array only. Late text at the list's end, so nothing in
+// this file moves.
+#if defined(CTRPORT_WRITERFRONT) && defined(CTRPORT_DODGEFRONT) && defined(VM_AOT_ENABLED) && defined(__3DS__)
+AotFn VM_aotBoundFn(VMContext* ctx, int32_t codeIndex) __attribute__((noinline, optimize("Os"), section(".text.codeclose_wf_late")));
+AotFn VM_aotBoundFn(VMContext* ctx, int32_t codeIndex) {
+#if defined(ENABLE_VM_TRACING) || defined(CTRPORT_AOT_STRESS)
+    (void) ctx;
+    (void) codeIndex;
+    return nullptr;
+#else
+    if (aotEnabled != 1 || aotBoundCtx != ctx || aotBound == nullptr || 0 > codeIndex || (uint32_t) codeIndex >= aotBoundCount)
+        return nullptr;
+    AotFn now = aotBound[codeIndex];
+    return now == AOT_UNBOUND ? nullptr : now;
+#endif
+}
+#endif

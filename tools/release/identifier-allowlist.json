@@ -96,7 +96,7 @@
     {
       "member": "engine/src/bench_script.c",
       "class": "engine-lookups",
-      "sha256": "17756fa7989dac9c16f62c8a6efff406f97e13240ad96bef33ba211edb0bb855",
+      "sha256": "103229e3debf9cb1909d675e3daaaea320e431d3c548d7f8d2ce80b3e674de1f",
       "justification": "Encounter setup entry names connect the harness to the players own code.",
       "evidence_sha256": [
         "0760bbc2b1799bf21d2ef06414d39986c47438e02b912f107a22c33f99c73ead"
@@ -114,7 +114,7 @@
     {
       "member": "engine/src/runner.c",
       "class": "engine-lookups",
-      "sha256": "491e6c5455d031a270c283b84d2bb29eddb3f8039a5784300992981b092f1499",
+      "sha256": "af240c11217094e5eee5c40a3e817b777df1de3159a94f490af364aff82fb941",
       "justification": "Object and variable lookup examples explain runner initialization and dispatch.",
       "evidence_sha256": [
         "e21b4a0970f25e43698b263730323baeaa930e9907f1661a433985a117c25dc1"
@@ -123,7 +123,7 @@
     {
       "member": "engine/src/vm.h",
       "class": "engine-lookups",
-      "sha256": "5c7490c3d4ac69c3e6bb5031f8b1d241b5f73d8b0ff459485a7b0c53684ad57d",
+      "sha256": "c99651bad78f438894410f01a7e83f1d5c047dc32167e211e2fcf3e359ce042a",
       "justification": "Player object examples document VM lookup semantics; restart is an engine sentinel.",
       "evidence_sha256": [
         "294b925c3b32d700e9a62b46f3d7ed3e88141d58ba496ce20769b5ee0d04182f"
@@ -150,7 +150,7 @@
     {
       "member": "platform/3ds/source/ctr_benchmark.c",
       "class": "engine-lookups",
-      "sha256": "4b640cbd5735febe01d89cde222fa43347f4b186f994926f5c0c42711dab7d29",
+      "sha256": "4a8c94602f9654e16eedf6f752c9f5ccafc17dd3cd08e14c27b4f74221c6dc94",
       "justification": "Room, object and script lookup names select harness setup in player data.",
       "evidence_sha256": [
         "2b5bc4fa300c8eb091e9e80ba7df656563bd895c75a5e7b06f4a4104ea59a29b"
@@ -177,7 +177,7 @@
     {
       "member": "platform/3ds/source/ctr_renderer.c",
       "class": "engine-lookups",
-      "sha256": "498e8784106c6b98f2364998eba44b7bb903f3147b049d6d791a59947867128b",
+      "sha256": "8cd7ba60155f13697cd07dc22e8899a2f8c3ee8ba31b176a946a5450b469b11a",
       "justification": "Shader, object and sprite lookup names select renderer compatibility paths.",
       "evidence_sha256": [
         "b47ae0eeb50b4a01adfe2722ac27cb04c8fa69e3e88b357925af0ed56f2163c2"
@@ -195,7 +195,7 @@
     {
       "member": "platform/3ds/source/ctr_texture_pack.c",
       "class": "engine-lookups",
-      "sha256": "4e2a3aacb96511b7d84d599c4166fd9309823a8cad2b2debb1ddb27767c5455e",
+      "sha256": "7ad55be5cb005b2bda2461f7fc501aa691356c07f98b8189fd2ae3d1e30ceb01",
       "justification": "A sprite lookup selects the texture-pack compatibility case.",
       "evidence_sha256": [
         "6c4a3a5434e8566594b6dfb3ce629fd3f6955d09dcd790a2fb1ced45df27eea0"
@@ -222,7 +222,7 @@
     {
       "member": "tools/release/test_builder.py",
       "class": "engine-lookups",
-      "sha256": "5c1bb7ab9a59283e53f8128de30d7c2e3d7684757c69827c084dd5296de103b2",
+      "sha256": "dc44115db3c946847bd1c4123ab734a4ca414f82fa39a90e8ee10f55dc334423",
       "justification": "Existing synthetic compiler/music fixtures and player cursor lookup; new tests only require private generator source closure in the exported builder.",
       "evidence_sha256": [
         "e1013ccac9297ff1f3205e0d2e1e0966f75c9b7b570515dedc2026aba40ade7b"
@@ -253,6 +253,15 @@
       "justification": "Sound and sprite names select player-owned assets for the ports menu.",
       "evidence_sha256": [
         "b291957bba88a74d17ab4095454e6e9a3189d316481440f59df566a2938d9439"
+      ]
+    },
+    {
+      "member": "platform/3ds/source/z_argbind.c",
+      "class": "engine-lookups",
+      "sha256": "19c13048ae2a98b09b3ba2df988dd345191c93416c174089ac2560e555a983f7",
+      "justification": "The same sound and sprite names as ctr_argui.c select player-owned assets for the ports menu at a chapter switch.",
+      "evidence_sha256": [
+        "31ba8b4878770cbf4befdf9c21c804914280c149415195faf852be155e8b1b3b"
       ]
     },
     {
@@ -429,7 +438,7 @@
     {
       "member": "tools/aot/typed.py",
       "class": "engine-symbols",
-      "sha256": "674ed4269f647e87e54ece5d8e508420cbc1b3018bbc8860846a08702143a5cc",
+      "sha256": "b3db04049d4eea63d04e5fef39fc4d4f4dbffd91d9023caaa29bfd2b0da3ed71",
       "justification": "Reviewed parser limits, format fields, settings or upstream APIs; prefix overlap is not a game asset.",
       "evidence_sha256": [
         "51c9dd43dc11e9049fb863de83ba823301dd555bf882dc29e5025d2b3b86f50a"
@@ -456,7 +465,7 @@
     {
       "member": "tools/release/test_texcache.py",
       "class": "gating-hashes",
-      "sha256": "7376f6b6e598f6457abdaaebd47e427adae9724df3b7262de974aa78a82c4b84",
+      "sha256": "1977ce63d0fa2580041195435cf6e789685998194ff7dd709363c2e181021422",
       "justification": "A known player-data digest tests compile-time cache profile selection with fixture input.",
       "evidence_sha256": [
         "dcf99176f5beeab6da7c76142996000867d039c9fffd11c97f64eb2640957c09"
@@ -483,7 +492,7 @@
     {
       "member": "tools/roomplan/codeclose.py",
       "class": "roomplan-tool",
-      "sha256": "75b6c07b0ef7fd59d51ee857b24e4e1e94b5d022532b03ee311b0ea633ac6108",
+      "sha256": "19d0acac5b6fc66479e6ad5fa2aa15e7f3672d96393f39c5d79b8c8e6745814c",
       "justification": "Roomplan schema fields, format limits and lookup names build hash-gated plans from player data.",
       "evidence_sha256": [
         "887901727aae7998b779134ddc951affc5e53468942fa70cadfded6278847b5d"
@@ -501,7 +510,7 @@
     {
       "member": "tools/roomplan/records/deltarune-steam-0.0.253-chapter1.json",
       "class": "roomplan-record",
-      "sha256": "35bdc079f8fca46df80540fed1c3fe7cd792c3f964a714cf30523818ed1ab168",
+      "sha256": "93d7d6d7b620e81a8451420869cb212bcebb30e46b554603ab2ce31a4bc94e55",
       "justification": "Owner-approved hash-gated indices and source rectangles recorded during our own playthroughs.",
       "evidence_sha256": [
         "b4368b910f1a035919e541f294d0ebcdee6835239eb13f61a5151fa9e7fbc9a8",
@@ -551,7 +560,7 @@
     {
       "member": "tools/roomplan/records/undertale-steam-1.08.json",
       "class": "roomplan-record",
-      "sha256": "9830d98bd15b41f80ca8d3cf4897395e751ee5e0ec062328a7231b40b5c31774",
+      "sha256": "f118cb63922cb52ce760fd445065393dd89553a1a0a86be0e82332290bd458f1",
       "justification": "Owner-approved hash-gated indices and source rectangles recorded during our own playthroughs.",
       "evidence_sha256": [
         "dcf99176f5beeab6da7c76142996000867d039c9fffd11c97f64eb2640957c09",
@@ -751,7 +760,7 @@
     {
       "member": "tools/roomplan/records/undertale-gog-1.08.json",
       "class": "roomplan-record",
-      "sha256": "edcb544c9e8c090b540e0ce8a70bbb0dbeba0e5a8119173653fb84566cd2bc1a",
+      "sha256": "67b279816bcfdaac3d5dd21041fd34ff53466e7499c6f2afeddb74e752db4085",
       "justification": "Lead-approved GOG hash-gated record, reprojecting our recorded playthrough indices through equal metadata and RGBA.",
       "evidence_sha256": [
         "ea1289ef94f5f714e142d7cb8c4e851dc4326e625c48c21bb9639130497f6b5e",
@@ -804,7 +813,7 @@
       "evidence_sha256": [
         "ec6d5c493df4c8b53e57dd4a2ce27ce563d52ee9ccf95083c9135cec002574aa"
       ],
-      "sha256": "ab4c4bbf3850443743e0299c7425bc2d26b861c89aeb806261073e3a6e2c3dff"
+      "sha256": "8671ceb326415bb4355b8c7ece8569a6b6766c74965197d5da692d9610e83843"
     },
     {
       "member": "tools/aot/stpack.py",
@@ -902,7 +911,7 @@
     {
       "member": "platform/3ds/source/z_knightnew_history.c",
       "class": "engine-lookups",
-      "sha256": "32bd512d211e1d432626820a04e0053349e8391a417b3bfebedc6a185527b762",
+      "sha256": "c5ad2cd35bb75394e16889ead6035a6ab0635b2092957d9d526c7c7066d36e00",
       "justification": "integrate21 2026-10-26 (knightnew GPU-1), approved by the lead 2026-10-27: two object names and one room name find the player's own Knight roar afterimages and its room so the afterimage history copy runs only there (DELTARUNE New only; not packaged with UNDERTALE).",
       "evidence_sha256": [
         "0c7396112965c282728467b2ffeb2b0118f3229afe2666b18639c6fb0775f2a4"

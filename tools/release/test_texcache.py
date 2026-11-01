@@ -207,8 +207,22 @@ class SourcesDigest(unittest.TestCase):
 
     @unittest.skipUnless(real_binary(), "no texprep binary (TEXPREP_TEST_BINARY)")
     def test_real_binary_matches_this_tree(self):
-        ok, why = sources.check(ROOT, real_binary())
-        self.assertTrue(ok, why)
+        # The shipped binary is built from checked distribution copies. The
+        # development headers retain their comments; compare the same view the
+        # packer emits, without changing or weakening the source digest scheme.
+        import importlib.util
+        spec = importlib.util.spec_from_file_location("distribution_scrub", Path(__file__).with_name("export_scrub.py"))
+        scrub = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(scrub)
+        _, rels = sources.read_binary_sources(real_binary())
+        with tempfile.TemporaryDirectory() as tmp:
+            for rel in rels:
+                original = Path(ROOT) / rel
+                exported = Path(tmp) / rel
+                exported.parent.mkdir(parents=True, exist_ok=True)
+                exported.write_bytes(scrub.scrub_member(rel, original.read_bytes()))
+            ok, why = sources.check(tmp, real_binary())
+            self.assertTrue(ok, why)
 
 
 class FindTool(unittest.TestCase):

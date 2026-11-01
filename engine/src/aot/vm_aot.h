@@ -446,13 +446,63 @@ extern bool aotGrew;
 // when the pointer is nullptr. Sets aotGrew.
 RValue* aotSlotWrite(VMContext* ctx, int32_t instanceType, int32_t varID);
 
-// aotArrayRead's full read, for the elements its common case leaves out. It is cold, so the compiler keeps it out of
-// the hot code.
+// aotArrayRead's full read, for the elements its common case leaves out: GMLArray_getOnArrayRef(slot, index) into dst
+// as a Push.v value (a weak copy of the cell, else undefined). It is cold, so the compiler keeps it out of the hot code
+// and builds it for size, which made the legacy split (index / 32000, index % 32000, GMLArray_slot) a call to
+// __aeabi_idivmod: every 2D read in a UT game (a[i, j] is index i * 32000 + j, row i > 0) went through libgcc's
+// software divide. The split is a multiply here: for 0 <= index < 2^32, index / 32000 is (index * 0x10624DD3) >> 43
+// exactly (0x10624DD3 * 32000 - 2^43 = 1,792, and 1,792 * 2^32 < 2^43), and row 0 (index < 32000) gives row 0, col
+// index, as GMLArray_slot's own fast path. Everything else is GMLArray_getOnArrayRef's: a non-array slot, a negative
+// index, a row past rowCount or a column past the row's length read undefined; no copy-on-write or ownership changes
+// (a read takes a weak view: ownsReference false); a modern array (an array of arrays' inner ones in a WAD 17 game)
+// is flat. aotArrayGetSplit keeps GMLArray_getOnArrayRef's shape (an inline call returning the RValue): written
+// flat in aotArrayReadFull, the body was 24 B shorter but GCC emitted it earlier in each unit, which moved the hot
+// helpers before it (aotPushVarFast, aotPopVarFast, ...) by 0x210 B.
+// Set-neutral placement (dec-1031-setphase): aotArrayReadFull's section stays the 0x16C bytes of the divide version
+// in every AOT unit, so no later function moves and no 4 KiB L1 set phase changes. The pad is subsection 1 of the
+// function's own section, which the assembler puts after the code: the section keeps its place among the unit's
+// sections and exists only where the function does. check_layout and setphase.py catch a body whose size changes
+// (another compiler): the pad is then 0x16C minus the new size.
+// Only a build that can load a GameMaker 1 game (WAD 14/16) has legacy arrays. A WAD 17-only build (DELTARUNE, whose
+// chapter modules compile the units with other flags, so the body sizes vary) keeps the old body and its exact bytes.
+#if defined(ENABLE_WAD14) || defined(ENABLE_WAD16)
+#if defined(__3DS__) && !defined(AOT_ARRAYREADFULL_PAD)
+#define AOT_ARRAYREADFULL_PAD "0x28" // 0x16C - 0x144, the body with devkitARM's GCC and the 3DS flags
+#endif
+// GMLArray_getOnArrayRef with the legacy split as a multiply (see aotArrayReadFull).
+static inline __attribute__((unused)) RValue aotArrayGetSplit(RValue* arrayRef, int32_t index) {
+    if (arrayRef->type != RVALUE_ARRAY || arrayRef->array == nullptr || 0 > index) return RValue_makeUndefined();
+    const GMLArray* arr = arrayRef->array;
+    const RValue* cell = nullptr;
+    if (arr->type == GML_LEGACY_ARRAY) {
+        uint32_t row = (uint32_t) (((uint64_t) (uint32_t) index * 0x10624DD3u) >> 43);
+        uint32_t col = (uint32_t) index - row * GML_LEGACY_ARRAY_STRIDE;
+        if ((int32_t) row < arr->legacy.rowCount && (int32_t) col < arr->legacy.rows[row].length)
+            cell = &arr->legacy.rows[row].data[col];
+    } else if (index < arr->modern.length) {
+        cell = &arr->modern.data[index];
+    }
+    if (cell == nullptr) return RValue_makeUndefined();
+    RValue result = *cell;
+    result.ownsReference = false;
+    return result;
+}
+static NOINLINE __attribute__((unused, cold)) void aotArrayReadFull(RValue* dst, RValue* slot, const RValue* index) {
+#ifdef AOT_ARRAYREADFULL_PAD
+    __asm__ volatile(".subsection 1\n\t.space " AOT_ARRAYREADFULL_PAD "\n\t.subsection 0");
+#endif
+    RValue v = aotArrayGetSplit(slot, vmToInt32Fast(index));
+    *dst = v;
+    dst->gmlStackType = GML_TYPE_VARIABLE;
+}
+#else
 static NOINLINE __attribute__((unused, cold)) void aotArrayReadFull(RValue* dst, RValue* slot, const RValue* index) {
     RValue v = GMLArray_getOnArrayRef(slot, vmToInt32Fast(index));
     *dst = v;
     dst->gmlStackType = GML_TYPE_VARIABLE;
 }
+#endif
+#line 439
 
 // The cell at index in the array in slot, when that is aotArrayRead's common case: an int32 index within the length of
 // an array of the kind the game makes (a GameMaker 2.3 array in a WAD 17 game, else a GameMaker 1 array's first row).

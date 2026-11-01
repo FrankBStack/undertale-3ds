@@ -287,7 +287,8 @@ void CtrRenderer_leaveForExit(Renderer* renderer);
     static void e5xDrawTextColor(Renderer* renderer, const char* text, float x, float y, float xscale, float yscale, float angleDeg, int32_t c1,     \
                                  int32_t c2, int32_t c3, int32_t c4, float alpha, float lineSeparation);                                             \
     static void e5xDrawSpriteTiled(Renderer* renderer, int32_t tpagIndex, float originX, float originY, float x, float y, float xscale,              \
-                                   float yscale, bool tileX, bool tileY, float roomW, float roomH, uint32_t color, float alpha);
+                                   float yscale, bool tileX, bool tileY, float roomW, float roomH, uint32_t color, float alpha); \
+    KGL_DECLARE
 
 
 // UNDERTALE's console prompts (z_btnprompt_ctr.c): CtrRenderer_setDisplay and CtrDisplay_saveEdits, then the prompts
@@ -309,6 +310,36 @@ void CtrSurfaceCensus_install(Renderer* renderer);
 #define UTK_DRAW_SPRITE utkDrawSprite
 #else
 #define UTK_DRAW_SPRITE ctrDrawSprite
+#endif
+
+// Lazy blend and fog state       knightgpu O9; end of ctr_renderer.c). Which builds get it is one CMake condition
+// (CTRPORT_KNIGHTGPU_LAZY's): DELTARUNE New now. ctrVtable's four state
+// setters become kglL_ ones (KGL_SET) that may hold the change while the open batch stays open, and every other entry
+// that can reach the renderer's state is reached through kglC_ check stubs (KGL_CHK) that first put held changes in,
+// as the setters would have. E5X_OPAQUE's draws are checked the same way. Elsewhere both are the plain function, so
+// no other build's code changes. The kglL_ prototypes come in E5X_DECLARE, so no line of ctr_renderer.c moves.
+#ifdef CTRPORT_KNIGHTGPU_LAZY_ON
+#define KGL_NAME_(fn) kglC_##fn
+#define KGL_NAME(fn) KGL_NAME_(fn)
+#define KGL_CHK(fn) ({ extern __typeof__(fn) KGL_NAME(fn); &KGL_NAME(fn); })
+// SKIP_WRAPPERS' normals also fill vine_new_retain.inc's file-scope table, where no statement expression goes: their
+// stubs are declared in E5X_DECLARE (KGL_DECLARE), just before SKIP_WRAPPERS, and named plainly (KGL_CHKS).
+#define KGL_CHKS(fn) KGL_NAME(fn)
+#define KGL_SET(fn) kglL_##fn
+#define KGL_SKIPDECL(fn) extern __typeof__(fn) KGL_NAME(fn);
+// The four setters (asm, ctr_renderer.c's end), by the eager ones' prototypes (E5X_DECLARE comes after them).
+#define KGL_SETDECL(fn) extern __typeof__(fn) kglL_##fn;
+#define KGL_DECLARE                                                                                                  \
+    KGL_SKIPDECL(ctrDrawLines) KGL_SKIPDECL(ctrPrimitiveEnd) KGL_SKIPDECL(ctrDrawVertexBuffer)                       \
+    KGL_SKIPDECL(ctrClearScreen) KGL_SKIPDECL(ctrDrawSurface) KGL_SKIPDECL(ctrDrawSurfaceColor)                      \
+    KGL_SKIPDECL(ctrDrawSurfaceTiled) KGL_SKIPDECL(ctrSurfaceCopy) KGL_SKIPDECL(ctrCreateSpriteFromSurface)          \
+    KGL_SETDECL(ctrGpuSetBlendMode) KGL_SETDECL(ctrGpuSetBlendModeExt) KGL_SETDECL(ctrGpuSetBlendEnable)              \
+    KGL_SETDECL(ctrGpuSetFog)
+#else
+#define KGL_CHK(fn) fn
+#define KGL_CHKS(fn) fn
+#define KGL_SET(fn) fn
+#define KGL_DECLARE
 #endif
 
 #endif

@@ -416,7 +416,7 @@ struct CtrAudioSystem {
     volatile bool loaderQuit;
 
     // Game thread statistics.
-    u64 frameTicks; // audio work since the last update() returned
+    u64 frameTicks; // audio work since the last update() returned; the [audio] "game ms/frame" figure. From stage 75zk (sndcut) UNDERTALE's stops and deferred burst plays are not in it
     u64 windowTicks, windowMaxFrameTicks;
     u64 windowLoadTicks;
     u64 windowStart;
@@ -3096,7 +3096,7 @@ __attribute__((noinline, section(".text.pcmwait_late"))) static void pcmWaitUpda
     .setSoundSpatial = ctrSetSoundSpatial,
     .setSoundEmitterGain = ctrSetSoundEmitterGain,
     .setListenerPosition = ctrSetListenerPosition,
-    .stopSound = ctrStopSound,
+    .stopSound = CTR_STOP_ENTRY,
     .stopAll = ctrStopAll,
     .isPlaying = ctrIsPlaying,
     .pauseSound = ctrPauseSound,
@@ -5576,7 +5576,6 @@ __attribute__((noinline, optimize("Os"), section(".text.flowburst_late"))) stati
         if (flowendDeferred != 0) flowendStartDeferred(ca); // a miss here may evict (buildSfx)
         return ctrPlaySound(audio, soundIndex, priority, loop);
     }
-    u64 t0 = svcGetSystemTick();
     ca->windowPlays++;
     int32_t id = -1;
     int vi = flowendClaimVoice(ca, priority);
@@ -5606,7 +5605,7 @@ __attribute__((noinline, optimize("Os"), section(".text.flowburst_late"))) stati
         c->lastUse = ++ca->useClock;
         c->lastPlayTick = svcGetSystemTick();
     }
-    ca->frameTicks += svcGetSystemTick() - t0;
+    __asm__ volatile(".rept 14; nop; .endr"); // sndcut: no frameTicks (end of file); the same size, so nothing moves
     return id;
 }
 
@@ -7402,4 +7401,23 @@ __attribute__((noinline, section(".text.usstop_exit"))) void __wrap_svcExitProce
 #include "ctr_renderer.h"
 #include "ctr_wrap_chain.h"
 #include "ctr_loadaudio_mix.inc"
+#endif
+
+#if defined(ENABLE_WAD16)
+// sndcut (UNDERTALE): the vtable's stopSound, ctrStopSound's loop with voiceLive's free-voice test in line. A free
+// voice is skipped without the call (voiceLive returns false for it and changes nothing); every other voice goes
+// through voiceLive, which retires a finished one, then the same match, in the same order. A burst stops and replays
+// the same sounds about 60 times in one step, so this and flowendPlaySound's deferred play leave out the frameTicks
+// pair (two kernel calls each): the [audio] line's game time no longer counts them. ctrStopSound stays for
+// DELTARUNE; the pointer keeps it, unchanged, in UNDERTALE's early text.
+__attribute__((used, section(".rodata.sndcut_in_text"))) static void (*const sndcutKeep)(AudioSystem*, int32_t) = ctrStopSound;
+__attribute__((noinline, optimize("Os"), section(".text.sndcut_late"))) static void sndcutStopSound(AudioSystem* audio, int32_t soundOrInstance) {
+    CtrAudioSystem* ca = (CtrAudioSystem*) audio;
+    bool instance = isInstanceId(soundOrInstance);
+    for (int i = 0; i < VOICE_COUNT; i++) {
+        const Voice* v = &ca->voices[i];
+        if (v->kind == VOICE_FREE || !voiceLive(ca, i)) continue;
+        if ((instance ? v->instanceId : v->soundIndex) == soundOrInstance) stopVoice(ca, i);
+    }
+}
 #endif

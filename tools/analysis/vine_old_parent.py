@@ -13,7 +13,8 @@ INTERNAL = ('flushBatch', 'applyTexEnv', 'queueTextureCopy', 'clearBoundTarget',
             'ctrDrawSpritePartColor', 'ctrDrawSpriteTiled', 'ctrDrawSpritePos')
 EXTERNAL = ('C3D_SetViewport', 'C3D_SetScissor', 'C3D_FrameDrawOn', 'C3D_FrameBufClear')
 ENTRIES = INTERNAL + EXTERNAL
-# Calls routed inside one function only: (function, callee, target, calls expected there).
+# Calls routed inside one function only: (function, callee, target, calls expected there,
+# optional branch mnemonic). Existing entries qualify calls; drpix qualifies one tail branch.
 SCOPED = ()
 
 
@@ -32,11 +33,14 @@ def route(text):
         text, pointers = re.subn(pattern, lambda m: m[1]+target+m[2], text)
         assert branches+pointers, ('No uses', name)
         counts[name] = dict(branches=branches, pointers=pointers)
-    for scope, name, target, expected in SCOPED:
+    for entry in SCOPED:
+        scope, name, target, expected = entry[:4]
+        branch = entry[4] if len(entry) == 5 else 'bl'
+        assert branch in ('b', 'bl'), entry
         found = list(re.finditer(r'(?ms)^'+re.escape(scope)+r':\r?\n.*?^\s*\.size\s+'+re.escape(scope)+r',\s*\.-'+re.escape(scope)+r'\s*$', text))
         assert len(found) == 1, ('Scope', scope)
         body = found[0][0]
-        pattern = r'(?m)^([ \t]+bl'+extract.CONDITION+r'[ \t]+)'+name+r'(\(PLT\))?([ \t]*(?:@[^\n]*)?)$'
+        pattern = r'(?m)^([ \t]+'+branch+extract.CONDITION+r'[ \t]+)'+name+r'(\(PLT\))?([ \t]*(?:@[^\n]*)?)$'
         routed, branches = re.subn(pattern, lambda m: m[1]+target+(m[2] or '')+m[3], body)
         assert branches == expected, ('Scoped calls', scope, name, branches)
         text = text[:found[0].start()]+routed+text[found[0].end():]

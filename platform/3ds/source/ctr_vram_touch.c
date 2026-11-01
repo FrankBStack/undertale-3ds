@@ -82,3 +82,11 @@ bool __wrap_CtrTextures_addMirror(CtrTextureCache* cache, CtrTile* tile, void* v
 // climbnoise: the tower textures' Azahar test (vine_new_retain.inc, cnTowerFree) reads the same cached flag through
 // this alias of vramTouchOn, so this file's code and statics stay as they were.
 __asm__(".globl CtrVramTouch_emulator\n.type CtrVramTouch_emulator, %function\n.set CtrVramTouch_emulator, vramTouchOn\n");
+
+#ifdef CTRPORT_KNIGHTGPU_COMPACT_ON
+// Knight GPU A       knightgpu): a surface moved within VRAM (ctr_renderer.c's kgcRun) and a spilled surface moved
+// into a gap the moves made (kgcPromote) take VRAM through CtrMemory_vramMoveTo and CtrMemory_vramAllocNow, which
+// libctru's allocator serves directly, so they are touched through this alias of vramTouch (code and statics as they
+// were). Without it, a later GX copy out of a moved surface returned dead surfaces' pixels in Azahar's full DR44.
+__asm__(".globl CtrVramTouch_touch\n.type CtrVramTouch_touch, %function\n.set CtrVramTouch_touch, vramTouch\n");
+#endif

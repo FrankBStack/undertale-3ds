@@ -105,10 +105,13 @@ class CodeClosure:
             blob_group[a] = group
             start.setdefault(group, a)
             self.group_size[group] = max(self.group_size.get(group, 0), a + n - start[group])
-        self.code_group = [blob_group[c['abs']] if c is not None and c['length'] else None for c in code]
-        self.group_rep = {}
+        # An empty entry (length 0, an event with no code) sits at the start of another entry's blob, and the engine
+        # still reads that blob's group the first time it runs (DataWin_loadCodeBytes checks only `present`): it gets
+        # that group (UT 1.08: 120 entries; a cast-roll step event was read in play, uthunt 10-31).
+        self.code_group = [blob_group.get(c['abs']) if c is not None else None for c in code]
+        self.group_rep = {}  # a group's lowest entry with bytes: what a plan lists
         for c, grp in enumerate(self.code_group):
-            if grp is not None and grp not in self.group_rep:
+            if grp is not None and grp not in self.group_rep and code[c]['length']:
                 self.group_rep[grp] = c
         # Each entry's spawn targets and constant stores; the object that owns it.
         funcs = [f['name'] for f in dw.funcs]

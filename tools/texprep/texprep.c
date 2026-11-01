@@ -9,7 +9,8 @@
 //
 // The console's texture preparation (ctr_texture_pack.c) is included whole, unchanged, so the driver can point
 // its cache folder somewhere other than beside data.win (the player's game folder stays read-only). Nothing
-// below converts, compresses or writes a texture: the console code does all of that.
+// below changes formats, compression or the cache ABI. The one host-only input correction clears hidden RGB
+// in the normal Final Froggit head; see tools/lanes/results/redpix.md for its alpha-blend use audit.
 
 // Declarations the console code expects from newlib, where the host's C library spells them differently.
 #ifdef _WIN32
@@ -35,7 +36,13 @@ static int texprep_mkdir(const char* path, int mode) {
 #define __real_CtrPackWorker_poll CtrPackWorker_poll
 #define __real_CtrPack_isComplete CtrPack_isComplete
 #define __real_CtrPackWorker_setKeepPacked CtrPackWorker_setKeepPacked
+// Intercept the PNG strip before format selection. This translation unit alone contains the hook: console
+// preparation and ARM text are unchanged. Decode buffers are const, so the corrected strip is a private copy.
+#include "ctr_png.h"
+static CtrPngStatus texprepDecodePng(const uint8_t*, size_t, int32_t, CtrPngStripFn, void*);
+#define CtrPng_decode texprepDecodePng
 #include "ctr_texture_pack.c"
+#undef CtrPng_decode
 #undef __real_CtrPackWorker_poll
 #undef __real_CtrPack_isComplete
 #undef __real_CtrPackWorker_setKeepPacked
@@ -43,6 +50,7 @@ static int texprep_mkdir(const char* path, int mode) {
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
+#include <errno.h>
 
 #include "ctr_qoi.h"
 #include "texprep_host.h"
@@ -59,6 +67,53 @@ static int texprep_mkdir(const char* path, int mode) {
 static int gm2022_5Flag = -1; // -1: decided from the TXTR entry layout
 
 typedef struct {
+    bool enabled;
+    uint32_t page;
+    uint16_t x, y, w, h;
+    char temporary[PACK_PATH_MAX + 16];
+} AlphaZeroScope;
+static AlphaZeroScope alphaZero;
+
+typedef struct {
+    CtrPngStripFn next;
+    void* user;
+    int32_t width;
+} AlphaZeroStrip;
+
+static bool alphaZeroStrip(void* user, const uint8_t* rows, int32_t y, int32_t count) {
+    AlphaZeroStrip* s = user;
+    int32_t first = y > alphaZero.y ? y : alphaZero.y;
+    int32_t end = y + count < alphaZero.y + alphaZero.h ? y + count : alphaZero.y + alphaZero.h;
+    if (first >= end) return s->next(s->user, rows, y, count);
+    size_t size = (size_t) s->width * (size_t) count * 4;
+    uint8_t* copy = malloc(size);
+    if (copy == NULL) return false;
+    memcpy(copy, rows, size);
+    for (int32_t yy = first; end > yy; yy++) {
+        uint8_t* p = copy + ((size_t) (yy - y) * (size_t) s->width + alphaZero.x) * 4;
+        for (uint32_t x = 0; alphaZero.w > x; x++, p += 4)
+            if (p[3] == 0) p[0] = p[1] = p[2] = 0;
+    }
+    bool ok = s->next(s->user, copy, y, count);
+    free(copy);
+    return ok;
+}
+
+static CtrPngStatus texprepDecodePng(const uint8_t* png, size_t size, int32_t stripRows, CtrPngStripFn fn, void* user) {
+    // CtrPack_decodeRows' PNG path supplies this exact callback/context pair. Only buildPage calls it in this
+    // tool; its PackBuilder's temporary path binds the correction to the selected page, even with two workers.
+    if (!alphaZero.enabled || fn != takeStrip) return CtrPng_decode(png, size, stripRows, fn, user);
+    RowStream* stream = user;
+    PackBuilder* builder = stream->user;
+    if (strcmp(builder->tempPath, alphaZero.temporary) != 0) return CtrPng_decode(png, size, stripRows, fn, user);
+    int32_t w, h;
+    if (!CtrPng_info(png, size, &w, &h) || alphaZero.x + alphaZero.w > w || alphaZero.y + alphaZero.h > h)
+        return CTR_PNG_BAD_DATA;
+    AlphaZeroStrip strip = { fn, user, w };
+    return CtrPng_decode(png, size, stripRows, alphaZeroStrip, &strip);
+}
+
+typedef struct {
     FILE* f;
     long size;
 } Reader;
@@ -69,6 +124,39 @@ static bool readAtOffset(Reader* r, long offset, void* dst, size_t n) {
 
 static uint32_t le32(const uint8_t* p) {
     return (uint32_t) p[0] | ((uint32_t) p[1] << 8) | ((uint32_t) p[2] << 16) | ((uint32_t) p[3] << 24);
+}
+
+// Name-keyed selection, like the host item-verdict tables: no ordinal or atlas coordinate is assumed. The
+// FNV-1a-64 key selects only the normal Final Froggit head, not its hurt frame or its body. WAD16 only.
+static bool findAlphaZero(Reader* r, const DataWin* dw, long sprt, long sprtSize, long tpag, long tpagSize) {
+    if (dw->gen8.wadVersion != 16 || sprt < 0 || tpag < 0) return true;
+    uint8_t data[64];
+    if (sprtSize < 4 || !readAtOffset(r, sprt, data, 4)) return false;
+    uint32_t count = le32(data);
+    if (count > (uint32_t) ((sprtSize - 4) / 4)) return false;
+    for (uint32_t i = 0; count > i; i++) {
+        if (!readAtOffset(r, sprt + 4 + 4 * (long) i, data, 4)) return false;
+        uint32_t p = le32(data);
+        if (p == 0) continue;
+        if (!readAtOffset(r, p, data, 4)) return false;
+        uint32_t name = le32(data);
+        uint64_t hash = UINT64_C(14695981039346656037);
+        bool ended = false;
+        for (unsigned j = 0; sizeof(data) > j; j++) {
+            if (!readAtOffset(r, (long) name + j, data, 1)) return false;
+            if (data[0] == 0) { ended = true; break; }
+            hash = (hash ^ data[0]) * UINT64_C(1099511628211);
+        }
+        if (!ended || hash != UINT64_C(0x2821e0fa13f349be)) continue;
+        if (alphaZero.enabled || !readAtOffset(r, (long) p + 56, data, 8) || le32(data) != 1) return false;
+        uint32_t item = le32(data + 4);
+        if ((long) item < tpag || (long) item + 22 > tpag + tpagSize || !readAtOffset(r, item, data, 22)) return false;
+        uint16_t v[11];
+        for (unsigned j = 0; 11 > j; j++) v[j] = (uint16_t) (data[2*j] | ((uint16_t) data[2*j+1] << 8));
+        if (v[2] != 51 || v[3] != 38 || v[10] >= dw->txtr.count) return false;
+        alphaZero = (AlphaZeroScope) { .enabled = true, .page = v[10], .x = v[0], .y = v[1], .w = v[2], .h = v[3] };
+    }
+    return true;
 }
 
 static bool pageMagicOk(Reader* r, uint32_t offset) {
@@ -93,13 +181,15 @@ static bool loadDataWin(const char* path, DataWin* dw) {
     }
     long formEnd = 8 + (long) le32(head + 4);
     if (formEnd > r.size) formEnd = r.size;
-    long gen8 = -1, gen8Size = 0, txtr = -1, txtrSize = 0;
+    long gen8 = -1, gen8Size = 0, txtr = -1, txtrSize = 0, sprt = -1, sprtSize = 0, tpag = -1, tpagSize = 0;
     for (long at = 8; formEnd >= at + 8;) {
         uint8_t chunk[8];
         if (!readAtOffset(&r, at, chunk, 8)) break;
         long size = (long) le32(chunk + 4);
         if (memcmp(chunk, "GEN8", 4) == 0) gen8 = at + 8, gen8Size = size;
         if (memcmp(chunk, "TXTR", 4) == 0) txtr = at + 8, txtrSize = size;
+        if (memcmp(chunk, "SPRT", 4) == 0) sprt = at + 8, sprtSize = size;
+        if (memcmp(chunk, "TPAG", 4) == 0) tpag = at + 8, tpagSize = size;
         at += 8 + size;
     }
     if (gen8 < 0 || txtr < 0 || gen8Size < 100) {
@@ -162,6 +252,7 @@ static bool loadDataWin(const char* path, DataWin* dw) {
         uint32_t end = count > i + 1 && textures[i + 1].blobOffset != 0 ? textures[i + 1].blobOffset : (uint32_t) txtrEnd;
         textures[i].blobSize = end - textures[i].blobOffset;
     }
+    if (!findAlphaZero(&r, dw, sprt, sprtSize, tpag, tpagSize)) goto bad;
     ok = true;
     goto done;
 bad:
@@ -245,6 +336,22 @@ int main(int argc, char** argv) {
     snprintf(cacheDir, sizeof(cacheDir), "%s", outDir);
     CtrPack_init();
     CtrPackKey key = CtrPack_keyFor(dw);
+
+    if (alphaZero.enabled) {
+        // An existing ABI-v3/v4 page can still contain the old hidden RGB. Refresh ONLY this page on each host
+        // invocation; do not bump the runtime ABI or trust a prior complete marker. Publication removes the
+        // marker before invalidation, and writes it last. Every other page retains its existing cache behavior.
+        char marker[PACK_PATH_MAX + 16], page[PACK_PATH_MAX + 16];
+        markerPath(marker, sizeof(marker));
+        pathFor(page, sizeof(page), alphaZero.page, "dtx");
+        pathFor(alphaZero.temporary, sizeof(alphaZero.temporary), alphaZero.page, "tmp");
+        if (!CtrCachePublish_begin(marker, false) || (remove(page) != 0 && errno != ENOENT)) {
+            fprintf(stderr, "texprep: could not refresh alpha-zero page %u\n", (unsigned) alphaZero.page);
+            return 1;
+        }
+        printf("texprep: alpha-zero RGB: page %u rectangle %u,%u %ux%u\n", (unsigned) alphaZero.page,
+               (unsigned) alphaZero.x, (unsigned) alphaZero.y, (unsigned) alphaZero.w, (unsigned) alphaZero.h);
+    }
 
     CtrPackWorker* worker = CtrPackWorker_start(dw, &key, true);
     if (worker == NULL) {

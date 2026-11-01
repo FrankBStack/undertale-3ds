@@ -62,7 +62,9 @@ FONT_PARAMS = {
     'fnt_plain': dict(unbold=True),
     # Round 3 (the O and W of the fill derivation looked odd): the drawn size by even 2:1 rows and
     # columns, counters kept closed.
-    'fnt_papyrus': dict(unbold=True, rowfit='uniform', colfit='uniform', holes=True, boldthin=True, overshoot=True),
+    # patches (10-31): its '!' correction (PATCHES) is on by default.
+    'fnt_papyrus': dict(unbold=True, rowfit='uniform', colfit='uniform', holes=True, boldthin=True, overshoot=True,
+                        patches=True),
     'fnt_small': dict(unbold=True),
     # UNDERTALE's battle HUD (name, LV, HP numbers): a 4x5 pixel font stored at 3x, so one font pixel is 1.5 native px.
     'fnt_curs': dict(unbold=False, colmap='font', pixel=3),
@@ -91,7 +93,13 @@ _W_BAND = [(1, 2, 1, 0), (3, 2, 1, 0), (1, 3, 1, 0), (3, 3, 1, 0)]
 _STAR_FEET = [(1, 3, 1, 0), (0, 4, 1, 0), (2, 4, 1, 0), (0, 3, 0, 1), (2, 3, 0, 1)]
 # DotumChe bold '*' derives as a plus with a stem and two feet (by eye: a space invaders ship). Lifting the
 # feet onto the stem row gives a three-row star. The check passes '*' already; this is a look-only proposal.
+_BANG_DOT = [(0, 5, 1, 0), (0, 6, 0, 1)]
+# Papyrus '!' is a 5-row stem, a 1-row gap and a 1-row dot; the even 2:1 row split merges the gap into the stem
+# and the '!' derives as a solid 4-row bar (rows 2-5) that reads as 'I' (10-31: "HELLO THERE, HUMAN!" in the
+# Text preview read "HUMANI"). Opening row 5 and moving the dot onto row 6, the baseline of N and the other caps,
+# gives stem 2-4, gap 5, dot 6.
 PATCHES = {
+    'fnt_papyrus': {'!': _BANG_DOT},
     'fnt_plain': {'W': _W_BAND, '*': _STAR_FEET},
     'fnt_dotumche': {'W': _W_BAND, '*': _STAR_FEET},
 }

@@ -92,7 +92,7 @@ void Instance_freeContents(Instance* instance) {
     instance->physicsBody = nullptr;
 
     // Free owned strings and decRef owned arrays in selfVars hashmap, then release the entries buffer.
-    IntRValueHashMap_freeAllValues(&instance->selfVars);
+    CD_FREE_SELF_VARS(&instance->selfVars);
     arrfree(instance->collisionCells);
     instance->collisionCells = nullptr;
 }

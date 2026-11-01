@@ -1245,3 +1245,136 @@ void __attribute__((noipa, section(".text.late.flowervramg_cia80"))) __wrap___sy
 }
 #undef CTRPORT_ALLOCATE_CIA80
 #endif
+
+// knightgpu A       knightgpu, DELTARUNE New only): moving a live VRAM block to an address the caller picked, for the
+// renderer's bank compaction (ctr_renderer.c's end). The block is given back and taken again at once, not held
+// until the GPU is done: what the GPU still has queued that reads or writes the old place runs before the copy the
+// caller queues next, and the copy before anything queued after it (it is all one GX queue). Placed as
+// CtrMemory_vramAllocTop places its copies: every free gap below `to` is filled for a moment, so libctru's first fit
+// gives `to`. Late code, declared where it is used; nothing here is called from anywhere else.
+// Layout: this file's statics sit in one section-anchor block, each placed where the first function compiled names it,
+// and GCC compiles these late functions early; and a static whose address is taken makes the code that reads it
+// change. So, as memory_report.c's names above, these reach them by assembler aliases (local labels: no symbol is
+// added) that the compiler doesn't know for the same objects. The writes are to statics that externally callable
+// functions of this file write too, so code here is already compiled for calls out changing them. They lock as
+// lockLinear does and give the held frees back through CtrMemory_vramFreeNow. Built as the rest of this file (not
+// -Os), so nothing they call gets an out-of-line copy.
+#if defined(CTRPORT_KNIGHTGPU_COMPACT_ON)
+#define KGC_MEM_LATE __attribute__((noinline, section(".text.knightgpu_compact_late")))
+#define KGC_MEM_BLOCKS 160
+__asm__(".set .Lkgc_contended, linearLockContended\n.set .Lkgc_waitTicks, linearLockWaitTicks\n"
+        ".set .Lkgc_blocks, vramBlocks\n.set .Lkgc_blockCount, vramBlockCount\n.set .Lkgc_blocksLost, vramBlocksLost\n"
+        ".set .Lkgc_held, heldFrees\n.set .Lkgc_heldCount, heldCount\n");
+extern LightLock CtrMemory_linearLockStore;
+extern uint32_t kgcContended __asm__(".Lkgc_contended");
+extern uint64_t kgcWaitTicks __asm__(".Lkgc_waitTicks");
+extern CtrVramBlock kgcBlocks[VRAM_BLOCKS_MAX] __asm__(".Lkgc_blocks");
+extern uint32_t kgcBlockCount __asm__(".Lkgc_blockCount");
+extern bool kgcBlocksLost __asm__(".Lkgc_blocksLost");
+extern HeldFree kgcHeld[HELD_FREE_CAPACITY] __asm__(".Lkgc_held");
+extern uint32_t kgcHeldCount __asm__(".Lkgc_heldCount");
+static CtrVramBlock kgcTaken[KGC_MEM_BLOCKS] __attribute__((section(".bss.knightgpu_compact_late")));
+static void* kgcFillers[KGC_MEM_BLOCKS + 1] __attribute__((section(".bss.knightgpu_compact_late")));
+static uint32_t kgcTakenCount __attribute__((section(".bss.knightgpu_compact_late")));
+
+// lockLinear, by the aliases.
+static void KGC_MEM_LATE kgcLock(void) {
+    if (CtrMemory_linearLockTry(&CtrMemory_linearLockStore) == 0) return;
+    uint64_t start = svcGetSystemTick();
+    CtrMemory_linearLockAcquire(&CtrMemory_linearLockStore);
+    kgcContended++;
+    kgcWaitTicks += svcGetSystemTick() - start;
+}
+
+// With the linear lock held: the blocks taken (tracked, and the frees held back until the GPU is done) other than
+// `skip`, sorted by address, in kgcTaken. False if they don't fit or the list is incomplete.
+static bool KGC_MEM_LATE kgcCollect(uintptr_t skip) {
+    uint32_t n = 0;
+    if (kgcBlocksLost) return false;
+    for (uint32_t i = 0; kgcBlockCount > i; i++) {
+        if (kgcBlocks[i].addr == skip) continue;
+        if (KGC_MEM_BLOCKS == n) return false;
+        kgcTaken[n++] = kgcBlocks[i];
+    }
+    for (uint32_t i = 0; kgcHeldCount > i; i++) {
+        if (!kgcHeld[i].vram) continue;
+        if (KGC_MEM_BLOCKS == n) return false;
+        kgcTaken[n++] = (CtrVramBlock) { (uintptr_t) kgcHeld[i].mem, kgcHeld[i].bytes };
+    }
+    for (uint32_t i = 1; n > i; i++) {
+        CtrVramBlock b = kgcTaken[i];
+        uint32_t j = i;
+        for (; j > 0 && kgcTaken[j - 1].addr > b.addr; j--) kgcTaken[j] = kgcTaken[j - 1];
+        kgcTaken[j] = b;
+    }
+    kgcTakenCount = n;
+    return true;
+}
+
+// The blocks taken, tracked and held back alike, sorted by address: where VRAM really is free. -1 if more than `max`
+// or the list is incomplete.
+int32_t CtrMemory_vramTaken(CtrVramBlock* out, int32_t max) KGC_MEM_LATE;
+int32_t CtrMemory_vramTaken(CtrVramBlock* out, int32_t max) {
+    kgcLock();
+    int32_t n = kgcCollect(0) && (uint32_t) max >= kgcTakenCount ? (int32_t) kgcTakenCount : -1;
+    for (int32_t i = 0; n > i; i++) out[i] = kgcTaken[i];
+    CtrMemory_linearLockRelease(&CtrMemory_linearLockStore);
+    return n;
+}
+
+// With the linear lock held and kgcTaken current: `size` bytes allocated at `to`, or nullptr (nothing kept).
+static void* KGC_MEM_LATE kgcAllocAt(uintptr_t to, size_t size) {
+    const uintptr_t lo = (uintptr_t) OS_VRAM_VADDR, hi = lo + (uintptr_t) OS_VRAM_SIZE;
+    uint32_t n = kgcTakenCount, f = 0;
+    bool ok = (to & 0x7Fu) == 0 && to >= lo && hi >= to + size;
+    for (uint32_t k = 0; ok && n > k; k++) ok = kgcTaken[k].addr >= to + size || to >= kgcTaken[k].addr + kgcTaken[k].size;
+    for (uint32_t k = 0; ok && n >= k; k++) {
+        uintptr_t start = k > 0 ? kgcTaken[k - 1].addr + kgcTaken[k - 1].size : lo;
+        start = (start + 0x7Fu) & ~(uintptr_t) 0x7Fu;
+        if (start >= to) break;
+        uintptr_t end = k < n ? kgcTaken[k].addr : hi;
+        if (end > to) end = to;
+        if (end <= start) continue;
+        void* q = __real_vramAlloc((size_t) (end - start));
+        if (q != nullptr) kgcFillers[f++] = q;
+        ok = q == (void*) start;
+    }
+    void* p = ok ? __real_vramAlloc(size) : nullptr;
+    if (p != nullptr && p != (void*) to) {
+        __real_vramFree(p);
+        p = nullptr;
+    }
+    for (uint32_t i = 0; f > i; i++) __real_vramFree(kgcFillers[i]);
+    return p;
+}
+
+// Live block `old` moved to `to` (VRAM_ALIGN-aligned, free but for old's own bytes): the new address, which the caller
+// copies old's bytes to (memmove order, as they may overlap). nullptr if the move can't be made, with old as it was.
+// Should placing at `to` fail once old is given back, old is taken again where it was (free, as nothing ran between),
+// or failing that wherever first fit puts it: the copy keeps the bytes either way.
+void* CtrMemory_vramMoveTo(void* old, uintptr_t to) KGC_MEM_LATE;
+void* CtrMemory_vramMoveTo(void* old, uintptr_t to) {
+    CtrMemory_vramFreeNow(); // the held frees the GPU is done with, given back
+    kgcLock();
+    uint32_t at = 0;
+    while (kgcBlockCount > at && kgcBlocks[at].addr != (uintptr_t) old) at++;
+    void* p = nullptr;
+    if (kgcBlockCount > at && kgcCollect((uintptr_t) old)) {
+        size_t size = kgcBlocks[at].size;
+        bool fits = true;
+        for (uint32_t k = 0; fits && kgcTakenCount > k; k++) {
+            fits = kgcTaken[k].addr >= to + size || to >= kgcTaken[k].addr + kgcTaken[k].size;
+        }
+        if (fits) {
+            __real_vramFree(old);
+            p = kgcAllocAt(to, size);
+            if (p == nullptr) p = kgcAllocAt((uintptr_t) old, size);
+            if (p == nullptr) p = __real_vramAlloc(size);
+            if (p != nullptr) kgcBlocks[at] = (CtrVramBlock) { (uintptr_t) p, (uint32_t) vramGetSize(p) };
+            else kgcBlocks[at] = kgcBlocks[--kgcBlockCount];
+        }
+    }
+    CtrMemory_linearLockRelease(&CtrMemory_linearLockStore);
+    return p;
+}
+#endif

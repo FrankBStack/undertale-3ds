@@ -32,9 +32,69 @@ EXTRA_FILES = ("tools/release/verify_game.py", "tools/release/release_contract.p
                "tools/release/music-versions.json", "tools/release/test_builder.py",
                "tools/release/test_builder_platforms.py", "tools/release/builder_platform_probe.py",
                "tools/release/package_builder.py", "tools/release/test_builder_native_data.py",
-               "tools/release/test_texcache.py", "tools/release/macos_bundle.py",
+               "tools/release/test_texcache.py", "tools/release/check_kit_hygiene.py", "tools/release/export_scrub.py",
+               "tools/release/macos_bundle.py",
                "tools/release/macos_runtime_check.py")
 DIRECTORIES = pipeline.SOURCE_DIRS + ("tools/release/builder",)
+
+
+def generated_cache(name):
+    """Loose interpreter/test caches are host state, never packaging inputs.
+
+    The vendor standard-library ZIP is retained byte for byte, including its
+    source-less bytecode. Only loose generated files are excluded here.
+    """
+    parts = name.replace('\\', '/').lower().split('/')
+    return (any(part in ('__pycache__', '.pytest_cache', '.mypy_cache', '.ruff_cache') for part in parts)
+            or parts[-1].endswith(('.pyc', '.pyo')))
+
+
+def validate_package_files(files):
+    """Refuse private project paths/names in every final member and nested ZIP.
+
+    Construct the search token so the guard itself remains safe to distribute.
+    Explicit public-handle references are the only exception. Error messages
+    identify a member/offset, never print the rejected content.
+    """
+    token = 'delta' + 'tale'
+    patterns = []
+    for encoding in ('ascii', 'utf-16le', 'utf-16be'):
+        prefixes = b'|'.join(re.escape(s.encode(encoding))
+                             for s in ('github.com/', 'x.com/', 'twitter.com/', '@'))
+        boundary = b'|'.join(re.escape(c.encode(encoding)) for c in '/ \t\r\n"<>')
+        needle = re.compile(re.escape(token.encode(encoding)), re.I)
+        handle = re.compile(b'(?:' + prefixes + b')' + needle.pattern + b'(?=' + boundary + b'|$)', re.I)
+        patterns.append((encoding, needle, handle))
+
+    def inspect(label, data, depth=0):
+        for encoding, needle, handle in patterns:
+            # Byte regexes also find UTF-16 strings beginning at an odd offset.
+            approved = [m.span() for m in handle.finditer(data)]
+            for match in needle.finditer(data):
+                if not any(start <= match.start() and match.end() <= end for start, end in approved):
+                    raise ValueError('Private project name in package member %s at byte %d (%s)' %
+                                     (label, match.start(), encoding))
+        if zipfile.is_zipfile(io.BytesIO(data)):
+            if depth >= 8:
+                raise ValueError('Nested package ZIP exceeds scan depth: ' + label)
+            with zipfile.ZipFile(io.BytesIO(data)) as archive:
+                for member in archive.infolist():
+                    if not member.is_dir():
+                        child = label + '!' + member.filename
+                        inspect(child + ' (name)', member.filename.encode('utf-8'), depth + 1)
+                        inspect(child, archive.read(member), depth + 1)
+
+    for rel, data in files.items():
+        inspect(rel + ' (name)', rel.encode('utf-8'))
+        inspect(rel, data)
+    # The final extracted-kit scanner also guards all packaging inputs.
+    # Public credits and generic system defaults follow its documented policy.
+    import check_kit_hygiene
+    hits = check_kit_hygiene.findings(files)
+    if hits:
+        hit = hits[0]
+        raise ValueError('Kit hygiene: %s in %s at byte %d' %
+                         (hit['rule'], hit['member'], hit['offset']))
 
 
 def opening_instructions(game, platform=None):
@@ -64,9 +124,9 @@ def opening_instructions(game, platform=None):
 def launcher(game, platform):
     if platform == "windows":
         return ("@echo off\r\nsetlocal\r\nset \"HERE=%~dp0tools\\release\\builder\"\r\n"
-                'if "%~1"=="" (\r\n  start "" "%HERE%\\runtime\\pythonw.exe" -I "%HERE%\\builder.py" --game ' + game +
+                'if "%~1"=="" (\r\n  start "" "%HERE%\\runtime\\pythonw.exe" -I -B "%HERE%\\builder.py" --game ' + game +
                 '\r\n  exit /b\r\n)\r\n' +
-                '"%HERE%\\runtime\\python.exe" -I "%HERE%\\builder.py" --game ' + game + ' %*\r\n')
+                '"%HERE%\\runtime\\python.exe" -I -B "%HERE%\\builder.py" --game ' + game + ' %*\r\n')
     python = 'python3'
     if platform == "macos":
         python = '"${BUILDER_PYTHON:-/Library/Frameworks/Python.framework/Versions/Current/bin/python3}"'
@@ -76,13 +136,13 @@ def launcher(game, platform):
                  '  echo "Install Python from python.org (macOS universal2, with Tk), then try again."\n'
                  '  exit 2\nfi\n')
     return ('#!/bin/sh\nset -eu\nHERE=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)\n' + check + 'exec ' + python +
-            ' -I "$HERE/tools/release/builder/builder.py" --game ' + game + ' "$@"\n')
+            ' -I -B "$HERE/tools/release/builder/builder.py" --game ' + game + ' "$@"\n')
 
 
 def inputs(root, game, runtime=None):
     result = {}
     for rel in pipeline.SOURCE_FILES + EXTRA_FILES:
-        if not pipeline.source_wanted(rel, game):
+        if generated_cache(rel) or not pipeline.source_wanted(rel, game):
             continue
         p = root / rel
         if not p.is_file():
@@ -93,6 +153,8 @@ def inputs(root, game, runtime=None):
         if not directory.is_dir():
             raise ValueError("Incomplete curated export: missing " + rel)
         for p in sorted(directory.rglob("*")):
+            if generated_cache(p.relative_to(root).as_posix()):
+                continue
             if p.is_symlink():
                 raise ValueError("Curated source contains a symlink: " + p.relative_to(root).as_posix())
             if p.is_file() and pipeline.source_wanted(p.relative_to(root).as_posix(), game):
@@ -114,11 +176,14 @@ def inputs(root, game, runtime=None):
         if not (runtime / "tcl").is_dir():
             raise ValueError("Prepared Windows runtime is missing tcl/")
         for p in sorted(runtime.rglob("*")):
+            if generated_cache(p.relative_to(runtime).as_posix()):
+                continue
             if p.is_symlink():
                 raise ValueError("Prepared Windows runtime contains a symlink")
             if p.is_file():
                 result["tools/release/builder/runtime/" + p.relative_to(runtime).as_posix()] = p.read_bytes()
-    return result
+    import export_scrub
+    return export_scrub.scrub_files(result)
 
 
 TEXPREP_KEYS = {"windows": ("win32", "x86_64"), "linux": ("linux", "x86_64"), "macos": ("darwin", "arm64")}
@@ -175,6 +240,7 @@ def package(root, output, game, platform, runtime=None, texprep=None, release_de
     start = game + "-3ds-builder" + suffix
     files[start] = launcher(game, platform).encode("utf-8")
     files["README.md"] = opening_instructions(game, platform).encode("utf-8")
+    validate_package_files(files)
     stem = "%s-3ds-builder-%s-%s" % (game, version, platform)
     output.mkdir(parents=True, exist_ok=True)
     path = output / (stem + (".zip" if platform == "windows" else ".tar.gz"))

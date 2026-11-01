@@ -100,12 +100,15 @@ CtrDataVersionResult CTR_DATAVERSION_UTSFX(CTR_DATAVERSION_CHAIN_PARAMS);
 #endif
 
 // CtrRenderer_prefetchRoom: roomplan -> [flowhitch, UNDERTALE] -> [textfront -> (writerfront -> trailfront ->
-// itemfront) -> dodgefront, UNDERTALE Old 3DS only] -> real.
+// itemfront -> writerfirst) -> textcase -> dodgefront, UNDERTALE Old 3DS only] -> real.
 //   roomplan (z_roomplan.c): reads the room's planned code entries back.
 //   textfront (z_textfront.c): binds the centred-text scripts' hand fronts first, then calls the next link.
 //   writerfront (z_writerfront.c; not in build.sh's nowriterfront builds): binds the dialogue writer's Draw front.
 //   trailfront (z_trailfront.c; writerfront builds only): binds the SAVE Asriel rainbow trail's Draw front.
 //   itemfront (z_itemfront.c; writerfront builds only): binds the item-name scripts' fronts (the DREAM press).
+//   writerfirst (z_writerfirst.c; writerfront builds only): wraps writerfront's Draw front so a writer's first Draw
+//   takes it too.
+//   textcase (z_textcase.c): binds the dialogue script's case-table front (its switch jumps straight to the case).
 //   dodgefront (z_dodgefront.c): binds the centred text line's hand front after each room change (where textfront
 //   hasn't).
 #ifdef CTRPORT_DODGEFRONT
@@ -119,16 +122,22 @@ CtrDataVersionResult CTR_DATAVERSION_UTSFX(CTR_DATAVERSION_CHAIN_PARAMS);
 #define CTR_PREFETCHROOM_AFTER_WRITERFRONT CTR_PREFETCHROOM_TRAILFRONT
 #define CTR_PREFETCHROOM_ITEMFRONT CtrRenderer_chainItemfront
 #define CTR_PREFETCHROOM_AFTER_TRAILFRONT CTR_PREFETCHROOM_ITEMFRONT
-#define CTR_PREFETCHROOM_AFTER_ITEMFRONT CTR_PREFETCHROOM_DODGEFRONT
+#define CTR_PREFETCHROOM_WRITERFIRST CtrRenderer_chainWriterfirst
+#define CTR_PREFETCHROOM_AFTER_ITEMFRONT CTR_PREFETCHROOM_WRITERFIRST
+#define CTR_PREFETCHROOM_AFTER_WRITERFIRST CTR_PREFETCHROOM_TEXTCASE
 struct Renderer;
 void CTR_PREFETCHROOM_WRITERFRONT(struct Renderer* renderer);
 void CTR_PREFETCHROOM_TRAILFRONT(struct Renderer* renderer);
 void CTR_PREFETCHROOM_ITEMFRONT(struct Renderer* renderer);
+void CTR_PREFETCHROOM_WRITERFIRST(struct Renderer* renderer);
 #else
-#define CTR_PREFETCHROOM_AFTER_TEXTFRONT CTR_PREFETCHROOM_DODGEFRONT
+#define CTR_PREFETCHROOM_AFTER_TEXTFRONT CTR_PREFETCHROOM_TEXTCASE
 #endif
+#define CTR_PREFETCHROOM_TEXTCASE CtrRenderer_chainTextcase
+#define CTR_PREFETCHROOM_AFTER_TEXTCASE CTR_PREFETCHROOM_DODGEFRONT
 struct Renderer;
 void CTR_PREFETCHROOM_TEXTFRONT(struct Renderer* renderer);
+void CTR_PREFETCHROOM_TEXTCASE(struct Renderer* renderer);
 void CTR_PREFETCHROOM_DODGEFRONT(struct Renderer* renderer);
 #else
 #define CTR_PREFETCHROOM_AFTER_FLOWHITCH __real_CtrRenderer_prefetchRoom

@@ -341,7 +341,7 @@ static void sweepEndFrame(bool skipped);
 static void sweepCut(const char* status);
 static void sweepFreeRecipe(void);
 static void sweepDescribePins(void);
-static void sweepDescribeAttack(void);
+static void sweepDescribeAttack(void); bool benchcutAliveExists(const char* name); void benchcutDescribeAttack(void);
 
 // ===[ Helpers ]===
 
@@ -1949,7 +1949,7 @@ static void sweepFrame(void) {
         sweepFinishBattle(why);
         return;
     }
-    bool alive = sweep.aliveObject < 0 || objectExists(sweep.aliveName);
+    bool alive = sweep.aliveObject < 0 || benchcutAliveExists(sweep.aliveName);
     if (!alive) {
         sweepFinishBattle(sweep.downed ? "the battle ended right after someone was downed (a game over?)" : "the battle ended");
         return;
@@ -2024,7 +2024,7 @@ static void sweepFrame(void) {
         sweepFinishBattle("its end condition");
         return;
     }
-    if (sweep.segment == SEG_ATTACK && (sweep.follow != nullptr || sweep.segmentFrames % 8 == 0)) sweepDescribeAttack();
+    if (sweep.segment == SEG_ATTACK && (sweep.follow != nullptr || sweep.segmentFrames % 8 == 0)) benchcutDescribeAttack();
     // The player's turn: the pins hold until the enemy's turn begins, and the keys play the menu.
     if (sweep.segment == SEG_PLAYER || sweep.segment == SEG_ENTER) {
         sweepApplyPins();
@@ -3548,3 +3548,68 @@ __attribute__((section(".text.frametrace_late"))) const CtrBenchSession* CtrBenc
     return &bench.session;
 }
 #endif
+
+// benchcut (flowend r30, GO 11-01; bench only): the sweep's per-frame work in CtrBench_beginFrameTimed is
+// the bench's own, never the game's (real play returns at PHASE_IDLE before any of it), yet Old bench frames carried
+// 0.3-2.1 ms of it (ut_flowey's late fight ~2.1 ms). Two of its pieces are cut here, exactly: what the sweep reads,
+// writes and reports is unchanged; only the work done to get there is less. Each existing caller changes only a call
+// target. In .text.benchcut_late (late_reserve.ld, last), its statics in .bss.benchcut_late.
+//
+// 1. Whether the battle's alive object has an instance: objectExists(sweep.aliveName) found the object's index by a
+//    strcmp scan of the object table every frame. sweep.aliveObject already holds that index (sweepBegin's
+//    findObjectIndex, the same first match); it is used when the table's entry there still has that name, else the
+//    old scan answers. Object names are unique in a data.win, so the first match is that entry.
+__attribute__((noinline, optimize("Os"), section(".text.benchcut_late"))) bool benchcutAliveExists(const char* name) {
+    const Runner* runner = bench.session.runner;
+    const DataWin* dw = runner->dataWin;
+    int32_t object = sweep.aliveObject;
+    if (0 > object || (uint32_t) object >= dw->objt.count || dw->objt.objects[object].name == nullptr ||
+        strcmp(dw->objt.objects[object].name, name) != 0) {
+        return objectExists(name);
+    }
+    for (ptrdiff_t i = 0; arrlen(runner->instances) > i; i++) {
+        if (!runner->instances[i]->destroyed && runner->instances[i]->objectIndex == object) return true;
+    }
+    return false;
+}
+
+// 2. The attack's label: a followed fight (ut_flowey's `sweep follow`) ran sweepDescribeAttack every frame, three
+//    value formats ("%g") and four snprintf joins. Each frame still reads every label (BenchRef_get, as
+//    BenchRef_format does), but sweepDescribeAttack runs only when a read differs from the one it last formatted, or
+//    something other than this function changed the parts or the label since (an attack's start clears them, a cut
+//    describes an unfollowed fight): with the same reads, its parts and label would come out as they are. A read is
+//    compared by its value's bytes, type and asset type (BenchRef_format's text depends on nothing else); a string
+//    or struct (read through a pointer) always runs it.
+static struct {
+    uint8_t key[SWEEP_LABELS][12]; // the value's 8 bytes, type (0xFF: no instance), asset type, 1 = valid
+    char parts[SWEEP_LABELS][32]; // sweep.labelParts as this function last left them
+    char label[96]; // sweep.label as this function last left it
+} benchcut __attribute__((section(".bss.benchcut_late")));
+_Static_assert(sizeof(benchcut.parts) == sizeof(sweep.labelParts), "part shadow size");
+_Static_assert(sizeof(benchcut.label) == sizeof(sweep.label), "label shadow size");
+
+__attribute__((noinline, optimize("Os"), section(".text.benchcut_late"))) void benchcutDescribeAttack(void) {
+    uint8_t keys[SWEEP_LABELS][12];
+    bool same = memcmp(benchcut.label, sweep.label, sizeof(sweep.label)) == 0 &&
+                memcmp(benchcut.parts, sweep.labelParts, sizeof(sweep.labelParts)) == 0;
+    for (int32_t i = 0; sweep.labelCount > i; i++) {
+        uint8_t* k = keys[i];
+        RValue v;
+        memset(k, 0, sizeof(keys[i]));
+        k[8] = 0xFF;
+        k[10] = 1;
+        if (BenchRef_get(sweep.labels[i], bench.session.runner, &v)) {
+            memcpy(k, &v, 8);
+            k[8] = v.type;
+            k[9] = v.assetRefType;
+            if (v.type == RVALUE_STRING || v.type == RVALUE_STRUCT) k[10] = 0; // read through a pointer
+            RValue_free(&v);
+        }
+        if (k[10] == 0 || memcmp(benchcut.key[i], k, sizeof(keys[i])) != 0) same = false;
+    }
+    if (same) return;
+    sweepDescribeAttack();
+    memcpy(benchcut.key, keys, (size_t) sweep.labelCount * sizeof(keys[0]));
+    memcpy(benchcut.parts, sweep.labelParts, sizeof(sweep.labelParts));
+    memcpy(benchcut.label, sweep.label, sizeof(sweep.label));
+}

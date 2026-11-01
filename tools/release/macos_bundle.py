@@ -47,6 +47,10 @@ def wanted(name):
     rel = name.removeprefix('python/')
     if rel.startswith('bin/'):
         return rel in ('bin/python', 'bin/python3', 'bin/python3.14')
+    # Generated build snapshots retain the upstream user's base directory.
+    # Runtime sysconfig imports _sysconfigdata and recomputes userbase instead.
+    if rel.startswith('lib/python3.14/_sysconfig_vars_') and rel.endswith('.json'):
+        return False
     return not (rel.startswith(('include/', 'share/man/', 'lib/pkgconfig/',
                                'lib/python3.14/site-packages/', 'lib/python3.14/ensurepip/')) or
                 rel.endswith(('.pyc', '.a')) or '/__pycache__/' in rel)
@@ -215,13 +219,21 @@ def write_app(files, output, game, version, runtimes, opening, licences):
         receipt['runtimes'][arch] = dict(url=runtime_url(arch), bytes=PINS[arch][1], sha256=PINS[arch][2],
             files={rel: dict(bytes=len(value[0]), sha256=hashlib.sha256(value[0]).hexdigest())
                    for rel, value in sorted(payload.items())})
-    # Full upstream distribution licensing metadata/texts, supplied by the input preparation gate.
+    # Preserve upstream licensing records/texts, omitting the build-user location.
     licence_root = Path(licences)
     for p in sorted(licence_root.rglob('*')):
         if p.is_symlink():
             raise ValueError('Unexpected licence symlink')
         if p.is_file():
-            entries[prefix + 'Resources/runtime-licences/' + p.relative_to(licence_root).as_posix()] = (p.read_bytes(), 0o644)
+            rel = p.relative_to(licence_root).as_posix()
+            data = p.read_bytes()
+            if rel in {arch + '/PYTHON.json' for arch in PINS}:
+                metadata = json.loads(data)
+                config = metadata.get('python_config_vars')
+                if isinstance(config, dict):
+                    config.pop('userbase', None)
+                data = (json.dumps(metadata, indent=2) + '\n').encode('utf-8')
+            entries[prefix + 'Resources/runtime-licences/' + rel] = (data, 0o644)
     for arch in PINS:
         root = licence_root / arch
         if not (root / 'PYTHON.json').is_file() or not list(root.rglob('LICENSE*')):
@@ -245,6 +257,10 @@ def write_app(files, output, game, version, runtimes, opening, licences):
                     check_licences(item)
         check_licences(metadata)
     entries[prefix + 'Resources/runtime-inventory.json'] = ((json.dumps(receipt, indent=2) + '\n').encode(), 0o644)
+    # Scan the completed app, including upstream runtimes/licences and generated
+    # metadata, before creating an archive. This also covers direct API callers.
+    from package_builder import validate_package_files
+    validate_package_files({name: value[0] for name, value in entries.items()})
     output = Path(output)
     output.mkdir(parents=True, exist_ok=True)
     path = output / f'{game}-3ds-builder-{version}-macos.zip'

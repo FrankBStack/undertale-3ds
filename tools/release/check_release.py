@@ -488,6 +488,8 @@ def main():
         if (ROOT / 'THIRD_PARTY_NOTICES').read_text(encoding='utf-8') != notices:
             raise ValueError('THIRD_PARTY_NOTICES is stale for this export manifest.')
         files = {name: safe_local(sources.get(name, name)).read_bytes() for name in names}
+        import export_scrub
+        files = export_scrub.scrub_files(files)
         if args.public_source:
             import package_builder
             digest = public_source_digest(package_builder.inputs(ROOT, game), files, sources,
@@ -501,6 +503,10 @@ def main():
         hashes = data_hashes()
         policy_path = safe_local(args.identifier_policy)
         policy = read_identifier_policy(policy_path)
+        exported_policy = json.loads(files.get(args.identifier_policy, policy_path.read_bytes()))
+        if exported_policy.get('decision') != policy.get('decision'):
+            raise ValueError('Export identifier approval changed')
+        policy = exported_policy
         asset_policy_path = safe_local(args.asset_policy)
         asset_policy = read_asset_policy(asset_policy_path)
         total = 0

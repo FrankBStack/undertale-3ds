@@ -39,6 +39,12 @@
 #                              [knightnew-history|knightnew-history=off] (Knight GPU-1: trims the Knight afterimage spill
 #                              copies' unused columns; ON by default in DELTARUNE New, a no-op in other builds; "=off" builds
 #                              without it in its own build directory)
+#                              [knightgpu-texenv=off] (knightgpu T1, cheaper blend and fog switches: ON in DELTARUNE
+#                              New, a no-op elsewhere; "=off" builds O9 alone in its own build directory, the forced-off
+#                              control)
+#                              [knightgpu-compact=off|force] (knightgpu A, VRAM compaction for hot spilled surfaces: ON in
+#                              DELTARUNE New, a no-op elsewhere; "=off" builds without it and "=force" the forced control
+#                              (moves every few frames; tests only), each in its own build directory)
 #                              [layout=<audited absolute linker-script path>]
 #                              [inputperiod=<0|8|16>] [inputstall=<ms>] (input sampler diagnostics; separate build directory)
 #                              [spikerec] (spike recorder for playtests: every frame that misses its slot, written to
@@ -157,6 +163,9 @@ halfart=        # point, box or balanced: the half-resolution art prototype (flo
 natsurf6wide=OFF
 cia80=OFF
 knightnew_history=   # ON, OFF, or empty: the default (ON in DELTARUNE New, no effect elsewhere)
+knightgpu_texenv=ON
+knightgpu_compact=ON
+knightgpu_compact_force=OFF
 smalltext=     # ON, OFF, or empty: the game's default (UNDERTALE and DELTARUNE New ON, DELTARUNE Old OFF)
 aot_mode=      # off, auto (the "aot" argument) or a directory; empty: the game and target's default
 data_dir=
@@ -189,6 +198,9 @@ pacer_csv_diag=OFF
 record_fail_after= # empty: no allocation injection
 spikerec=OFF
 freewins=OFF
+uttc_mode=     # uttc       uthunt T1, test words): empty, OFF (uttc=off) or FORCE (uttc-force)
+dprank_mode=   # dprank       uthunt, test words): empty, OFF (dprank=off: always the scan) or DIAG (dprank-diag)
+testpage=OFF   # testpage: one more 4 KiB page of UNDERTALE late code (measurement builds only, never a release)
 bfprobe=OFF
 frametrace=OFF
 asgprobe=OFF
@@ -241,6 +253,9 @@ for arg in "$@"; do
         cia80) cia80=ON ;;
         knightnew-history) knightnew_history=ON ;;
         knightnew-history=off) knightnew_history=OFF ;;
+        knightgpu-texenv=off) knightgpu_texenv=OFF ;;
+        knightgpu-compact=off) knightgpu_compact=OFF ;;
+        knightgpu-compact=force) knightgpu_compact_force=ON ;;
         aot|aot=auto) aot_mode=auto ;;
         aot=chapters) aot_mode=chapters ;;
         aot=single) aot_mode=single ;;
@@ -266,6 +281,11 @@ for arg in "$@"; do
         inputstall=*) input_stall=${arg#inputstall=} ;;
         spikerec) spikerec=ON ;;
         freewins) freewins=ON ;;
+        uttc=off) uttc_mode=OFF ;;
+        uttc-force) uttc_mode=FORCE ;;
+        testpage) testpage=ON ;;
+        dprank=off) dprank_mode=OFF ;;
+        dprank-diag) dprank_mode=DIAG ;;
         bfprobe) bfprobe=ON ;;
         frametrace) frametrace=ON ;;
         asgprobe) asgprobe=ON ;;
@@ -496,6 +516,14 @@ if [ -z "$knightnew_history" ]; then
 elif [ "$knightnew_history" = OFF ] && [ "$game" = deltarune ] && [ "$target" = n3ds ]; then
     build="$build-noknighthist"
 fi
+if [ "$knightgpu_texenv" = OFF ] && [ "$game" = deltarune ] && [ "$target" = n3ds ]; then
+    build="$build-nokte"
+fi
+if [ "$knightgpu_compact" = OFF ] && [ "$game" = deltarune ] && [ "$target" = n3ds ]; then
+    build="$build-nokgc"
+elif [ "$knightgpu_compact_force" = ON ] && [ "$game" = deltarune ] && [ "$target" = n3ds ]; then
+    build="$build-kgcforce"
+fi
 if [ -n "$memcap" ]; then
     build="$build-cap$memcap"
 fi
@@ -522,6 +550,19 @@ if [ "$spikerec" = ON ]; then
 fi
 if [ "$freewins" = ON ]; then
     build="$build-freewins"
+fi
+if [ "$uttc_mode" = OFF ]; then
+    build="$build-nouttc"
+elif [ "$uttc_mode" = FORCE ]; then
+    build="$build-uttcforce"
+fi
+if [ "$testpage" = ON ]; then
+    build="$build-testpage"
+fi
+if [ "$dprank_mode" = OFF ]; then
+    build="$build-nodprank"
+elif [ "$dprank_mode" = DIAG ]; then
+    build="$build-dprankdiag"
 fi
 if [ "$bfprobe" = ON ]; then
     build="$build-bfprobe"
@@ -943,6 +984,8 @@ cmake -S "$here" -B "$build" -G "Unix Makefiles" \
     -DCTRPORT_PKLIN_DIAG="$pklindiag" -DCTRPORT_PKLIN_STRESS="$pklinstress" \
     -DCTRPORT_NATSURF6_WIDE="$natsurf6wide" \
     -DCTRPORT_KNIGHTNEW_HISTORY="$knightnew_history" \
+    -DCTRPORT_KNIGHTGPU_TEXENV="$knightgpu_texenv" \
+    -DCTRPORT_KNIGHTGPU_COMPACT="$knightgpu_compact" -DCTRPORT_KNIGHTGPU_COMPACT_FORCE="$knightgpu_compact_force" \
     -DCTRPORT_REPACK_TEST_DIR="$repack_test" \
     -DCTRPORT_HEAP_PROFILE="$heap" \
     -DCTRPORT_MEMORY_CAP_KB="$memcap" \
@@ -960,6 +1003,7 @@ cmake -S "$here" -B "$build" -G "Unix Makefiles" \
     -DCTRPORT_ROOMPLAN_FILE="$roomplan_file" -DCTRPORT_SFXPLAN_FILE="$sfxplan_file" -DCTRPORT_PHASEPLAN_FILE="$phaseplan_file" -DCTRPORT_ROOMPLAN_DIR="$roomplan_dir" -DCTRPORT_ROOMPLAN_RECORDER="$roomplan_rec" \
     -DCTRPORT_PHASE_LAYOUT="$phase_layout" \
     -DCTRPORT_SPIKEREC="$spikerec" -DCTRPORT_FREEWINS="$freewins" \
+    -DCTRPORT_UTTC_MODE="$uttc_mode" -DCTRPORT_DPRANK_MODE="$dprank_mode" -DCTRPORT_TEST_LATE_PAGE="$testpage" \
     -DCTRPORT_BENCHFIX_PROBE="$bfprobe" -DCTRPORT_FRAMETRACE="$frametrace" -DCTRPORT_ASG_PROBE="$asgprobe" -DCTRPORT_FLOWSTREAM_DIAG="$flowdiag" \
     -DCTRPORT_EXITTRAIL="$exittrail" -DCTRPORT_WRITERFRONT_MODE="$writerfront" \
     "${input_cmake[@]}" \
@@ -1024,6 +1068,15 @@ if [ "$game" = undertale ] && [ -n "${python:-}" ]; then
     if [ -n "$data_dir" ]; then offkill_args+=(--data "$(native_path "$data_dir")"); fi
     "${python[@]}" -I "$(native_path "$repo/tools/aot/offkill.py")" "${offkill_args[@]}" ||
         echo "offkill: tools/aot/offkill.py failed; no early destroy in this build" >&2
+fi
+# The dialogue script's case table (source/z_textcase.c, UNDERTALE Old only): its switch's constants sorted, with each
+# case's address, from the player's data (tools/aot/textcase.py), in romfs/textcase.bin. Without game data or Python
+# there is no file and the script's switch runs its compare chain as before.
+if [ "$game" = undertale ] && [ "$target" = o3ds ] && [ -n "${python:-}" ]; then
+    textcase_args=(--game "$game" --romfs "$(native_path "$build/romfs")")
+    if [ -n "$data_dir" ]; then textcase_args+=(--data "$(native_path "$data_dir")"); fi
+    "${python[@]}" -I "$(native_path "$repo/tools/aot/textcase.py")" "${textcase_args[@]}" ||
+        echo "textcase: tools/aot/textcase.py failed; no case table in this build" >&2
 fi
 # Every RomFS producer has finished. Repackage both formats even when a file was removed or was
 # generated after CMake configured (fonts, chapter selection and room plans).
