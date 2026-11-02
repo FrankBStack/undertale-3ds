@@ -390,6 +390,7 @@ platform/3ds/source/ctr_startup_clock.c
 platform/3ds/source/ctr_startup_clock.h
 platform/3ds/source/ctr_texture_pack.c
 platform/3ds/source/ctr_texture_pack.h
+platform/3ds/source/z_redpix.c
 platform/3ds/source/ctr_texture_pack_screen.c
 platform/3ds/source/ctr_texture_pack_screen.h
 platform/3ds/source/ctr_textures.c
@@ -862,6 +863,7 @@ tools/aot/stasrtext.py
 tools/aot/stmenu.py
 engine/src/z_utkill_vapor.c
 engine/src/z_utkill_swarm.c
+engine/src/z_utring.c
 engine/src/z_utkill_waver.c
 tools/release/import_closure.py
 tools/release/test_import_closure.py
@@ -892,6 +894,8 @@ platform/3ds/source/z_drresid.c
 # flowstream: plan tiles evicted in play come back in the background (UNDERTALE Old; compiled empty elsewhere)
 platform/3ds/source/z_flowstream.c
 platform/3ds/source/z_flowdiag.c
+# btlentry: a battle's planned tiles read during the encounter animation (UNDERTALE Old; compiled empty elsewhere)
+platform/3ds/source/z_btlentry.c
 # utold partial sprites: draw_sprite_part's partial-tile path (both games)
 platform/3ds/source/ctr_renderer_parts.inc
 
@@ -918,12 +922,12 @@ tools/release/licenses/bannertool-MIT.txt
 platform/3ds/source/z_offkill.c
 tools/aot/offkill.py
 tools/aot/test_offkill.py
-# textcase       codeclose, lever 1): the dialogue script's switch jumps straight to its case (UNDERTALE Old only) and
+# textcase (change codeclose, lever 1): the dialogue script's switch jumps straight to its case (UNDERTALE Old only) and
 # its builder table
 platform/3ds/source/z_textcase.c
 tools/aot/textcase.py
 tools/aot/test_textcase.py
-# writerfirst       codeclose, lever 2): a text writer's first Draw takes writerfront's front (UNDERTALE Old only)
+# writerfirst (change codeclose, lever 2): a text writer's first Draw takes writerfront's front (UNDERTALE Old only)
 platform/3ds/source/z_writerfirst.c
 
 # freebies restart preload: restarting the room into another planned scene gets the room load (UNDERTALE only;
@@ -954,7 +958,13 @@ platform/3ds/source/ctr_fpsbox.h
 tools/buildcache/fpsbox_compile.py
 tools/buildcache/test_fpsbox_compile.py
 platform/3ds/source/z_labcut.c
+platform/3ds/source/z_dlghold.c
 tools/buildcache/labcut_compile.py
+tools/buildcache/redpix_compile.py
+tools/buildcache/test_redpix_compile.py
+# pacerflush (change pacer gbot): main's consoles write-back with the game on either screen (both games).
+platform/3ds/source/z_pacerflush.c
+engine/src/z_utburst.c
 engine/src/z_utrect.c
 # depthmove: runner.c includes its macros (the original code without CTRPORT_DEPTHMOVE); z_depthmove.c is DELTARUNE only
 engine/src/z_depthmove.h
@@ -970,3 +980,9 @@ tools/release/test_kit_hygiene.py
 tools/release/export_scrub.py
 
 tools/release/test_export_scrub.py
+
+# titancpu (DELTARUNE New Titan CPU): the typed-region priority order (empty without a list), the lazy surface
+# hand-off splits the renderer includes, and the Titan CPU recorder (titandiag builds only, compiled out of releases)
+tools/aot/typed_priority.py
+platform/3ds/source/vine_titancpu.inc
+platform/3ds/source/z_titandiag.c

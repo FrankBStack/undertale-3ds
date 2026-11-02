@@ -502,7 +502,7 @@ SECTIONS
     *(.text.late.utasgore)
     /* Any other late text (round 14 dropped the wildcard ahead of the host table: it placed nothing). Not
        ctr_renderer.c's or z_itemverdict.c's, whose smartcut sections come last (round 17). */
-    *(SORT_BY_NAME(EXCLUDE_FILE (*z_labcut.o *ctr_fpsbox.o *ctr_legal.o *ctr_legal_romfs.o *z_colexact.o *z_utwindow.o *z_asrtext* *z_adpcm* *ctr_adpcm_probe.o *source/ctr_audio_system.o *z_knightnew_history.o *source/z_flowcode.o *ctr_data_version.o *z_gogut* *ctr_pixgrid* *z_builderx_review* *z_builderx_new* *z_builderx_old* *z_builderx_receipt* *runner.o *z_loadscreen.o *z_symverdict* *z_smalltext_dr* *z_utstall* *z_sdmigrate* *source/ctr_renderer.o *source/z_itemverdict.o *z_phaseplan* *z_utold_scalar* *source/ctr_benchmark.o *z_sdlat* *vm_builtins.o *z_gamedir* *ctr_flowervramg_promotion.o *ctr_memory.o *ctr_flowervramg_palette.o *ctr_textures.o) .text.late.*))
+    *(SORT_BY_NAME(EXCLUDE_FILE (*z_dlghold.o *z_redpix.o *z_labcut.o *ctr_fpsbox.o *ctr_legal.o *ctr_legal_romfs.o *z_colexact.o *z_utwindow.o *z_asrtext* *z_adpcm* *ctr_adpcm_probe.o *source/ctr_audio_system.o *z_knightnew_history.o *source/z_flowcode.o *ctr_data_version.o *z_gogut* *ctr_pixgrid* *z_builderx_review* *z_builderx_new* *z_builderx_old* *z_builderx_receipt* *runner.o *z_loadscreen.o *z_symverdict* *z_smalltext_dr* *z_utstall* *z_sdmigrate* *source/ctr_renderer.o *source/z_itemverdict.o *z_phaseplan* *z_utold_scalar* *source/ctr_benchmark.o *z_sdlat* *vm_builtins.o *z_gamedir* *ctr_flowervramg_promotion.o *ctr_memory.o *ctr_flowervramg_palette.o *ctr_textures.o) .text.late.*))
     /* builderx UT-only adapters, after every round-14 fixed section. DR excludes this object. */
     *z_builderx_review*(.text .text.* .rodata .rodata.*)
     *(.text.h1hole.bxreview)
@@ -1107,7 +1107,8 @@ SECTIONS
        (ctr_renderer_knsurf.inc). Inside .late.text, never in an output section of its own: a separate output section
        after .late.text left the 3dsx with an absolute relocation on an instruction word, and the loader refused the
        ROM (docs/3ds-hardware.md, 75zg). Only ld's ARM-to-Thumb veneer (____wrap_Crispart_drawTexture_from_arm, one
-       cold caller), which ld puts after the last code input, moves (lead 10-31 18:5x). */
+       caller, caDraw), which ld puts after the last code input, moves (lead 10-31 18:5x). fpsbox's
+       .text.fpsbox75zm_veneer later retains that entry explicitly, as caDraw is reached during real drawing. */
     *(.text.knsurf_late)
     /* exitpanic argbind (last, after knsurf, merge order; DELTARUNE only, empty in UNDERTALE): argui's per-load
        pointers emptied at a chapter's unload and set at its texture set-up and session start (z_argbind.c). Code
@@ -1161,6 +1162,134 @@ SECTIONS
     /* drpix (last, Old DELTARUNE): resolve native colour geometry and guard compact surface sampling.
        Named outside .text.late.* so ctr_renderer.o's earlier catch-all leaves it here, inside .late.text. */
     *(.text.drpix_late)
+    /* inflight (flowend r35; last, after sndcut and drpix, merge order; UNDERTALE only, empty elsewhere): a
+       burst play missing a sound whose read is on its way leaves the deferred voices deferred (ctr_audio_system.c's
+       end). */
+    *(.text.inflight_late)
+    /* omegaflowey L2 (last, after inflight, merge order; UNDERTALE Old only, empty elsewhere): the sound plan's stream
+       scene, its sounds marked to stream for the room (z_utsfx.c's usPreloadOld, ctr_audio_system.c's end), then its
+       log line. Named outside .text.late.* so no catch-all above takes it; last, so no earlier late function moves. */
+    *(.text.omegaflowey_late)
+    *(.rodata.omegaflowey_in_text)
+    /* utburst (flowend r37; last, after drpix, inflight and omegaflowey, merge order; UNDERTALE only, empty elsewhere):
+       Omega Flowey's vine Create without its sound scripts' frames and the burst's held sound calls (z_utburst.c,
+       bound by gmlaot.py's UTF_NATIVE through aot_table.c's wrappers), ctr_audio_system.c's CtrAudio_burstDeferAll,
+       then z_utburst.o's constants and anything else of the file. Named outside .text.late.* so no catch-all above
+       takes it; last, so no earlier late function moves. */
+    *(.text.utburst_late)
+    *z_utburst.o(.text .text.* .rodata .rodata.*)
+    /* flowerhw D'+E (last, after utburst, merge order; DELTARUNE New only, empty elsewhere in release):
+       tower cuts 6, 7 and 7d (vine_new_retain.inc). Last in .late.text, so no earlier late function moves; only
+       ld's ARM-to-Thumb veneer, which follows the last code input, moves. Code only: ld puts the veneer after the
+       last code input, and a constant after it would sit on the 3dsxtool veneer + 8 relocation (argbind, above),
+       so the strings go to late rodata (.rodata.flowerhw_late). */
+    *(.text.flowerhw_late)
+    *(.text_flowerhw_tail)
+    /* knightgpu SY (after flowerhw D'+E, before flowerhw tshare: drpix, FC, then the tower fix, 11-01; DELTARUNE
+       New only, empty elsewhere): tiles' copies in VRAM given up only when that makes room (ctr_renderer.c's end).
+       Named outside .text.late.* so ctr_renderer.o's own late line above leaves it here. */
+    *(.text.knightgpu_sy_late)
+    /* FC rev 2 grows SY (kgYieldMirrors gives FC's copies up first): the smallest pad (0-31 B) that puts FC's code
+       on stage dr75's cache-line phase (dec-1029-phase-pads, c26rev r103 F2). CMake substitutes KGSY_TEXT_PHASE. */
+    __kgsy_text_gap_start = ABSOLUTE(.);
+    . += ((/* KGSY_TEXT_PHASE */ 0 - __kgsy_text_gap_start) & 31);
+    __kgsy_text_gap_end = ABSOLUTE(.);
+    /* knightgpu FC (after SY, before flowerhw tshare; DELTARUNE New only, empty elsewhere): tiles' copies in gaps a
+       room's wanted VRAM can't use (ctr_renderer.c's and ctr_memory.c's ends). Named outside .text.late.*. */
+    *(.text.knightgpu_fc_late)
+    /* FC rev 2's own code (.text.knightgpu_fc_late_fc2), after kgfcBeginFrame, and its vramMemAlign links, a section
+       each (dropped where nothing calls vramMemAlign). */
+    *(.text.knightgpu_fc_late_*)
+    /* Then the smallest pad (0-31 B) that puts flowerhw tshare's code and ld's veneer after it on stage dr75's
+       cache-line phase (c26rev r103 F2). CMake substitutes KGFC_TEXT_PHASE. */
+    __kgfc_text_gap_start = ABSOLUTE(.);
+    . += ((/* KGFC_TEXT_PHASE */ 0 - __kgfc_text_gap_start) & 31);
+    __kgfc_text_gap_end = ABSOLUTE(.);
+    /* flowerhw tshare (last, after knightgpu FC, merge order; DELTARUNE New only, empty elsewhere): cut 3's shared
+       depth texture waits for VRAM at step 0 instead of backing off (vine_new_retain.inc's end; vrTowerDraw's call target
+       only). Named outside .text.late.* so ctr_renderer.o's catch-all above leaves it here; last, so no earlier late
+       function moves; only ld's ARM-to-Thumb veneer, which follows the last code input, moves. */
+    *(.text.tshare_late)
+    /* restartexact (last, after flowerhw tshare, merge order; both games): game_restart as the PC runner does it (runner.c's end; runner.o
+       is out of the catch-alls above). */
+    *(.text.late.restartexact)
+    /* racefix (last, after restartexact, merge order): the save writer's retry and the end of "Saving failed" once every
+       lost save file is saved again (ctr_file_system.c's end). */
+    *(.text.racefix_late)
+    /* audofix (c26rev r90 + reviews B and C; last, after racefix, merge order; both games): the options menu's hold
+       unpauses its own sound (M1), time away (HOME, sleep, Rosalina) in a load window isn't load time (H1,
+       UNDERTALE, ctr_loadaudio_mix.inc's end), soundLength keeps a small WAV's blob while a stream reads it (F1), a
+       pending seek clears its stream's channel only while the stream still owns it (F2), and a played-out stream's
+       context is freed before a live stream is stopped for one (S2) (ctr_audio_system.c's end). Named outside
+       .text.late.* so no catch-all above takes it; last, so no earlier late function moves. */
+    *(.text.audofix_late)
+    /* hitbox (hitbox 11-01; last, after audofix, merge order; both games, UNDERTALE's path only does work): a
+       non-precise sprite's stored collision mask kept at load (DataWin_sep0Masks) and GMS 1.4's sprite_collision_mask
+       (collision_gm14.c's end), then its builtin name. Named outside .text.* so collision_gm14.o's line above leaves
+       it here; last, so no earlier late function moves. */
+    *(.hitbox_late)
+    *(.rodata.hitbox_in_text)
+    /* utring (flowend r39; last, after hitbox, merge order; UNDERTALE Old only, empty elsewhere): Omega Flowey's ring boss's
+       Create (z_utring.c, bound by gmlaot.py's UTF_NATIVE through aot_table.c's wrapper, which is here too), the
+       wrapper's operand table, then z_utring.o's constants and anything else of the file. Last, so no earlier late function moves. */
+    *(.text.utring_late)
+    *(.text.utring_ops)
+    *(.utring_sw)
+    *z_utring.o(.text .text.* .rodata .rodata.*)
+    /* btlentry (last, after utring, merge order; UNDERTALE Old only, empty elsewhere): a battle group's planned tiles
+       read on the reader during the encounter animation (z_btlentry.c). Named outside .text.late.* so no catch-all
+       above takes it. A fixed 7,428 B slot (lead, 11-02, 75zo: r3 is 4,040 B here and r4 rev 2 + r5 add about 3 KB),
+       so its in-place growth no longer moves the late code after it; on UNDERTALE Old only, empty elsewhere, no
+       pad. The pad is a declared gap (__btlentry_text_gap_*, zero fill) so check_smoothux_layout names it
+       (SLOT_PADS); outgrowing the slot fails the link (the location counter cannot move backwards). */
+    __btlentry_late_start = .;
+    *(.text.btlentry_late)
+    *(.rodata.btlentry_in_text)
+    __btlentry_text_gap_start = ABSOLUTE(.);
+    . = . > __btlentry_late_start ? __btlentry_late_start + 7428 : .;
+    __btlentry_text_gap_end = ABSOLUTE(.);
+    /* titandiag (last, merge order; build.sh's titandiag word only, never a release): the Titan CPU recorder
+       (z_titandiag.c) and its constants. */
+    *(.text.titandiag_late)
+    *(.rodata.titandiag_in_text)
+    *z_titandiag.o(.text .text.* .rodata .rodata.*)
+    /* titancpu L1 (last, merge order; DELTARUNE New only, empty elsewhere): lazy surface hand-off splits
+       (vine_titancpu.inc, through vine_old_parent.py's routing). Named outside .text.late.* so that ctr_renderer.o's
+       catch-all above leaves it here. */
+    *(.text.titancpu_late)
+    /* titancpu L4 (last, merge order; DELTARUNE New only, empty elsewhere): path_add_point growth
+       (VMBuiltins_titanPathAddPoint, vm_builtins.c's end; vm_builtins.o is out of the catch-all above). */
+    *(.text.late.titancpu)
+    /* titancpu lever 1 (last, merge order; DELTARUNE New only, empty elsewhere): typed regions' draw_surface_part
+       draws (vine_titancpu.inc's Titan_stripDraw, ctr_natsurf6.c's Titan_ns6PassesDraw), after every other late
+       function so that none of them moves. */
+    *(.text.titancpu_tail)
+    /* redpix (last, merge order): UT cold tile conversion only; original converter keeps its slot. */
+    *z_redpix.o(.text.late.redpix)
+    /* pacerflush (pacer gbot; last, after redpix, merge order; both games): main's consoles write-back, the top
+       screen's at the frame's end with the game below (z_pacerflush.c). Named outside .text.late.* so no
+       catch-all above takes it; last, so no earlier late function moves. */
+    *(.text.pacerflush_late)
+    /* fpsbox75zm (after pacerflush, merge order; fpsrev: its block grows in place, so anything late after it (audofix_feed)
+       needs its exact layout re-run whenever fpsbox changes):
+       final-pixel counter composition, after every existing input. */
+    *(.text.fpsbox75zm_veneer)
+    *(.text.fpsbox75zm_late)
+    *(.rodata.fpsbox75zm_late)
+    /* audofix drone (playtest 11-01, UNDERTALE): a looping stream of a sound whole in the SFX cache reads the cached copy
+       (ctr_audio_system.c's end); its own name, after audofix's, so none of those moves (75zo: last, after fpsbox). The load play-through (11-02,
+       ctr_loadaudio_mix.inc's end) is in the same section. Then its log line. */
+    *(.text.audofix_feed)
+    *(.rodata.audofix_in_text)
+    /* dlghold (last, after audofix_feed, merge order; both games): a menu handoff ends the dialogue hold
+       (z_dlghold.c). On DELTARUNE New, Crisp art's ARM entry stays fpsbox's retained one
+       (.text.fpsbox75zm_veneer, above; z_crispart.c names it): dlghold adds no entry of its own. */
+    *(.text.late.dlghold)
+    /* flowerhw L2 (last, after dlghold, merge order (75zo; after flowerhw tshare on dr75); DELTARUNE New only, empty elsewhere): the phase plan's
+       eviction, which drops the wanted marks of the tiles it took (z_phaseplan.c's ppEvict). Named outside .text.*
+       so z_phaseplan.o's catch-all above leaves it here; last, so no earlier late function moves. In 75zo Crisp art's
+       ARM entry is fpsbox's retained one (above), not an ld veneer after the last input, so nothing else moves. */
+    *(.text_flowerhw_l2)
   }
   __late_text_end = ABSOLUTE(.);
   /* 192 KiB (grown in whole 4 KiB pages from 16 KiB, each time late code outgrew it): screens' options page took
@@ -1321,7 +1450,7 @@ SECTIONS
     *(.rodata.late.pacer)
     /* oomport (integrate round 15, after pacer): checked optional renderer/history arrays. */
     *(.rodata.late.oomport)
-    *(SORT_BY_NAME(EXCLUDE_FILE (*ctr_legal.o *z_utwindow.o *z_asrtext* *z_adpcm* *ctr_adpcm_probe.o *source/ctr_audio_system.o *z_knightnew_history.o *source/z_flowcode.o *ctr_flowervramg_promotion.o *ctr_flowervramg_palette.o *z_gogut* *z_builderx_new* *z_builderx_receipt* *z_sdlat*) .rodata.late.*))
+    *(SORT_BY_NAME(EXCLUDE_FILE (*z_dlghold.o *z_redpix.o *ctr_legal.o *z_utwindow.o *z_asrtext* *z_adpcm* *ctr_adpcm_probe.o *source/ctr_audio_system.o *z_knightnew_history.o *source/z_flowcode.o *ctr_flowervramg_promotion.o *ctr_flowervramg_palette.o *z_gogut* *z_builderx_new* *z_builderx_receipt* *z_sdlat*) .rodata.late.*))
     *(.rodata.late.builderxnew)
     *(.rodata.late.builderxreceipt)
     *(.rodata.late.gogut)
@@ -1360,6 +1489,25 @@ SECTIONS
     *(.rodata.argbind_late)
     /* knightgpu A (last, merge order; DELTARUNE New only): log formats, profile builds only (ctr_renderer.c's end). */
     *(.rodata.knightgpu_compact_late)
+    /* flowerhw D'+E (last, after knightgpu A, merge order; DELTARUNE New only): the tower cuts' log strings
+       (vine_new_retain.inc). Here, not in late text, so nothing follows the ld veneer there. */
+    *(.rodata.flowerhw_late)
+    /* knightgpu SY (after flowerhw D'+E, before flowerhw tshare): its log format, profile builds only
+       (ctr_renderer.c's end). */
+    *(.rodata.knightgpu_sy_late)
+    /* knightgpu FC (after SY, before flowerhw tshare): its log format, profile builds only (ctr_renderer.c's end). */
+    *(.rodata.knightgpu_fc_late)
+    /* flowerhw tshare (last, merge order; DELTARUNE New only): its three log formats (vine_new_retain.inc's end). */
+    *(.rodata.tshare_late)
+    /* racefix (last, merge order): the save writer's retry log line (ctr_file_system.c's end). */
+    *(.rodata.racefix_late)
+    /* redpix (last, merge order): fingerprints and atlas positions of the two UT heads, Steam and GOG. */
+    *z_redpix.o(.rodata.late.redpix)
+    /* dlghold (last): names only, resolved at chapter initialization. */
+    *(.rodata.late.dlghold)
+    /* knightgpu FC rev 2 (after tshare, so every late constant before keeps its address, c26rev r103 F1; DELTARUNE New
+       only): its log formats and give-up reasons (ctr_renderer.c's end). */
+    *(.rodata.knightgpu_fc2_late)
     __late_rodata_end = ABSOLUTE(.);
   }
   /* 8 KiB (at first 4 KiB): late code's constants are mostly log formats; heapfrag's are 472 B, and
@@ -1465,6 +1613,8 @@ SECTIONS
     /* FREEBYTES_DATA */
     /* utbugs4 (last, merge order): virtual window position and final picture translation. */
     *(.data.late.utbugs4)
+    /* fpsbox75zm: DELTARUNE painter/cache lifetime lock, after existing data. */
+    *(.data.fpsbox75zm_late)
     __late_data_end = ABSOLUTE(.);
   }
   __late_data_limit = __late_data_start + 0x1000;
@@ -1865,6 +2015,44 @@ SECTIONS
        code index, the wrapped function, the variables and the count (z_writerfirst.c). */
     *(.bss.codeclose_wf_late)
     *z_writerfirst.o(.bss .bss.* COMMON)
+    /* utburst (flowend r37, after writerfirst; UNDERTALE only): the script checks and the held vines. */
+    *(.bss.utburst_late)
+    *z_utburst.o(.bss .bss.* COMMON)
+    /* flowerhw D'+E (after utburst, merge order; DELTARUNE New only): cut 7d's emit state and
+       per-strip u table (vine_new_retain.inc); towerprof's counters in its test builds. */
+    *(.bss.flowerhw_late)
+    /* knightgpu FC (after flowerhw D'+E, before flowerhw tshare; DELTARUNE New only): its per-room state
+       (ctr_renderer.c's end). */
+    *(.bss.knightgpu_fc_late)
+    /* flowerhw tshare (last, merge order; DELTARUNE New only): the wait's frame and counts (vine_new_retain.inc's end). */
+    *(.bss.tshare_late)
+    /* racefix (last, merge order): the lost save paths and their lock (ctr_file_system.c's end). */
+    *(.bss.racefix_late)
+    /* utring (flowend r39; last, after racefix, merge order; UNDERTALE Old only): instance_create's builtin and its data.win. */
+    *(.bss.utring_late)
+    *z_utring.o(.bss .bss.* COMMON)
+    /* btlentry (last, after utring, merge order; UNDERTALE Old only): its object indices, room visit and reads in flight. */
+    __btlentry_bss_start = .;
+    *(.bss.btlentry_late)
+    /* btlentry's bss slot: 520 B (r3 uses 100 B; r5 adds about 192 B), the same rule as its text slot. */
+    __btlentry_bss_gap_start = ABSOLUTE(.);
+    . = . > __btlentry_bss_start ? __btlentry_bss_start + 520 : .;
+    __btlentry_bss_gap_end = ABSOLUTE(.);
+    /* titandiag (last, merge order; titandiag builds only): the recorder's entry table and state. */
+    *(.bss.titandiag_late)
+    *z_titandiag.o(.bss .bss.* COMMON)
+    /* titancpu L1 (last, merge order; DELTARUNE New only): the surfaces' sample stamps. */
+    *(.bss.titancpu_late)
+    /* pacerflush (pacer gbot; last, after titancpu, merge order; both games): where the top consoles are (z_pacerflush.c). */
+    *(.bss.pacerflush_late)
+    /* fpsbox75zm (last, after pacerflush, merge order): the counter state. */
+    *(.bss.fpsbox75zm_late)
+    /* audofix drone and load play-through (playtest 11-01/11-02, last, merge order; UNDERTALE only): the stream contexts'
+       cached copies (ctr_audio_system.c's end), the load window's voice snapshot (ctr_loadaudio_mix.inc's end). */
+    *(.bss.audofix_late)
+    /* knightgpu FC rev 2 (after tshare, so every late static before keeps its address, c26rev r103 F1; DELTARUNE New
+       only): its list of copies, the block buffer and the hot-list buffers (ctr_renderer.c's end). */
+    *(.bss.knightgpu_fc2_late)
     /* 3dsxtool refuses a segment whose size isn't a multiple of 4 ("The segments is not word-aligned!"), and this
        block ends the RW segment: late statics of odd sizes (bools) would end it off a word. */
     . = ALIGN(4);

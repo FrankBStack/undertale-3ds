@@ -18,7 +18,7 @@
 // dropped: the tile loads at its draw as before. A tile comes back at most FS_REFILL_MAX times a room visit. Textures
 // only: the same texels whenever a tile loads; no game state, no RNG.
 //
-// The refill read (            2026-10-29) is admitted with the reader's promotion reserve (4 MiB on UT Old) plus its
+// The refill read (review decision 2026-10-29) is admitted with the reader's promotion reserve (4 MiB on UT Old) plus its
 // bytes instead of 8 MiB, its buffer allocated with heap relief off (a failure drops the read, never spills into linear
 // memory), and never performed on the game thread: a wait there that takes it gets no file for it, before any open or
 // read (rev 2, R32 F1), so perform reads nothing and the read is dropped. ctr_tile_reader.c calls the hooks at the end

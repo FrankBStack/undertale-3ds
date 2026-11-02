@@ -143,6 +143,14 @@ CtrDecodeStatus CtrPack_decodeRows(const uint8_t* blob, size_t size, bool gm2022
 // Writes tile (tx, ty) as tiled texels to dst (tileW * tileH texels), from
 // the pixels of its tile row. Not for empty tiles.
 void CtrPack_convertTile(void* dst, const CtrPageLayout* layout, int32_t tx, int32_t ty, const uint8_t* rows);
+#if (defined(ENABLE_WAD16) && !defined(ENABLE_WAD17)) || defined(CTRPORT_TEXPREP_REDPIX)
+// UT cold conversion: preserve the original converter's slot, then clear recognized normal/hurt head RGB.
+void CtrPack_convertTileRedpix(void* dst, const CtrPageLayout* layout, int32_t tx, int32_t ty, const uint8_t* rows);
+#else
+// DR is unchanged; the generic PC driver selects the UT wrapper only for UT data.
+#define CtrPack_convertTileRedpix CtrPack_convertTile
+#endif
+#line 146
 
 // ===[ Packed pages ]===
 
@@ -303,7 +311,7 @@ void CtrPackWorker_setKeepPacked(CtrPackWorker* worker, bool keep);
 // Stops the worker, waiting for the page in progress, and frees everything.
 void CtrPackWorker_stop(CtrPackWorker* worker);
 
-// ===[ Packed copies in spare linear memory       utflowey2, option 4; UNDERTALE Old only) ]===
+// ===[ Packed copies in spare linear memory (change utflowey2, option 4; UNDERTALE Old only) ]===
 // CMake defines CTRPORT_PKLIN for UNDERTALE o3ds builds only, so every other build compiles the original calls
 // through the CTR_PKLIN_* names below. A packed copy then has two homes under one budget: the heap first (within the
 // game's measured heap share), then linear memory that the room's planned tiles, the 3 MB floor and the texture

@@ -277,6 +277,40 @@ class Progress:
     total: int
     speed: float
     seconds_left: float | None
+    percent: float = 0.0
+
+
+class WorkProgress:
+    """Weight send/read-back bytes by their measured cost, without a time estimate."""
+
+    def __init__(self, sending, checking):
+        self.total = [sending, checking]
+        self.done = [0, 0]
+        self.sample_bytes = [0, 0]
+        self.sample_seconds = [0.0, 0.0]
+        self.phase, self.stamp, self.percent = None, None, 0.0
+
+    def begin(self, checking):
+        self.phase, self.stamp = int(checking), time.monotonic()
+
+    def advance(self, checking, count, measured):
+        phase = int(checking)
+        self.done[phase] += count
+        if measured and count and self.phase == phase:
+            now = time.monotonic()
+            self.sample_bytes[phase] += count
+            self.sample_seconds[phase] += max(0.0, now-self.stamp)
+            self.stamp = now
+        costs = [seconds/count if seconds > 0 and count else None
+                 for seconds, count in zip(self.sample_seconds, self.sample_bytes)]
+        # Until both directions have a sample, use the observed direction for both.
+        costs = [cost or costs[1-i] or 1.0 for i, cost in enumerate(costs)]
+        total = sum(size*cost for size, cost in zip(self.total, costs))
+        done = sum(size*cost for size, cost in zip(self.done, costs))
+        # New samples/retries can change the budget. Never move backwards and never
+        # finish before rename, final size/date checks and installer receipts succeed.
+        self.percent = max(self.percent, min(99.0, 100*done/max(total, 1e-12)))
+        return self.percent
 
 
 class Transfer:
@@ -287,6 +321,7 @@ class Transfer:
         self.started = time.monotonic()
         self.folders = set()
         self.verified_data = {}
+        self.work_progress = WorkProgress(0, 0)
 
     def tick(self, phase, path, count=0, wire=True):
         check_cancel(self.cancelled)
@@ -294,8 +329,9 @@ class Transfer:
         self.wire += count if wire else 0
         elapsed = time.monotonic() - self.started
         speed = self.wire / max(elapsed, 0.001)
-        self.progress(Progress(phase, path, self.done, self.total, speed,
-                               max(0, self.total-self.done)/speed if speed else None))
+        checking = phase.startswith('Checking')
+        percent = self.work_progress.advance(checking, count, wire) if phase != 'Finished' else 100.0
+        self.progress(Progress(phase, path, self.done, self.total, speed, None, percent))
 
     def mkdirs(self, path):
         parts = PurePosixPath(path).parent.parts[1:]
@@ -322,6 +358,8 @@ class Transfer:
                 raise TransferError('A file on the 3DS changed during the check. Send again: ' + path)
             digest.update(block)
             self.tick(phase, path, len(block))
+        self.work_progress.begin(True)
+        self.tick(phase, path)
         self.ftp.retrbinary('RETR ' + path, take, blocksize=BLOCK)
         return digest.hexdigest(), count
 
@@ -372,6 +410,7 @@ class Transfer:
                 self.tick('Already on the 3DS', path, item.size, wire=False)
                 return
             self.total += item.size  # A failed same-size read-back precedes a new full copy.
+            self.work_progress.total[1] += item.size
         # A stale version receipt must never survive a data replacement or interrupted upload.
         if data_file:
             delete_if_present(self.ftp, str(PurePosixPath(path).parent / 'cache/data-version.txt'))
@@ -393,6 +432,7 @@ class Transfer:
                     prefix.update(block)
                     remaining -= len(block)
             self.total += offset  # Prefix read-back is extra real work.
+            self.work_progress.total[1] += offset
             if self.hash_remote(temporary, offset) != (prefix.hexdigest(), offset):
                 self.ftp.delete(temporary)
                 offset = 0
@@ -400,6 +440,7 @@ class Transfer:
         with source.open('rb') as stream:
             stream.seek(offset)
             try:
+                self.work_progress.begin(False)
                 self.ftp.storbinary('STOR ' + temporary, stream, blocksize=BLOCK,
                                    callback=lambda b: self.tick('Sending', path, len(b)), rest=offset or None)
             except ftplib.error_perm as exc:
@@ -447,6 +488,9 @@ class Transfer:
         self.total = sum(it.size * (2 if it.size <= SMALL or PurePosixPath(it.dst).suffix.casefold() in ('.3dsx', '.cia', '.dtsp')
                                     or PurePosixPath(it.dst).name.casefold() in ('data.win', 'install.json')
                                     else 1) for it in items)
+        sending = sum(it.size for it in items)
+        self.work_progress = WorkProgress(sending, self.total-sending)
+        self.tick('Sending', '')
         for it in items:
             if self.install and PurePosixPath(it.dst).name in ('complete', 'install.json'):
                 delete_if_present(self.ftp, remote_path(it.dst))

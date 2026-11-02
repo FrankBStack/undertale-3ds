@@ -9562,7 +9562,7 @@ static RValue builtin_window_get_cursor(VMContext* ctx, MAYBE_UNUSED RValue* arg
 
 // ===[ Game State Functions ]===
 static RValue builtin_game_restart(VMContext* ctx, MAYBE_UNUSED RValue* args, MAYBE_UNUSED int32_t argCount) {
-    ctx->runner->pendingRoom = ROOM_RESTARTGAME;
+    ctx->runner->pendingRoom = RESTART_EXACT; // as the PC runner restarts; ROOM_RESTARTGAME is the bench's (vm_builtins.h)
     return RValue_makeUndefined();
 }
 
@@ -24820,7 +24820,7 @@ void VMBuiltins_registerAll(VMContext* ctx) {
     // Path manipulation
     VM_registerBuiltin(ctx, "path_exists", builtin_path_exists);
     VM_registerBuiltin(ctx, "path_add", builtin_path_add);
-    VM_registerBuiltin(ctx, "path_add_point", builtin_path_add_point);
+    VM_registerBuiltin(ctx, "path_add_point", VMBUILTINS_PATH_ADD_POINT);
     VM_registerBuiltin(ctx, "path_change_point", builtin_path_change_point);
     VM_registerBuiltin(ctx, "path_insert_point", builtin_path_insert_point);
     VM_registerBuiltin(ctx, "path_delete_point", builtin_path_delete_point);
@@ -25333,5 +25333,107 @@ __attribute__((noinline, section(".text.late.cdbox"))) RValue cdBoxSide(VMContex
         }
     }
     return VMBuiltins_getVariable(ctx, inst, builtinVarId, name, arrayIndex);
+}
+#endif
+
+// ---[ titancpu L4: path_add_point growth (DELTARUNE New 3DS, late code) ]---
+// builtin_path_add_point grows a path by one point at a time (a realloc per point; past the block's room, a copy of
+// every point so far). The Titan's scenes add about 200 points a frame. This one writes the point in place while the
+// heap block already has room for it (malloc_usable_size: the real size of a heap block, which is at least what was
+// asked) and otherwise reallocs to half as many points again, at least 8. Only a heap block's size is read: a block
+// from linear memory (CtrMemory_malloc's overflow) always goes through the realloc. The points and the path are what
+// builtin_path_add_point leaves; only the block can be larger.
+// Everything else goes to builtin_path_add_point, called through a pointer the compiler can't see through so that it
+// stays the function it was: fewer than 4 arguments (its warning), an argument that isn't a real, int32, bool or asset
+// reference (RValue_toInt32Other's and RValue_toRealOther's other cases), and a larger block the heap can't give (the
+// exact size, or its abort). Those four types are converted here as RValue_toInt32 and RValue_toReal convert them:
+// a call of rvalue.h's static RValue_*Other or static inline RValue_makeUndefined, or of any other function local to
+// this file, would add a call graph edge that reorders GCC's output of the file's functions and string constants
+// (alarm_gm14.h), and with them the warm code's pointers to its strings. No string constants here either.
+#if defined(__3DS__) && defined(ENABLE_WAD17) && defined(CTRPORT_TARGET_N3DS)
+#include <malloc.h>
+extern uint32_t __ctru_heap, __ctru_heap_size; // libctru: the heap malloc serves (CtrMemory_isHeap's test, inline)
+
+#define TITAN_PATH_PLAIN(v) ((v).type == RVALUE_REAL || (v).type == RVALUE_INT32 || (v).type == RVALUE_BOOL || (v).type == RVALUE_ASSETREF)
+#define TITAN_PATH_REAL(v) ((v).type == RVALUE_REAL ? (v).real : (GMLReal) (v).int32)
+#define TITAN_PATH_UNDEFINED ((RValue) {.type = RVALUE_UNDEFINED, .gmlStackType = GML_TYPE_VARIABLE}) // RValue_makeUndefined()
+
+__attribute__((noinline, used, section(".text.late.titancpu")))
+RValue VMBuiltins_titanPathAddPoint(VMContext* ctx, RValue* args, int32_t argCount) {
+    if (argCount >= 4 && TITAN_PATH_PLAIN(args[0]) && TITAN_PATH_PLAIN(args[1]) && TITAN_PATH_PLAIN(args[2]) &&
+        TITAN_PATH_PLAIN(args[3])) {
+        int32_t pathIdx = args[0].type == RVALUE_REAL ? (int32_t) args[0].real : args[0].int32;
+        DataWin* dw = ctx->runner->dataWin;
+        if (0 > pathIdx || (uint32_t) pathIdx >= dw->path.count || !dw->path.paths[pathIdx].exists) return TITAN_PATH_UNDEFINED;
+        GamePath* p = &dw->path.paths[pathIdx];
+        uint32_t n = p->pointCount;
+        PathPoint* pts = p->points;
+        uintptr_t at = (uintptr_t) pts;
+        if (pts == nullptr || __ctru_heap > at || at >= __ctru_heap + __ctru_heap_size ||
+            (n + 1) * sizeof(PathPoint) > malloc_usable_size(pts)) {
+            uint32_t cap = n + 1 + n / 2;
+            if (8 > cap) cap = 8;
+            pts = (PathPoint*) realloc(p->points, cap * sizeof(PathPoint));
+            if (pts == nullptr) goto original; // the block stays; the exact size, or its abort, as it was
+            p->points = pts;
+        }
+        pts[n].x = (float) TITAN_PATH_REAL(args[1]);
+        pts[n].y = (float) TITAN_PATH_REAL(args[2]);
+        pts[n].speed = (float) TITAN_PATH_REAL(args[3]);
+        p->pointCount = n + 1;
+        p->internalStale = true; // computed when next read (GamePath_ensureInternal)
+        return TITAN_PATH_UNDEFINED;
+    }
+original:;
+    BuiltinFunc fallback = builtin_path_add_point;
+    __asm__("" : "+r"(fallback));
+    return fallback(ctx, args, argCount);
+}
+#undef TITAN_PATH_PLAIN
+#undef TITAN_PATH_REAL
+#undef TITAN_PATH_UNDEFINED
+#endif
+
+// ---[ titancpu L3: draw_surface_part with real arguments, for typed AOT regions (DELTARUNE New 3DS, late code) ]---
+// A typed region's draw_surface_part call whose 7 arguments are numbers calls Titan_scalarSurfacePart with them as
+// reals (tools/aot/typed.py, scalar_surface) instead of boxing them in RValues for the bound builtin. It converts and
+// draws as builtin_draw_surface_part does (RValue_toReal of a number is that number as a real) and returns what it
+// returns. The region's entry checks that the bound builtin is builtin_draw_surface_part
+// (Titan_scalarSurfacePartIsBuiltin) and otherwise hands over to the generated code, which calls the bound one.
+// As for L4 above: no call of a function local to this file and no string constants (the warm strings' order).
+#if defined(__3DS__) && defined(ENABLE_WAD17) && defined(CTRPORT_TARGET_N3DS) && defined(CTRPORT_AOT)
+__attribute__((noinline, used, section(".text.late.titancpu")))
+bool Titan_scalarSurfacePartIsBuiltin(BuiltinFunc bound) {
+    BuiltinFunc builtin = builtin_draw_surface_part;
+    __asm__("" : "+r"(builtin));
+    return bound == builtin;
+}
+
+// titancpu lever 1: a region whose only builtin calls are these draws passes a session (16 words of its own, zero at its start),
+// and Titan_stripDraw (platform/3ds/source/vine_titancpu.inc) draws as renderer->vtable->drawSurface(renderer, id, left,
+// top, w, h, x, y, 1, 1, 0, 0xFFFFFFFF, alpha) does. Any other region passes nullptr.
+void Titan_stripDraw(Renderer* renderer, uint32_t* session, int32_t surfaceId, int32_t left, int32_t top, int32_t w, int32_t h, float x, float y,
+                     float alpha);
+
+__attribute__((noinline, used, section(".text.late.titancpu")))
+RValue Titan_scalarSurfacePart(VMContext* ctx, uint32_t* session, GMLReal surface, GMLReal left_, GMLReal top_, GMLReal w_,
+                               GMLReal h_, GMLReal x_, GMLReal y_) {
+    int32_t surfaceId = (int32_t) surface;
+    float left = (float) left_;
+    float top = (float) top_;
+    float w = (float) w_;
+    float h = (float) h_;
+    float x = (float) x_;
+    float y = (float) y_;
+    Runner* runner = ctx->runner;
+    if (runner->renderer != nullptr) {
+        if (session != nullptr) {
+            Titan_stripDraw(runner->renderer, session, surfaceId, (int32_t) left, (int32_t) top, (int32_t) w, (int32_t) h, x, y,
+                            runner->renderer->drawAlpha);
+        } else {
+            runner->renderer->vtable->drawSurface(runner->renderer, surfaceId, (int32_t) left, (int32_t) top, (int32_t) w, (int32_t) h, x, y, 1.0, 1.0, 0.0, 0xFFFFFFFF, runner->renderer->drawAlpha);
+        }
+    }
+    return (RValue) {.type = RVALUE_UNDEFINED, .gmlStackType = GML_TYPE_VARIABLE}; // RValue_makeUndefined()
 }
 #endif

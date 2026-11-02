@@ -844,7 +844,7 @@ MM_CODE static int apAdmit(int32_t, uint32_t, uint32_t);
 MM_CODE static int apQueue(int32_t, uint32_t, uint32_t);
 #endif
 #line 827
-static void serviceStream(CtrAudioSystem* ca, StreamContext* s, DecodeStats* stats) {
+__attribute__((noinline, noipa, optimize("Os"), section(".text.audofix_late"))) static void audofixSeekClear(StreamContext* s); static void serviceStream(CtrAudioSystem* ca, StreamContext* s, DecodeStats* stats) {
 #ifdef CTRPORT_ADPCM_MUSIC
     mmServiceLock(&s->lock);
 #else
@@ -875,7 +875,7 @@ static void serviceStream(CtrAudioSystem* ca, StreamContext* s, DecodeStats* sta
         s->seekPending = false;
         seekSeconds = s->seekSeconds;
         doSeek = true;
-        ndspChnWaveBufClear(s->channel);
+        audofixSeekClear(s); // audofix F2: not once stopStreamVoice has given the channel up (file end)
         for (int i = 0; i < STREAM_BUFFERS; i++) s->bufs[i].wb.status = NDSP_WBUF_FREE;
         s->nextBuf = 0;
         s->fillFrames = 0;
@@ -1580,7 +1580,7 @@ static float streamEntryLength(CtrAudioSystem* ca, int32_t streamIndex) {
 // Length of a SOND asset in seconds, cached once known. Before a sound has
 // played this probes its headers on the game thread (for an external file an
 // open and two small reads; no decoder setup).
-static float soundLength(CtrAudioSystem* ca, int32_t soundIndex) {
+__attribute__((noinline, noipa, optimize("Os"), section(".text.audofix_late"))) static void audofixReleaseBlob(CtrAudioSystem* ca, int32_t soundIndex, DataWin* group, AudioEntry* entry); static float soundLength(CtrAudioSystem* ca, int32_t soundIndex) { __asm__ volatile(".rept 30; nop; .endr"); // audofix F1: keeps the size (the release is a late call)
     if (soundIndex >= AUDIO_STREAM_INDEX_BASE) return streamEntryLength(ca, soundIndex);
     if (soundIndex < 0 || (uint32_t) soundIndex >= ca->soundCount) return 0.0f;
     if (ca->soundLengths[soundIndex] >= 0.0f) return ca->soundLengths[soundIndex];
@@ -1607,7 +1607,7 @@ static float soundLength(CtrAudioSystem* ca, int32_t soundIndex) {
             // Small WAVs are cached from a fresh read when they play; compressed or
             // huge sounds play from the blob, so keep those.
             bool smallWav = ok && info.kind == CTR_DECODER_WAV && info.totalFrames * info.channels * 2u <= SFX_CACHE_MAX_ENTRY_BYTES;
-            if (smallWav && !prepInFlight(ca, soundIndex)) releaseAudoBlob(group, entry);
+            if (smallWav) audofixReleaseBlob(ca, soundIndex, group, entry); // audofix F1: kept while a stream reads it (file end)
         }
     } else {
         char* path = resolveExternalPath(ca, sound);
@@ -1898,7 +1898,7 @@ static void streamApply(CtrAudioSystem* ca, Voice* v, const float mix[12], bool 
     LightLock_Unlock(&s->lock);
 }
 
-static int findFreeStreamContext(CtrAudioSystem* ca) {
+__attribute__((unused)) static int findFreeStreamContext(CtrAudioSystem* ca) { // audofix S2: audofixFreeStreamContext copies it (file end)
     for (int i = 0; i < STREAM_CONTEXTS; i++) {
         StreamContext* s = &ca->streams[i];
         if (s->state == CTX_FREE || (s->state == CTX_DONE && s->owner < 0)) return i;
@@ -1911,8 +1911,8 @@ static int findFreeStreamContext(CtrAudioSystem* ca) {
 // A free stream context, -1 if none can be had, or CLAIM_WAIT when one is on
 // its way out: the caller retries on a later frame rather than blocking the
 // game thread while the decode thread finishes whatever it is doing.
-static int claimStreamContext(CtrAudioSystem* ca, int32_t priority, int forVoice) {
-    int ctx = findFreeStreamContext(ca);
+__attribute__((noinline, noipa, optimize("Os"), section(".text.audofix_late"))) static int audofixFreeStreamContext(CtrAudioSystem* ca); static int claimStreamContext(CtrAudioSystem* ca, int32_t priority, int forVoice) {
+    int ctx = audofixFreeStreamContext(ca); __asm__ volatile(".rept 24; nop; .endr"); // audofix S2 (file end; nops: same size)
     if (ctx >= 0) return ctx;
 
     // All contexts busy. If none is already on its way out (stopped, waiting
@@ -3088,7 +3088,7 @@ static bool ctrDestroyStream(AudioSystem* audio, int32_t streamIndex) {
 
 // ===[ Creation ]===
 
-__attribute__((noinline, section(".text.pcmwait_late"))) static void pcmWaitUpdate(AudioSystem* audio, float deltaTime); FLOWEND_BURST_DECL static AudioSystemVtable ctrAudioSystemVtable = {
+__attribute__((noinline, section(".text.pcmwait_late"))) static void pcmWaitUpdate(AudioSystem* audio, float deltaTime); __attribute__((noinline, noipa, optimize("Os"), section(".text.audofix_late"))) static bool audofixIsPlaying(AudioSystem* audio, int32_t id); FLOWEND_BURST_DECL AUDOFIX_FEED_DECL static AudioSystemVtable ctrAudioSystemVtable = {
     .init = ctrInit,
     .destroy = ctrDestroy,
     .update = CTR_UPDATE_ENTRY,
@@ -3098,7 +3098,7 @@ __attribute__((noinline, section(".text.pcmwait_late"))) static void pcmWaitUpda
     .setListenerPosition = ctrSetListenerPosition,
     .stopSound = CTR_STOP_ENTRY,
     .stopAll = ctrStopAll,
-    .isPlaying = ctrIsPlaying,
+    .isPlaying = audofixIsPlaying, // audofix M1 (file end)
     .pauseSound = ctrPauseSound,
     .resumeSound = ctrResumeSound,
     .pauseAll = ctrPauseAll,
@@ -3162,22 +3162,30 @@ void CtrAudioSystem_setDataWinPath(CtrAudioSystem* ca, const char* path) {
 //   the game paused stays paused afterwards. NDSP pauses a channel in place: the queued buffers stay queued and play
 //   on from the same sample, and the decode thread finds no free buffer (no decoding, no underrun: a paused stream
 //   never counts as one).
-// - No click: the master volume steps down to silence before the channels pause, and back up after, one step per
-//   audio update (a game frame), so neither the open nor the close waits on the DSP on the game thread (smoothux
-//   menu1: the earlier 6 steps of a 5 ms sleep each held the menu's first frames 35 ms and the game's first frame
-//   after the close 30 ms).
+// - No fade (stopdead; playtest 10-29: all game audio stops dead on the menu frame and resumes at the same sample):
+//   the open pauses every game channel at once, in the game frame that shows the menu's first page, and the close
+//   lets them go on at the next audio update. The master volume is never touched. (Until 11-01 the master volume
+//   stepped down over six audio updates before the channels paused and back up over six after the close, and the
+//   hold also waited while a menu sound played, so the music went on for about 200 ms under the menu and came back
+//   late after it.) Neither the open nor the close waits on the DSP on the game thread (smoothux menu1: a fade
+//   of six 5 ms sleeps once held the menu's first frames 35 ms and the game's first frame after the close 30 ms).
 // - While held, the audio update runs with no elapsed time, so the game's fades, group fades and sound clocks hold
 //   too; an open video's clock holds with its sound (CtrVideo_menuPause).
 // - The release is deferred to the next audio update: Quit leaves the loop without one, so the music doesn't come
 //   back for the moment before the game exits; Resume and the Performance test's picker run one on their next frame.
 // - HOME and sleep don't use the suspend flag (NDSP saves and restores the channels and the master volume itself,
 //   and the video has its own mask bits), so they nest with this hold either way round.
-// - The menu's own sounds (CtrAudio_menuSound, from ctr_optmenu.c) start unpaused during the hold; the fade waits
-//   while the last one sounds (before this they started paused and all played at the close).
+// - The menu's own sounds (CtrAudio_menuSound, from ctr_optmenu.c) start unpaused during the hold, one read in the
+//   background too (audofix M1: it starts at a later update, and the held update unpauses it through the vtable's
+//   isPlaying). They take a game voice like any sound (a free one, else the game's lowest-priority one, held or
+//   not) and use up an instance id; pausemus's exact menu-sound path (no game voice or id) stays parked.
+// - Not held (pausemus's reading): positioned sounds' gain ramps run on the
+//   system clock (rampStep), and UNDERTALE's callback-fed SFX tails (utaFrameCallback) keep counting down; a stream
+//   decodes into a buffer the DSP had already freed before the pause (the same samples, played after the close).
 #define MENUPAUSE_CODE __attribute__((noinline, section(".text.late.menupause")))
 #define MENUPAUSE_BSS __attribute__((section(".bss.late.menupause")))
 #define MENUPAUSE_RO __attribute__((section(".rodata.late.menupause")))
-#define MENUPAUSE_RAMP_FRAMES 6
+#define MENUPAUSE_RAMP_FRAMES 6 // menuSetLevel's full-volume step (the old fade's length)
 
 void CtrVideo_menuPause(bool pause);
 void __real_CtrLegal_close(void);
@@ -3185,7 +3193,7 @@ void __real_CtrMenu_close(void* menu);
 void __wrap_CtrLegal_close(void);
 void __wrap_CtrMenu_close(void* menu);
 
-// 0 when not held; else 1 + the fade's step (MENUPAUSE_RAMP_FRAMES at full volume, 0 silent: the channels suspended).
+// 0 when not held; MENUPAUSE_RAMP_FRAMES + 1 from the open to its first audio update; 1 once the channels are paused.
 static uint8_t menuHeld MENUPAUSE_BSS;
 static bool menuReleasePending MENUPAUSE_BSS;
 static u64 menuHeldSince MENUPAUSE_BSS;
@@ -3202,63 +3210,55 @@ static int32_t menuVoice __attribute__((section(".bss.gamedir2_late"))); // the 
 static const char menuHeldText[] MENUPAUSE_RO = "Audio: held for the options menu (%lu underruns so far)\n";
 static const char menuReleasedText[] MENUPAUSE_RO = "Audio: released after the options menu, held %.1f s (%lu underruns so far)\n";
 
-// The master volume at a step of the fade (applyMasterGain's value at MENUPAUSE_RAMP_FRAMES); the step kept in menuHeld.
-MENUPAUSE_CODE static void menuSetLevel(CtrAudioSystem* ca, int level) {
+// The master volume (applyMasterGain's value at level MENUPAUSE_RAMP_FRAMES; the old fade stepped through the rest).
+MENUPAUSE_CODE __attribute__((noipa)) static void menuSetLevel(CtrAudioSystem* ca, int level) {
     float gain = ca->masterGain * ca->listenerGain;
     if (gain < 0.0f) gain = 0.0f;
     menuHeld = (uint8_t) (level + 1);
     if (ca->ndspReady) ndspSetMasterVol(gain * (float) level / (float) MENUPAUSE_RAMP_FRAMES);
 }
 
-// The audio update while held. The menu closed: the channels back first, then a step up per update with the game's
-// time running; the hold ends at full volume. The menu open: a step down, the channels suspended once silent, and no
-// time passes. A close during the fade down, or an open during the fade up, turns the fade round where it is.
-// The menu's own sounds (menuSound) play at full volume: the fade, either way, waits while one sounds, and once the
-// game's sounds are silent and paused the master volume is back up for them.
+// The audio update while held (stopdead). The open's first update (in the frame that opened the menu: main.c's paused
+// branch runs it after CtrMenu_open) pauses every game channel where it is, with no fade; no time passes after that.
+// The close: the channels go on at the next update, from the same sample, with the game's time running again; a menu
+// sound still sounding plays on beside them (the release no longer waits for it: that held the game's audio while the
+// game already ran). A menu sound read in the background starts unpaused (the vtable's isPlaying: audofix M1).
+// Before stopdead (until 11-01) the master volume stepped down over six updates before the channels paused and up over
+// six after the close, and the hold waited while a menu sound played: the music went on for about 200 ms under the
+// menu and came back late after it (playtest, o3dsxl, 75zm, 11-01: the fade in/out still present when the menu opens).
+// The .rept: nops at the entry, so menuHeldUpdate keeps its earlier 0x244 B and nothing after it moves.
 MENUPAUSE_CODE static void menuHeldUpdate(AudioSystem* audio, float deltaTime) {
+    __asm__ volatile(".rept 40\n nop\n .endr");
     CtrAudioSystem* ca = (CtrAudioSystem*) audio;
-    int level = menuHeld - 1;
-    if (menuVoice != 0 && MENUPAUSE_OPAQUE(ca->base.vtable->isPlaying)(audio, menuVoice)) {
-        MENUPAUSE_OPAQUE(menuRealUpdate)(audio, 0.0f);
-        return;
-    }
+    if (menuVoice != 0) (void) MENUPAUSE_OPAQUE(ca->base.vtable->isPlaying)(audio, menuVoice);
     if (menuReleasePending) {
-        if (level == 0) {
-            if (ca->ndspReady) ndspSetMasterVol(0.0f);
+        if (menuHeld == 1) { // the channels are paused (else the menu closed before its first update)
             CtrVideo_menuPause(false);
             MENUPAUSE_OPAQUE(ca->base.vtable->resume)(&ca->base);
             logInfo(menuReleasedText, TICKS_TO_MS(svcGetSystemTick() - menuHeldSince) / 1000.0, (unsigned long) CtrAudioSystem_underruns(ca));
         }
-        level = ca->ndspReady ? level + 1 : MENUPAUSE_RAMP_FRAMES;
-        menuSetLevel(ca, level);
-        if (level >= MENUPAUSE_RAMP_FRAMES) {
-            menuHeld = 0;
-            menuReleasePending = false;
-            ctrAudioSystemVtable.update = menuRealUpdate;
-        }
+        menuSetLevel(ca, MENUPAUSE_RAMP_FRAMES); // the master volume as the game set it (the hold never moves it)
+        menuHeld = 0;
+        menuReleasePending = false;
+        ctrAudioSystemVtable.update = menuRealUpdate;
         MENUPAUSE_OPAQUE(menuRealUpdate)(audio, deltaTime);
         return;
     }
-    if (level > 0) {
-        level = ca->ndspReady ? level - 1 : 0;
-        menuSetLevel(ca, level);
-        if (level == 0) {
-            MENUPAUSE_OPAQUE(ca->base.vtable->suspend)(&ca->base);
-            menuSetLevel(ca, MENUPAUSE_RAMP_FRAMES);
-            menuHeld = 1;
-            CtrVideo_menuPause(true);
-            menuHeldSince = svcGetSystemTick();
-            logInfo(menuHeldText, (unsigned long) CtrAudioSystem_underruns(ca));
-        }
+    if (menuHeld > 1) {
+        MENUPAUSE_OPAQUE(ca->base.vtable->suspend)(&ca->base);
+        menuHeld = 1;
+        CtrVideo_menuPause(true);
+        menuHeldSince = svcGetSystemTick();
+        logInfo(menuHeldText, (unsigned long) CtrAudioSystem_underruns(ca));
     }
     MENUPAUSE_OPAQUE(menuRealUpdate)(audio, 0.0f);
 }
 
-// The menu's open: the hold starts at full volume; its steps down follow at the audio updates.
+// The menu's open: the hold starts at its first audio update (menuHeldUpdate), later in the same frame.
 MENUPAUSE_CODE static void menuHold(void) {
     CtrAudioSystem* ca = gShutdownTarget;
     if (menuHeld) {
-        menuReleasePending = false; // opened again before the fade up ended: back down from where it is
+        menuReleasePending = false; // opened again before the update that releases it: stays held
         return;
     }
     if (ca == NULL || !ca->initialized) return;
@@ -3612,7 +3612,7 @@ UTA_LATE static void utaBuildSeam(int p, UtaChan* c, const UtaSeg* g, uint32_t f
         float w = utaSeamWeight(j, n);
         for (uint32_t k = 0; k < ch; k++) dst[j * ch + k] = utaClamp16((float) x[j * ch + k] + off[k] * w);
     }
-    DSP_FlushDataCache(dst, m * ch * 2u);
+    UTA_DECLICK_FLUSH(dst, m * ch * 2u);
     c->seamN = m;
     c->seamBuilt = 1;
 }
@@ -4028,7 +4028,7 @@ UTA_LATE static void utaStop(int p, UtaChan* c, uint32_t cb) {
     double step = (double) c->rate / UTA_DSP_RATE;
     c->tailEnd = cb + (uint32_t) ((double) (utaUnplayed(p) + n) / step / 160.0) + 4;
     if (any) {
-        DSP_FlushDataCache(dst, n * c->bytes);
+        UTA_DECLICK_FLUSH(dst, n * c->bytes);
         utaQueue(p, c, dst, n, 0, 0, UTA_PIECE_TAIL);
         utaTails++;
 #ifdef CTR_AUDIO_CAPTURE_WRAP_H
@@ -5136,7 +5136,7 @@ static inline void usFastCheck(void) {} // shipped builds: the skip makes no cal
 // the same. Other threads' reads pass straight through. Compiled for size: UNDERTALE Old's late text budget.
 #define FLOWEND_DECODE_FRAMES 2048u
 
-int32_t __real_CtrDecoder_read(CtrDecoder* dec, int16_t* out, uint32_t maxFrames);
+int32_t __real_CtrDecoder_read(CtrDecoder* dec, int16_t* out, uint32_t maxFrames); int32_t audofixReadLink(CtrDecoder* dec, int16_t* out, uint32_t maxFrames);
 int32_t __wrap_CtrDecoder_read(CtrDecoder* dec, int16_t* out, uint32_t maxFrames);
 
 // ===[ flowhitch rev 3 (flowend r22c; UNDERTALE): the first buffer of a spare, decoded ahead ]===
@@ -5183,7 +5183,7 @@ __attribute__((noinline, noipa, optimize("Os"), section(".text.flowhitch_late"))
         dec->positionFrames = at + n;
         return (int32_t) n;
     }
-    return __real_CtrDecoder_read(dec, out, maxFrames);
+    return AUDOFIX_READ_LINK(dec, out, maxFrames);
 }
 #else
 #define FLOWHITCH_READ_NEXT __real_CtrDecoder_read
@@ -5488,7 +5488,7 @@ static uint32_t flowendBurstPlays __attribute__((section(".bss.flowburst_late"))
 // played over SFX_SHED_RECENT_MS ago (c26rev r11d), so they are started first: before any play this code hands to
 // ctrPlaySound, at the update before ctrUpdate runs (main.c: the room-change preload comes after the update), and in
 // the shed's wrap chain. The sound is then in the cache and in use, as on the old path, and starts without a read.
-static uint32_t flowendDeferred __attribute__((section(".bss.flowburst_late")));
+static uint32_t flowendDeferred __attribute__((section(".bss.flowburst_late"))); static void inflightStartDeferred(CtrAudioSystem* ca, int32_t soundIndex);
 
 // Late copies of claimVoice and nextInstanceId (the same code): calling those from here would take them out of
 // ctrPlaySound, where they are inlined, and grow early text. voiceLive and stopVoice are out of line already.
@@ -5573,7 +5573,7 @@ __attribute__((noinline, optimize("Os"), section(".text.flowburst_late"))) stati
     CtrAudioSystem* ca = (CtrAudioSystem*) audio;
     if (FLOWEND_BURST_FIRST >= ++flowendBurstPlays || !ca->initialized || !ca->ndspReady || 0 > soundIndex ||
         (uint32_t) soundIndex >= ca->soundCount || ca->sfxCache[soundIndex].pcm == NULL) {
-        if (flowendDeferred != 0) flowendStartDeferred(ca); // a miss here may evict (buildSfx)
+        if (flowendDeferred != 0) inflightStartDeferred(ca, soundIndex); // a miss here may evict (buildSfx); not one being read (inflight)
         return ctrPlaySound(audio, soundIndex, priority, loop);
     }
     ca->windowPlays++;
@@ -5605,7 +5605,7 @@ __attribute__((noinline, optimize("Os"), section(".text.flowburst_late"))) stati
         c->lastUse = ++ca->useClock;
         c->lastPlayTick = svcGetSystemTick();
     }
-    __asm__ volatile(".rept 14; nop; .endr"); // sndcut: no frameTicks (end of file); the same size, so nothing moves
+    __asm__ volatile(".rept 13; nop; .endr"); // sndcut: no frameTicks (end of file); inflight: its call passes soundIndex (one more instruction); the same size, so nothing moves
     return id;
 }
 
@@ -6552,7 +6552,7 @@ static uint32_t pcmWaitOff PCMWAIT_BSS; // frees made with the DSP off (a new co
 static uint32_t pcmWaitCountedOff PCMWAIT_BSS;
 static uint32_t pcmWaitCounted PCMWAIT_BSS; // bytes the update added to pcmWaitCountedCa's cacheBytes
 static CtrAudioSystem* pcmWaitCountedCa PCMWAIT_BSS;
-void __wrap_linearFree(void* mem);
+void __wrap_linearFree(void* mem); void audofixFreeLink(void* mem);
 u32 __wrap_linearSpaceFree(void);
 void* __real_malloc(size_t size);
 void __real_free(void* ptr);
@@ -6694,7 +6694,7 @@ PCMWAIT_TEXT static void pcmWaitFlush(void) {
         if (pcmWaitBusy(n->pcm, n->size)) {
             pcmWaitPush(n);
         } else {
-            __wrap_linearFree(n->pcm);
+            AUDOFIX_FREE_LINK(n->pcm);
             __atomic_fetch_sub(&pcmWaitBytes, n->size, __ATOMIC_RELAXED);
             __atomic_fetch_sub(&pcmWaitPending, 1, __ATOMIC_RELAXED);
             pcmWaitDelete(n);
@@ -6730,7 +6730,7 @@ PCMWAIT_TEXT void CtrAudio_pcmWaitFree(void* mem) {
         pcmWaitPush(n);
         return;
     }
-    __wrap_linearFree(mem);
+    AUDOFIX_FREE_LINK(mem);
 }
 
 // Every linearSpaceFree of this file (the .set above): the idle waiting blocks are freed first.
@@ -7420,4 +7420,247 @@ __attribute__((noinline, optimize("Os"), section(".text.sndcut_late"))) static v
         if ((instance ? v->instanceId : v->soundIndex) == soundOrInstance) stopVoice(ca, i);
     }
 }
+
+// inflight (change flowend r35; UNDERTALE): flowendPlaySound's miss path starts the step's deferred voices first because
+// the play may build the sound's buffer and evict (buildSfx). A miss whose background read is already on its way
+// can't: resolveSoundSource returns SOURCE_PENDING before any build (loadInFlight, copied here so ctr_audio_system.c's
+// early text keeps its code). Omega Flowey's burst plays one sound effect 30 times in one step; when keepLinearFloor has
+// shed it since its last play, the first play queues its read and every later one missed, so all 57 deferred voices
+// were started and stopped again inside the step (o2ds row flowend-setp34: the first burst's stops 6.9 ms, plays
+// 13.2 ms, against 0.6 and 0.8; its frame 57.5 ms). Those voices now wait for the update, as in every other burst.
+__attribute__((noinline, optimize("Os"), section(".text.inflight_late"))) static void inflightStartDeferred(CtrAudioSystem* ca, int32_t soundIndex) {
+    bool keep = false;
+    if (soundIndex >= 0 && (uint32_t) soundIndex < ca->soundCount && ca->sfxCache[soundIndex].pcm == NULL) {
+        bool done = false, reading = false, freeSlot = false;
+        LightLock_Lock(&ca->loadLock);
+        for (int i = 0; i < LOAD_SLOTS; i++) {
+            LoadState state = ca->loads[i].state;
+            if (state == LOAD_FREE) freeSlot = true;
+            else if (ca->loads[i].soundIndex == soundIndex && state == LOAD_DONE) done = true;
+            else if (ca->loads[i].soundIndex == soundIndex && (state == LOAD_QUEUED || state == LOAD_BUSY)) reading = true;
+        }
+        LightLock_Unlock(&ca->loadLock);
+        // DONE stays in flight until collectLoads (this thread). A read still queued or busy may fail before the play
+        // looks (c26rev r81): resolveSoundSource then asks again, and that is pending too only if a slot is free and
+        // background reads are still allowed for it. Only this thread takes a free slot or sets noBackgroundRead.
+        keep = done || (reading && freeSlot && !ca->noBackgroundRead[soundIndex]);
+    }
+    if (!keep) flowendStartDeferred(ca);
+}
+
+// utburst (change flowend r37, UNDERTALE): Omega Flowey's held vine sound calls (engine/src/z_utburst.c) are made
+// together, a vine's stops then plays, each play's sound stopped again by the next vine's stops; from the batch's
+// first play on, the step's plays are left for the update to start (flowendPlaySound's deferral, as from the step's
+// FLOWEND_BURST_FIRST+1th play). Named outside .text.late.* so no catch-all above takes it; last.
+__attribute__((noinline, optimize("Os"), section(".text.utburst_late"))) void CtrAudio_burstDeferAll(void) {
+    if (FLOWEND_BURST_FIRST > flowendBurstPlays) flowendBurstPlays = FLOWEND_BURST_FIRST;
+}
+#endif
+
+#if defined(ENABLE_WAD16) && defined(CTRPORT_TARGET_O3DS)
+// omegaflowey L2 (UNDERTALE Old): the sound plan's stream scene for the new room (z_utsfx.c, after beginSfxPlan put
+// the last room's marks back). Each listed sound that isn't cached or streamed already gets flowhitch's mark: it
+// plays as a stream for the rest of the room, with no linear cache copy and no background decode (streamWhileCaching
+// skips FORM_STREAMED), and the next room change puts its form back (chainPlanFlowhitch). Omega Flowey's fight
+// decoded nine such sounds (296-914 KB each, 6.4 MB in all) into the cache in the background, and keepLinearFloor
+// shed 7.4-7.9 MB of the room's other sounds for them, which were then read and decoded again in play (change
+// omegaflowey). Plays, voices and samples are the same; a play reads the
+// stream's buffer, not a cache copy. Returns how many it marked.
+__attribute__((noinline, optimize("Os"), section(".text.omegaflowey_late"))) uint32_t CtrAudioSystem_streamPlan(const uint8_t* entries, uint32_t count) {
+    CtrAudioSystem* ca = gShutdownTarget;
+    uint32_t before = flowhitchCount;
+    if (ca == NULL) return 0;
+    for (; count > 0 && FLOWHITCH_MAX > flowhitchCount; count--, entries += 4) {
+        uint16_t si;
+        memcpy(&si, entries, 2);
+        if (si >= ca->soundCount || ca->soundForms[si] == FORM_STREAMED || ca->sfxCache[si].pcm != NULL) continue;
+        flowhitchSound[flowhitchCount] = (int16_t) si;
+        flowhitchForm[flowhitchCount++] = ca->soundForms[si];
+        ca->soundForms[si] = FORM_STREAMED;
+    }
+    return flowhitchCount - before;
+}
+#endif
+
+// audofix (c26rev r90 + review B; both games): fixes last in .late.text so ctr_audio_system.c's early text keeps its
+// addresses (each call site keeps its function's size, nop-padded where the call is shorter than the code it replaces).
+//
+// M1: the options menu's hold waits while the menu's last sound plays (menuHeldUpdate), and pauses the game's sounds
+// (setSuspended) once its fade is down. A menu sound that missed the SFX cache (shed since its last play, so read in
+// the background) only starts at a later audio update, inside the hold, so applyVoice started it paused like the
+// game's sounds: it never played on, the hold waited on it for good, and the game's sounds stayed paused after the menu
+// closed, until a later menu sound found the cache. The hold asks the vtable's isPlaying about the menu's sound, so
+// isPlaying (this wrapper; ctrIsPlaying for every other id, and when no hold is on) unpauses that sound first, as
+// CtrAudio_menuSound starts a cached one: it plays as soon as it is read, then the release goes on. (menuHeldUpdate
+// keeps its code: a direct call there grew it, the vtable entry is a pointer of the same size.)
+__attribute__((noinline, noipa, optimize("Os"), section(".text.audofix_late"))) static bool audofixIsPlaying(AudioSystem* audio, int32_t id) {
+    CtrAudioSystem* ca = (CtrAudioSystem*) audio;
+    for (int i = 0; menuHeld != 0 && id == menuVoice && i < VOICE_COUNT; i++) {
+        if (ca->voices[i].instanceId != id || !voiceLive(ca, i)) continue;
+        bool held = ca->suspended;
+        ca->suspended = false;
+        applyVoice(ca, i);
+        ca->suspended = held;
+    }
+    return ctrIsPlaying(audio, id);
+}
+
+// F1: soundLength frees a small WAV's AUDO blob once it has read the length (the sound is copied into the SFX cache
+// from a fresh read when it plays). When that copy found no linear memory, prepareAudoSource streams the WAV from the
+// blob itself, so a length query while that stream plays, or while its voice waits for a stream context, freed the
+// memory the stream reads. The blob is now kept then, as collectPreps and prepareAudoSource keep it.
+__attribute__((noinline, noipa, optimize("Os"), section(".text.audofix_late"))) static void audofixReleaseBlob(CtrAudioSystem* ca, int32_t soundIndex, DataWin* group, AudioEntry* entry) {
+    bool inFlight = false; // prepInFlight's check, copied: early text has no copy of it to call
+    LightLock_Lock(&ca->loadLock);
+    for (int i = 0; i < PREP_SLOTS; i++) {
+        if (ca->preps[i].state != PREP_FREE && ca->preps[i].soundIndex == soundIndex) inFlight = true;
+    }
+    LightLock_Unlock(&ca->loadLock);
+    if (inFlight || blobStreaming(ca, entry->data)) return;
+    if (group->mappedFile == NULL && group->lazyLoadAudio && group->lazyLoadFile != NULL && entry->data != NULL) {
+        free(entry->data); // releaseAudoBlob, copied
+        entry->data = NULL;
+    }
+}
+
+// F2: serviceStream reads stopRequested, unlocks, then locks again for a pending seek. stopStreamVoice gives the channel
+// up under the lock (a new voice may take it at once) and leaves seekPending set, so a stop between the two locks let
+// the seek clear the new voice's queued buffers. The seek's own state reset is harmless (the next pass finishes the
+// stream); only the clear needs the channel, and the lock is held here.
+__attribute__((noinline, noipa, optimize("Os"), section(".text.audofix_late"))) static void audofixSeekClear(StreamContext* s) {
+    if (!s->stopRequested) ndspChnWaveBufClear(s->channel);
+}
+
+// S2: a voice that needs a stream context when all are taken stops the least important live stream, unless one is on
+// its way out already (owner -1). A stream that has played out (CTX_DONE) keeps its owner until the update's voice pass
+// (voiceLive) lets it go, and the update starts pending voices before that pass, so a voice waiting for a context in
+// the update after a stream ended stopped a live one while a finished context sat there. A finished stream's voice is
+// now let go first, as that pass would, and its context taken.
+__attribute__((noinline, noipa, optimize("Os"), section(".text.audofix_late"))) static int audofixFreeStreamContext(CtrAudioSystem* ca) {
+    for (int i = 0; i < STREAM_CONTEXTS; i++) {
+        StreamContext* s = &ca->streams[i];
+        if (s->state == CTX_DONE && s->owner >= 0) voiceLive(ca, s->owner);
+    }
+    for (int i = 0; i < STREAM_CONTEXTS; i++) { // findFreeStreamContext's check (not inlined into Os code; no early copy)
+        StreamContext* s = &ca->streams[i];
+        if (s->state == CTX_FREE || (s->state == CTX_DONE && s->owner < 0)) return i;
+    }
+    return -1;
+}
+
+#if defined(ENABLE_WAD16) && defined(CTRPORT_HAVE_TREMOR)
+// audofix drone (playtest 11-01, UNDERTALE): a stream whose sound is whole in the SFX cache reads the cached copy.
+// The rising drone before Asriel (a looped sound, its pitch +0.007 a frame from 0.8 to about
+// 4.06) stuttered and cut out in the fade to white on the Old 3DS: a stream is decoded from Ogg Vorbis at the file's
+// rate, so its decode cost grows with the pitch (this one: about 27% of core 1 per 1x), and from about 3.65x the
+// decode thread could not keep up (95% busy, 22 ms queued; the playtest's log). The sound had been decoded into the cache
+// in the background long before (streamWhileCaching), but a playing stream never looked at the copy.
+// Exact: the copy is the same decoder's output for the same file (runPrepDecode), so frame n of the copy is frame n
+// of the stream, and the read hands the stream the frames it would have decoded, from its own position. The loop
+// seek, utaDecRead's seam and the queueing are unchanged (this link sits under them: flowhitch's read link's last
+// call, in front of the real read).
+// Game thread (each audio update): a stream's context gets its sound's copy (pointer, length, rate, channels and
+// the stream's name), and the copy counts as just played, so the texture cache's shedding passes it by and LRU
+// eviction takes it last. Any free of a published copy (pcmwait's real frees, at once or after its wait) takes it off
+// first and waits for a copy in progress (audofixFeeding: a Dekker pair, full barriers on both sides). Decode thread: a context whose
+// copy matches its decoder (Vorbis, channels, rate, length, name: a new stream in the context is not fed until the
+// next update) copies from the decoder's position and moves it on. When the copy goes while fed, the real decoder is
+// sought to that position first (it stood where the feed began), so the stream goes on exactly.
+#define AUDOFIX_FEED_CODE __attribute__((noinline, noipa, optimize("Os"), section(".text.audofix_feed")))
+#define AUDOFIX_FEED_BSS __attribute__((section(".bss.audofix_late")))
+typedef struct {
+    const int16_t* volatile pcm; // the copy, or NULL; written by the game thread only
+    uint32_t frames, rate, channels;
+    char name[sizeof(((StreamContext*) 0)->name)];
+} AudofixFeed;
+static AudofixFeed audofixFeeds[STREAM_CONTEXTS] AUDOFIX_FEED_BSS;
+static const int16_t* volatile audofixFeeding[STREAM_CONTEXTS] AUDOFIX_FEED_BSS; // the copy the decode thread reads now
+static uint32_t audofixFedEnd[STREAM_CONTEXTS] AUDOFIX_FEED_BSS; // decode thread: where its last copy left the decoder
+static const char audofixFeedLog[] __attribute__((section(".rodata.audofix_in_text"))) =
+    "Audio: stream '%s' reads its cached copy from frame %lu\n";
+void audofixFree(void* mem);
+
+AUDOFIX_FEED_CODE static void audofixUnfeed(int k) {
+    const int16_t* old = audofixFeeds[k].pcm;
+    audofixFeeds[k].pcm = NULL;
+    __sync_synchronize();
+    while (old != NULL && audofixFeeding[k] == old) svcSleepThread(0);
+}
+
+AUDOFIX_FEED_CODE static void audofixUpdate(AudioSystem* audio, float deltaTime) {
+    flowendBurstUpdate(audio, deltaTime);
+    CtrAudioSystem* ca = (CtrAudioSystem*) audio;
+    for (int k = 0; k < STREAM_CONTEXTS; k++) {
+        StreamContext* s = &ca->streams[k];
+        AudofixFeed* f = &audofixFeeds[k];
+        CachedSfx* c = NULL;
+        int vi = s->owner;
+        if (vi >= 0 && VOICE_COUNT > vi) {
+            Voice* v = &ca->voices[vi];
+            if (v->kind == VOICE_STREAM && v->ctx == k && v->soundIndex >= 0 && ca->soundCount > (uint32_t) v->soundIndex)
+                c = &ca->sfxCache[v->soundIndex];
+        }
+        const int16_t* pcm = NULL;
+        if (c != NULL && (c->format == NDSP_FORMAT_STEREO_PCM16 || c->format == NDSP_FORMAT_MONO_PCM16)) pcm = (const int16_t*) c->pcm;
+        if (pcm != f->pcm || (pcm != NULL && memcmp(f->name, s->name, sizeof(f->name)) != 0)) {
+            audofixUnfeed(k);
+            if (pcm != NULL) {
+                f->frames = c->frames;
+                f->rate = c->sampleRate;
+                f->channels = c->format == NDSP_FORMAT_STEREO_PCM16 ? 2u : 1u;
+                memcpy(f->name, s->name, sizeof(f->name));
+                __sync_synchronize();
+                f->pcm = pcm;
+            }
+        }
+        if (pcm != NULL) {
+            c->lastPlayTick = svcGetSystemTick();
+            if (c->lastUse != ca->useClock) c->lastUse = ++ca->useClock;
+        }
+    }
+}
+
+// pcmwait's real frees (CtrAudio_pcmWaitFree's and pcmWaitFlush's: every linearFree of this file ends there).
+AUDOFIX_FEED_CODE void audofixFree(void* mem) {
+    for (int k = 0; mem != NULL && k < STREAM_CONTEXTS; k++) {
+        if (audofixFeeds[k].pcm == mem) audofixUnfeed(k);
+    }
+    __wrap_linearFree(mem);
+}
+
+// flowhitch's read link's last call (any thread; only the stream contexts' decoders are fed).
+AUDOFIX_FEED_CODE int32_t audofixFeedRead(CtrDecoder* dec, int16_t* out, uint32_t maxFrames) {
+    CtrAudioSystem* ca = *ctrPcmWaitUta.target;
+    uintptr_t off = (uintptr_t) dec - (uintptr_t) &ca->streams[0].decoder;
+    uint32_t k = off / sizeof(StreamContext);
+    if (ca != NULL && dec->kind == CTR_DECODER_VORBIS && off % sizeof(StreamContext) == 0 && STREAM_CONTEXTS > k) {
+        AudofixFeed* f = &audofixFeeds[k];
+        const int16_t* p = f->pcm;
+        audofixFeeding[k] = p;
+        __sync_synchronize();
+        uint32_t at = (uint32_t) dec->positionFrames, n = 0;
+        bool feed = p != NULL && f->pcm == p && dec->channels == f->channels && dec->sampleRate == f->rate &&
+                    dec->totalFrames == f->frames && f->frames >= dec->positionFrames &&
+                    memcmp(f->name, ca->streams[k].name, sizeof(f->name)) == 0;
+        if (feed) {
+            n = f->frames - at;
+            if (n > maxFrames) n = maxFrames;
+            memcpy(out, p + at * f->channels, n * f->channels * sizeof(int16_t));
+        }
+        __sync_synchronize();
+        audofixFeeding[k] = NULL;
+        if (feed) {
+            if (audofixFedEnd[k] == 0) postMessage(ca, audofixFeedLog, ca->streams[k].name, (unsigned long) at);
+            dec->positionFrames = at + n;
+            audofixFedEnd[k] = at + n;
+            return (int32_t) n;
+        }
+        if (audofixFedEnd[k] == at && at != 0) (CtrDecoder_seek)(dec, at);
+        audofixFedEnd[k] = 0;
+    }
+    return __real_CtrDecoder_read(dec, out, maxFrames);
+}
+// The two links by name: aliases GCC doesn't see, so flowhitch's and pcmwait's functions call what looks to it like
+// the same external function as before (a call to a function of this file reorders flowend's block: b8).
+__asm__(".set audofixReadLink, audofixFeedRead\n.set audofixFreeLink, audofixFree\n");
 #endif

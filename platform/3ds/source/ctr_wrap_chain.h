@@ -367,4 +367,27 @@ CtrDataVersionResult CtrDataVersion_chainAdpcmMusic(CTR_DATAVERSION_CHAIN_PARAMS
 CtrDataVersionResult CtrDataVersion_chainAdpcmPack(CTR_DATAVERSION_CHAIN_PARAMS);
 #endif
 
+// CtrTextures_takeHot, CtrMemory_vramAllocNow, CtrTextures_destroy: knightgpu FC rev 2 (DELTARUNE New) -> contention
+// (both ctr_renderer.c) -> real. CtrMemory_vramAllocOnce, _vramAllocAtOnce, _vramMemAlignOnce, _vramMemAlignAtOnce:
+// FC rev 2 -> vramtouch (ctr_vram_touch.c) -> real.
+//   FC rev 2 (ctr_renderer.c's end): the copies FC places are given up before any other VRAM allocation, the textures'
+//   destroy forgets them, and mirrorHotTiles' list ends where it would stop without them.
+#ifdef CTRPORT_KGFC2_ON
+#define CTR_TAKEHOT_CONTENTION CtrTextures_chainContentionTakeHot
+#define CTR_VRAMALLOCNOW_CONTENTION CtrMemory_chainContentionAllocNow
+#define CTR_DESTROY_CONTENTION CtrTextures_chainContentionDestroy
+#define CTR_VRAMALLOCONCE_TOUCH CtrMemory_chainTouchAllocOnce
+#define CTR_VRAMALLOCATONCE_TOUCH CtrMemory_chainTouchAllocAtOnce
+#define CTR_VRAMMEMALIGNONCE_TOUCH CtrMemory_chainTouchMemAlignOnce
+#define CTR_VRAMMEMALIGNATONCE_TOUCH CtrMemory_chainTouchMemAlignAtOnce
+#else
+#define CTR_TAKEHOT_CONTENTION __wrap_CtrTextures_takeHot
+#define CTR_VRAMALLOCNOW_CONTENTION __wrap_CtrMemory_vramAllocNow
+#define CTR_DESTROY_CONTENTION __wrap_CtrTextures_destroy
+#define CTR_VRAMALLOCONCE_TOUCH __wrap_CtrMemory_vramAllocOnce
+#define CTR_VRAMALLOCATONCE_TOUCH __wrap_CtrMemory_vramAllocAtOnce
+#define CTR_VRAMMEMALIGNONCE_TOUCH __wrap_CtrMemory_vramMemAlignOnce
+#define CTR_VRAMMEMALIGNATONCE_TOUCH __wrap_CtrMemory_vramMemAlignAtOnce
+#endif
+
 #endif

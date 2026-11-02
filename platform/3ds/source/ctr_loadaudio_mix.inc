@@ -142,7 +142,7 @@ LM_CODE static bool lmHeld(void) {
 
 LM_CODE static void lmPaused(int p, bool paused) {
     bool held = lmHeld();
-    UTA_PHYS_PAUSED(p, paused || held);
+    PT_PHYS_PAUSED(p, paused || held);
     // Publish AFTER the physical write, even if the sampled hold was false.
     // Entry/release may have consumed the preceding repair before this write.
     __atomic_store_n(&lm.dirty, 1, __ATOMIC_RELEASE);
@@ -160,9 +160,9 @@ LM_CODE static void lmReset(void) {
 }
 
 #ifndef LM_HOST
-LM_CODE static void lmRegister(ndspCallback callback, void* data) {
+static void ptDspCallback(void* data); __attribute__((noinline, noipa, optimize("Os"), section(".text.audofix_late"))) static void audofixDspCallback(void* data); LM_CODE static void lmRegister(ndspCallback callback, void* data) {
     lmReset();
-    UTA_PHYS_CALLBACK(callback != NULL ? lmCallback : NULL, data);
+    UTA_PHYS_CALLBACK(callback != NULL ? ptDspCallback : NULL, data); // play-through -> audofix H1 -> lmCallback (file end)
 }
 #endif
 
@@ -310,9 +310,9 @@ LM_CODE void CtrLoadmix_boundary(Runner* runner, bool loaded) {
 // Keep the freebies wrapper's original single-call extent and function order.
 // The audio object is excluded from earlier generic late-section collectors.
 void __real_Runner_handlePendingRoomChange(Runner* runner);
-LM_CODE void CtrLoadmix_handleRoomChange(Runner* runner) {
+__attribute__((noinline, noipa, optimize("Os"), section(".text.audofix_late"))) static void audofixBoundary(Runner* runner, bool loaded); void audofixPtRoomCall(Runner* runner, bool loaded) __asm__("audofixPtRoom"); LM_CODE void CtrLoadmix_handleRoomChange(Runner* runner) {
     int32_t pending = runner->pendingRoom;
-    CtrLoadmix_boundary(runner, false);
+    audofixPtRoomCall(runner, false); // audofix H1 + play-through (file end: audofixPtRoom)
     __real_Runner_handlePendingRoomChange(runner);
     if (pending != -1) CtrLoadmix_boundary(runner, true);
 }
@@ -323,4 +323,143 @@ LM_CODE void CtrLoadmix_chainEndFrame(Renderer* renderer) {
 #ifdef CTR_AUDIO_PCM_HASH
     lmdDrain();
 #endif
+}
+
+
+// audofix H1 (review B #5, review C; UNDERTALE: this include is ENABLE_WAD16 only): a load window (a room change until the next frame's boundary) counts
+// the wall time since lm.start as load time, and the mix holds the transport (music and SFX) for what passes a frame.
+// Time the app spent away inside the window counted too: HOME and sleep put the DSP to sleep (DSPHOOK_ONSLEEP; the
+// console log has "APT: putting the DSP to sleep" right after "HOME pressed"), so no frame callback runs until it
+// wakes, and the Rosalina menu stops the app's threads, the DSP callback's among them. After HOME in the frame after a
+// quick room change, sound stayed frozen after the return for about as long as the player was away.
+// Now a gap of more than 4 frames since the DSP's last frame callback (lm.lastTick; one comes every ~5 ms while the
+// DSP is awake, through any load) is time away, not load time, and the window's start moves past it. The first of
+// the two threads to see the gap takes it: the DSP callback before its update (the first callback after waking), or
+// the game thread before a boundary (the close may come while the DSP still sleeps). Taking it moves lm.lastTick to
+// now by compare-and-swap, so only one thread moves the start for one gap; the start moves by compare-and-swap too,
+// so a start the game thread replaced since (a new window) is left alone. Skipped while the game thread publishes
+// (command bit 2) and while the hold is applied: then lmCallback counts the gap as held time, which cancels it, as
+// before. Gaps compare unsigned (c26rev r96 F1: a signed one skipped every gap of 8-16 s and left the goal seconds in debt, so later loads went unheld): the 32-bit tick wraps every 16.02 s, and the goal only ever sees a gap modulo that, so taking the remainder takes it all; only a remainder under 4 frames stays load time (at most 4 frames held). The clock is read here, after lm.lastTick (c26rev r96b: a caller's clock read before a 5 s stop, then this thread's CAS, put a stamp the DSP had just moved forward back by the 5 s, and the close held the sound again for them); a stamp moved since the load fails the CAS.
+#define AUDOFIX_AWAY_TICKS (4u * LM_FRAME_TICKS)
+
+__attribute__((noinline, noipa, optimize("Os"), section(".text.audofix_late"))) static void audofixLeaveOutAway(void) {
+    uint32_t command = __atomic_load_n(&lm.command, __ATOMIC_ACQUIRE);
+    uint32_t last = __atomic_load_n(&lm.lastTick, __ATOMIC_ACQUIRE), now = (uint32_t) svcGetSystemTick();
+    if ((command & 3u) != 1u || now - last <= AUDOFIX_AWAY_TICKS ||
+        __atomic_load_n(&lm.applied, __ATOMIC_ACQUIRE))
+        return;
+    uint32_t start = __atomic_load_n(&lm.start, __ATOMIC_ACQUIRE);
+    if (!__atomic_compare_exchange_n(&lm.lastTick, &last, now, false, __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE))
+        return; // the other thread took this gap
+    uint32_t from = (int32_t) (last - start) > 0 ? last : start; // away since the later of the two
+    if (now != from)
+        __atomic_compare_exchange_n(&lm.start, &start, start + (now - from), false, __ATOMIC_ACQ_REL, __ATOMIC_RELAXED);
+}
+
+// The DSP frame callback (lmRegister installs this in lmCallback's place).
+__attribute__((noinline, noipa, optimize("Os"), section(".text.audofix_late"))) static void audofixDspCallback(void* data) {
+    audofixLeaveOutAway();
+    lmCallback(data);
+}
+
+// The game thread's boundary before a room change (H1's part; audofixPtRoom, below, calls it and adds the
+// play-through's snapshot). Its size stays H1's: code placed after it in .text.audofix_late keeps its address.
+__attribute__((noinline, noipa, optimize("Os"), section(".text.audofix_late"))) static void audofixBoundary(Runner* runner, bool loaded) {
+    if (!loaded) audofixLeaveOutAway();
+    CtrLoadmix_boundary(runner, loaded);
+}
+
+// ===[ audofix play-through (playtest 11-01 Lost Souls cuts, 11-02 clicks at Hotland's doors) ]===
+// The load hold paused the whole mix for a load's excess over a frame (lmCallback: 10-80 ms at an ordinary door,
+// 220 ms and more at the prebarrier): every sound playing at the door stopped mid-waveform and went on later, a cut in
+// a song and a click in an SFX tail or ambient loop. Now the hold is for new sounds only:
+// - a sound playing when the window opens (music, an ambient loop, an SFX or its tail: any voice whose serial is the
+//   one the open saw, playing, stopped with a tail, or free) is never paused by the load: no edge, nothing to click;
+// - a sound started inside the window (its voice's serial moved: a new play, or a voice taken from another sound) is
+//   paused before its first sample (applyVoice pauses before it queues; a stream's open pauses before its buffers)
+//   until the window closes, the boundary after the room's first frame's Draw, and then starts from sample 0, as on
+//   the PC (the room's Create plays it, then that frame is shown). It is never paused mid-sound, so neither edge is a
+//   cut: a fade would only change its attack from the PC's. When the room asks for another room before its first
+//   frame (close and open at once, the frame not shown), the open keeps the snapshot: it starts at the last close.
+//   This contains asgore30's fresh-song hold (a quiet window whose new song blipped for its credited frame), which it
+//   replaces.
+// - lmCallback's whole-mix hold never comes: its balance is set to zero each callback, an open window's elapsed time
+//   credited, so its own bookkeeping (and audofix H1's) runs as before and holds nothing. The frame callback (uta's
+//   feeding of cached sounds and tails) is then never frozen, so the playing sounds are fed through the load.
+// The two physical pause writes of the hold (lmPaused for the game's own, the transport for lmCallback's repairs) add
+// the new-sound hold (ptPhysPaused); the DSP callback (ptDspCallback, after lmCallback) unpauses, to the logical
+// state, every channel this rule paused that is no longer held (TryLock: a busy lock retries the next callback).
+// Costs: a song playing at a load runs on through it (by the load's excess over a frame, as on the PC); only a
+// script that waits for a non-looping sound started before a load and polled after it can see that (the waiting-script
+// audit).
+#ifndef PT_CODE
+#define PT_CODE __attribute__((noinline, noipa, optimize("Os"), section(".text.audofix_feed")))
+#define PT_BSS __attribute__((section(".bss.audofix_late")))
+#endif
+static struct {
+    uint32_t snap[VOICE_COUNT]; // each voice's serial at the window's open (game thread)
+    uint32_t held; // channels this rule paused (bit p): set by any writer, cleared by the DSP callback
+    volatile bool open; // the snapshot is whole (game thread)
+} pt PT_BSS;
+
+// Channel p plays a sound started inside the open window.
+PT_CODE static bool ptHeld(int p) {
+    CtrAudioSystem* ca = *CtrLoadmix_legacy.target;
+    if (!__atomic_load_n(&pt.open, __ATOMIC_ACQUIRE) || !(__atomic_load_n(&lm.command, __ATOMIC_ACQUIRE) & 1u) ||
+        ca == NULL || (unsigned) p >= VOICE_COUNT)
+        return false;
+    int i = *CtrLoadmix_legacy.mapped ? CtrLoadmix_legacy.inverse[p] : p;
+    return (unsigned) i < VOICE_COUNT && __atomic_load_n(&ca->voices[i].serial, __ATOMIC_RELAXED) != pt.snap[i];
+}
+
+// lmPaused's and the load transport's physical pause write (any thread).
+PT_CODE void ptPhysPaused(int p, bool paused) {
+    bool held = ptHeld(p);
+    if (held) __atomic_fetch_or(&pt.held, 1u << p, __ATOMIC_ACQ_REL);
+    UTA_PHYS_PAUSED(p, paused || held);
+}
+#ifndef LM_HOST
+__asm__(".set audofixPtPaused, ptPhysPaused\n");
+#endif
+
+// Game thread, after the boundary: a window opened from none takes the snapshot; a close drops it.
+PT_CODE static void ptBoundary(uint32_t before) {
+    uint32_t command = __atomic_load_n(&lm.command, __ATOMIC_ACQUIRE);
+    if (command == before || ((command & 1u) && (before & 1u))) return;
+    __atomic_store_n(&pt.open, false, __ATOMIC_RELEASE);
+    CtrAudioSystem* ca = *CtrLoadmix_legacy.target;
+    if (!(command & 1u) || ca == NULL) return;
+    for (unsigned i = 0; i < VOICE_COUNT; i++) pt.snap[i] = ca->voices[i].serial;
+    __atomic_store_n(&pt.open, true, __ATOMIC_RELEASE);
+}
+
+// CtrLoadmix_handleRoomChange's first call (through its assembler name): the boundary, where a window closes and
+// opens, then the snapshot. lm.command is read first; audofixLeaveOutAway (in the boundary) never writes it.
+PT_CODE void audofixPtRoom(Runner* runner, bool loaded) {
+    uint32_t before = __atomic_load_n(&lm.command, __ATOMIC_ACQUIRE);
+    audofixBoundary(runner, loaded);
+    ptBoundary(before);
+}
+
+// The DSP frame callback (lmRegister installs it).
+PT_CODE static void ptDspCallback(void* data) {
+    audofixLeaveOutAway(); // time away first (H1, again in audofixDspCallback: no gap left), so the credit sees its start
+    uint32_t command = __atomic_load_n(&lm.command, __ATOMIC_ACQUIRE);
+    if (!(command & 2u)) { // a publishing game thread: lmCallback only passes the update on
+        uint32_t credit = __atomic_load_n(&lm.goal, __ATOMIC_RELAXED) - lm.heldTicks;
+        if (command & 1u) credit += (uint32_t) svcGetSystemTick() - __atomic_load_n(&lm.start, __ATOMIC_RELAXED);
+        lm.creditTicks = credit;
+    }
+    audofixDspCallback(data);
+    uint32_t mask = __atomic_load_n(&pt.held, __ATOMIC_ACQUIRE);
+    if (mask == 0 || LightLock_TryLock(CtrLoadmix_legacy.lock) != 0) return;
+    CtrAudioSystem* ca = (CtrAudioSystem*) data;
+    for (int p = 0; p < VOICE_COUNT; p++) {
+        if (!((mask >> p) & 1u) || ptHeld(p)) continue;
+        __atomic_fetch_and(&pt.held, ~(1u << p), __ATOMIC_ACQ_REL);
+        int i = *CtrLoadmix_legacy.mapped ? CtrLoadmix_legacy.inverse[p] : p;
+        const UtaChan* c = &CtrLoadmix_legacy.channels[p];
+        UTA_PHYS_PAUSED(p, c->state != UTA_IDLE ? c->paused : ca->suspended || ca->voices[i].paused);
+    }
+    LightLock_Unlock(CtrLoadmix_legacy.lock);
 }

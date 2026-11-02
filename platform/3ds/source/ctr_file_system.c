@@ -309,14 +309,14 @@ static bool indexSaveFolder(CtrFileSystem* cfs) {
 }
 
 // ===[ Write queue ]===
-
+static bool racefixSave(const char* path, const uint8_t* data, size_t size); static void racefixLost(void); // end of file
 static void freeJob(WriteJob* job) {
     free(job->key);
     free(job->data);
 }
 
 static void noteSaveFailure(CtrFileSystem* cfs, const char* key) {
-    CtrSafeSave_failed();
+    racefixLost();
     LightLock_Lock(&cfs->lock);
     cfs->writeFailed = true;
     LightLock_Unlock(&cfs->lock);
@@ -348,7 +348,7 @@ static void recoverSaveFolder(CtrFileSystem* cfs) {
 static void runJob(CtrFileSystem* cfs, const WriteJob* job) {
     uint64_t start = nowNanos();
     char* path = saveWritePath(cfs, job->key);
-    bool ok = CtrSafeSave_write(path, job->data, (size_t) job->size);
+    bool ok = racefixSave(path, job->data, (size_t) job->size);
     free(path);
     double ms = (double) (nowNanos() - start) / 1000000.0;
     if (ok) {
@@ -941,4 +941,80 @@ void CtrFileSystem_destroy(FileSystem* fs) {
     free(cfs->bundleDir);
     OverlayFileSystem_destroy((OverlayFileSystem*) cfs->inner);
     free(cfs);
+}
+
+// ===[ racefix: a save that failed is tried again, and "Saving failed" ends once every lost file is saved ]===
+//
+// The writer used to try a save once and drop it: a write that met the card's open-file limit (a crowded scene: music
+// streams, sounds and the caches' kept-open files) was lost, and "Saving failed" stayed until the exit even after the
+// same file saved fine later. Now runJob's write is tried up to RACEFIX_TRIES times, RACEFIX_GAP_NS apart (about 1.75 s
+// in all, on the writer thread; CtrFileSystem_flush waits that long only while a save keeps failing), and the save
+// path of each write given up on is kept (a hash, RACEFIX_LOST_MAX of them). A later write of that path that succeeds
+// forgets it, and once none is left, CtrSave_failed is cleared. Any other failure noteSaveFailure reports (a delete or
+// rename that couldn't drop a .bak, a binary handle's write, the startup recovery), or a lost write with the list
+// full, keeps the warning to the exit, as before. Late code and statics (late_reserve.ld), so nothing earlier moves.
+#ifdef __3DS__
+#define RACEFIX_CODE __attribute__((noinline, optimize("Os"), section(".text.racefix_late")))
+#define RACEFIX_BSS __attribute__((section(".bss.racefix_late")))
+#define RACEFIX_RO __attribute__((section(".rodata.racefix_late")))
+#else // tools/analysis/test_safe_saves.py
+#define RACEFIX_CODE __attribute__((noinline))
+#define RACEFIX_BSS
+#define RACEFIX_RO
+#endif
+#define RACEFIX_TRIES 8
+#define RACEFIX_GAP_NS (250ll * 1000000ll)
+#define RACEFIX_LOST_MAX 8
+
+static LightLock racefixLock RACEFIX_BSS; // zero is unlocked
+static uint32_t racefixLostPaths[RACEFIX_LOST_MAX] RACEFIX_BSS; // hashes (never 0) of the save paths lost; 0: free
+static bool racefixKeep RACEFIX_BSS; // a failure no later save makes good: the warning stays to the exit
+static bool racefixOwn RACEFIX_BSS; // racefixSave just gave up on racefixThread, whose noteSaveFailure comes next
+static Thread racefixThread RACEFIX_BSS; // nullptr on the main thread
+static const char racefixSavedText[] RACEFIX_RO = "Files: saved %s at try %d%s\n";
+static const char racefixClearedText[] RACEFIX_RO = "; Saving failed cleared";
+
+// runJob's CtrSafeSave_write (which is safe to repeat: it recovers, compares, then writes a temporary and promotes it).
+static RACEFIX_CODE bool racefixSave(const char* path, const uint8_t* data, size_t size) {
+    bool ok = false;
+    int tries = 0;
+    while (!ok && RACEFIX_TRIES > tries) {
+        if (0 < tries++) svcSleepThread(RACEFIX_GAP_NS);
+        ok = CtrSafeSave_write(path, data, size);
+    }
+    uint32_t h = 2166136261u; // FNV-1a of the path, case folded (the card's names aren't case sensitive); never 0
+    for (const char* c = path; *c != '\0'; c++) h = (h ^ (uint32_t) tolower((unsigned char) *c)) * 16777619u;
+    h |= 1u;
+    bool cleared = false;
+    LightLock_Lock(&racefixLock);
+    int slot = -1;
+    bool lost = false;
+    for (int i = 0; RACEFIX_LOST_MAX > i; i++) {
+        if (racefixLostPaths[i] == h) racefixLostPaths[i] = 0;
+        if (racefixLostPaths[i] == 0) slot = i;
+        else lost = true;
+    }
+    if (!ok) {
+        if (0 <= slot) racefixLostPaths[slot] = h;
+        else racefixKeep = true;
+        racefixOwn = true;
+        racefixThread = threadGetCurrent();
+    } else if (!lost && !racefixKeep && __atomic_load_n(&CtrSave_failed, __ATOMIC_ACQUIRE)) {
+        __atomic_store_n(&CtrSave_failed, false, __ATOMIC_RELEASE);
+        cleared = true;
+    }
+    LightLock_Unlock(&racefixLock);
+    if (ok && (1 < tries || cleared))
+        logInfo(racefixSavedText, path, tries, cleared ? racefixClearedText : racefixClearedText + sizeof(racefixClearedText) - 1);
+    return ok;
+}
+
+// noteSaveFailure's CtrSafeSave_failed: every failure it reports that racefixSave didn't just give up on keeps the
+// warning to the exit.
+static RACEFIX_CODE void racefixLost(void) {
+    LightLock_Lock(&racefixLock);
+    if (racefixOwn && racefixThread == threadGetCurrent()) racefixOwn = false;
+    else racefixKeep = true;
+    CtrSafeSave_failed();
+    LightLock_Unlock(&racefixLock);
 }

@@ -9,8 +9,8 @@
 //
 // The console's texture preparation (ctr_texture_pack.c) is included whole, unchanged, so the driver can point
 // its cache folder somewhere other than beside data.win (the player's game folder stays read-only). Nothing
-// below changes formats, compression or the cache ABI. The one host-only input correction clears hidden RGB
-// in the normal Final Froggit head; see tools/lanes/results/redpix.md for its alpha-blend use audit.
+// below changes tile formats or compression. UT selects cache epochs 5/6 and clears both recognized heads' hidden
+// RGB after format selection, matching console output; see tools/lanes/results/redpix.md for its alpha-blend use audit.
 
 // Declarations the console code expects from newlib, where the host's C library spells them differently.
 #ifdef _WIN32
@@ -36,13 +36,10 @@ static int texprep_mkdir(const char* path, int mode) {
 #define __real_CtrPackWorker_poll CtrPackWorker_poll
 #define __real_CtrPack_isComplete CtrPack_isComplete
 #define __real_CtrPackWorker_setKeepPacked CtrPackWorker_setKeepPacked
-// Intercept the PNG strip before format selection. This translation unit alone contains the hook: console
-// preparation and ARM text are unchanged. Decode buffers are const, so the corrected strip is a private copy.
-#include "ctr_png.h"
-static CtrPngStatus texprepDecodePng(const uint8_t*, size_t, int32_t, CtrPngStripFn, void*);
-#define CtrPng_decode texprepDecodePng
+// Use the console's post-conversion mitigation, preserving format selection exactly.
+bool texprepUtCache;
+#define CTRPORT_TEXPREP_UT_CACHE texprepUtCache
 #include "ctr_texture_pack.c"
-#undef CtrPng_decode
 #undef __real_CtrPackWorker_poll
 #undef __real_CtrPack_isComplete
 #undef __real_CtrPackWorker_setKeepPacked
@@ -72,46 +69,7 @@ typedef struct {
     uint16_t x, y, w, h;
     char temporary[PACK_PATH_MAX + 16];
 } AlphaZeroScope;
-static AlphaZeroScope alphaZero;
-
-typedef struct {
-    CtrPngStripFn next;
-    void* user;
-    int32_t width;
-} AlphaZeroStrip;
-
-static bool alphaZeroStrip(void* user, const uint8_t* rows, int32_t y, int32_t count) {
-    AlphaZeroStrip* s = user;
-    int32_t first = y > alphaZero.y ? y : alphaZero.y;
-    int32_t end = y + count < alphaZero.y + alphaZero.h ? y + count : alphaZero.y + alphaZero.h;
-    if (first >= end) return s->next(s->user, rows, y, count);
-    size_t size = (size_t) s->width * (size_t) count * 4;
-    uint8_t* copy = malloc(size);
-    if (copy == NULL) return false;
-    memcpy(copy, rows, size);
-    for (int32_t yy = first; end > yy; yy++) {
-        uint8_t* p = copy + ((size_t) (yy - y) * (size_t) s->width + alphaZero.x) * 4;
-        for (uint32_t x = 0; alphaZero.w > x; x++, p += 4)
-            if (p[3] == 0) p[0] = p[1] = p[2] = 0;
-    }
-    bool ok = s->next(s->user, copy, y, count);
-    free(copy);
-    return ok;
-}
-
-static CtrPngStatus texprepDecodePng(const uint8_t* png, size_t size, int32_t stripRows, CtrPngStripFn fn, void* user) {
-    // CtrPack_decodeRows' PNG path supplies this exact callback/context pair. Only buildPage calls it in this
-    // tool; its PackBuilder's temporary path binds the correction to the selected page, even with two workers.
-    if (!alphaZero.enabled || fn != takeStrip) return CtrPng_decode(png, size, stripRows, fn, user);
-    RowStream* stream = user;
-    PackBuilder* builder = stream->user;
-    if (strcmp(builder->tempPath, alphaZero.temporary) != 0) return CtrPng_decode(png, size, stripRows, fn, user);
-    int32_t w, h;
-    if (!CtrPng_info(png, size, &w, &h) || alphaZero.x + alphaZero.w > w || alphaZero.y + alphaZero.h > h)
-        return CTR_PNG_BAD_DATA;
-    AlphaZeroStrip strip = { fn, user, w };
-    return CtrPng_decode(png, size, stripRows, alphaZeroStrip, &strip);
-}
+static AlphaZeroScope alphaZero[2];
 
 typedef struct {
     FILE* f;
@@ -127,7 +85,7 @@ static uint32_t le32(const uint8_t* p) {
 }
 
 // Name-keyed selection, like the host item-verdict tables: no ordinal or atlas coordinate is assumed. The
-// FNV-1a-64 key selects only the normal Final Froggit head, not its hurt frame or its body. WAD16 only.
+// FNV-1a-64 keys select the normal and hurt Final Froggit heads, never the body. WAD16 only.
 static bool findAlphaZero(Reader* r, const DataWin* dw, long sprt, long sprtSize, long tpag, long tpagSize) {
     if (dw->gen8.wadVersion != 16 || sprt < 0 || tpag < 0) return true;
     uint8_t data[64];
@@ -147,14 +105,16 @@ static bool findAlphaZero(Reader* r, const DataWin* dw, long sprt, long sprtSize
             if (data[0] == 0) { ended = true; break; }
             hash = (hash ^ data[0]) * UINT64_C(1099511628211);
         }
-        if (!ended || hash != UINT64_C(0x2821e0fa13f349be)) continue;
-        if (alphaZero.enabled || !readAtOffset(r, (long) p + 56, data, 8) || le32(data) != 1) return false;
+        int scopeIndex = hash == UINT64_C(0x2821e0fa13f349be) ? 0 :
+                         hash == UINT64_C(0x67cea240c7c5a6ba) ? 1 : -1;
+        if (!ended || scopeIndex < 0) continue;
+        if (alphaZero[scopeIndex].enabled || !readAtOffset(r, (long) p + 56, data, 8) || le32(data) != 1) return false;
         uint32_t item = le32(data + 4);
         if ((long) item < tpag || (long) item + 22 > tpag + tpagSize || !readAtOffset(r, item, data, 22)) return false;
         uint16_t v[11];
         for (unsigned j = 0; 11 > j; j++) v[j] = (uint16_t) (data[2*j] | ((uint16_t) data[2*j+1] << 8));
         if (v[2] != 51 || v[3] != 38 || v[10] >= dw->txtr.count) return false;
-        alphaZero = (AlphaZeroScope) { .enabled = true, .page = v[10], .x = v[0], .y = v[1], .w = v[2], .h = v[3] };
+        alphaZero[scopeIndex] = (AlphaZeroScope) { .enabled = true, .page = v[10], .x = v[0], .y = v[1], .w = v[2], .h = v[3] };
     }
     return true;
 }
@@ -324,6 +284,7 @@ int main(int argc, char** argv) {
     double start = seconds();
     DataWin* dw = calloc(1, sizeof(DataWin));
     if (dw == NULL || !loadDataWin(dataWinArg, dw)) return 2;
+    texprepUtCache = dw->gen8.wadVersion == 16;
 
     // As main.c and the prepare screen do, in that order.
     CtrPack_setDataWinPath(dataWinArg);
@@ -337,20 +298,22 @@ int main(int argc, char** argv) {
     CtrPack_init();
     CtrPackKey key = CtrPack_keyFor(dw);
 
-    if (alphaZero.enabled) {
-        // An existing ABI-v3/v4 page can still contain the old hidden RGB. Refresh ONLY this page on each host
-        // invocation; do not bump the runtime ABI or trust a prior complete marker. Publication removes the
-        // marker before invalidation, and writes it last. Every other page retains its existing cache behavior.
+    for (unsigned n = 0; n < 2; n++) {
+        AlphaZeroScope* scope = &alphaZero[n];
+        if (!scope->enabled) continue;
+        // Refresh the selected page on each host invocation. UT's epoch also invalidates legacy page headers
+        // and complete markers; DR keeps its original epochs. Publication removes complete before invalidation
+        // and writes it last. Other pages retain their normal version/key-based cache behavior.
         char marker[PACK_PATH_MAX + 16], page[PACK_PATH_MAX + 16];
         markerPath(marker, sizeof(marker));
-        pathFor(page, sizeof(page), alphaZero.page, "dtx");
-        pathFor(alphaZero.temporary, sizeof(alphaZero.temporary), alphaZero.page, "tmp");
+        pathFor(page, sizeof(page), scope->page, "dtx");
+        pathFor(scope->temporary, sizeof(scope->temporary), scope->page, "tmp");
         if (!CtrCachePublish_begin(marker, false) || (remove(page) != 0 && errno != ENOENT)) {
-            fprintf(stderr, "texprep: could not refresh alpha-zero page %u\n", (unsigned) alphaZero.page);
+            fprintf(stderr, "texprep: could not refresh alpha-zero page %u\n", (unsigned) scope->page);
             return 1;
         }
-        printf("texprep: alpha-zero RGB: page %u rectangle %u,%u %ux%u\n", (unsigned) alphaZero.page,
-               (unsigned) alphaZero.x, (unsigned) alphaZero.y, (unsigned) alphaZero.w, (unsigned) alphaZero.h);
+        printf("texprep: alpha-zero RGB: page %u rectangle %u,%u %ux%u\n", (unsigned) scope->page,
+               (unsigned) scope->x, (unsigned) scope->y, (unsigned) scope->w, (unsigned) scope->h);
     }
 
     CtrPackWorker* worker = CtrPackWorker_start(dw, &key, true);

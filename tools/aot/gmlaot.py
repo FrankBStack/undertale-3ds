@@ -22,6 +22,9 @@ usage:
                    (LAYOUT_TAIL) keep the selection's order, so a module that has to leave its last files out still
                    leaves out the lowest-ranked functions. Only where each function sits changes: the table, and so
                    what binds to what, stays the same
+  --typed-priority FILE  with --typed all: the order the module linker keeps typed regions in, by what each saves
+                   (tools/aot/typed_priority.py). A chapter's section applies only when its data.win's SHA-256 is the
+                   one the section names; listed regions come first in list order, the rest follow as before
   --data DIR       with --selection: the game folder, holding data.win (UNDERTALE: the list's folder is "root") or
                    chapterN_windows/data.win (DELTARUNE)
   --game DATA.WIN  starts the options for one data.win (one per DELTARUNE chapter); entries with the same name in
@@ -232,6 +235,8 @@ SHARED_HELPERS = False   # one copy of the AOT_HELPER functions, weak (--shared-
 # --typed <list>: the (data.win folder, code entry) pairs whose loops get typed regions (typed.py), or typed.ALL
 # ("--typed all": every code entry compiled), None when off. With it off, nothing here changes what is generated.
 TYPED = None
+# --target of this run (o3ds or n3ds), None without one. typed.py reads it (scalar_surface).
+TARGET = None
 # (code entry, aotf number, region function text, straight region, bytecode start) of this run
 TYPED_TEXTS = []
 # --typed all: (aotf number, inline bindings text) of this run, for aot_typed_bind.c
@@ -1778,7 +1783,7 @@ def parse_args(args):
             opts["no_native"] = True
             i += 1
             continue
-        if a in ("--selection", "--data", "--layout"):
+        if a in ("--selection", "--data", "--layout", "--typed-priority"):
             if i + 1 >= len(args):
                 raise SystemExit("%s takes a value" % a)
             opts[a[2:]] = args[i + 1]
@@ -1899,8 +1904,8 @@ def parse_args(args):
             if args[i + 1] not in TARGET_BUDGET_MB:
                 raise SystemExit("--target is one of " + ", ".join(sorted(TARGET_BUDGET_MB)))
             opts["budget"] = TARGET_BUDGET_MB[args[i + 1]]
-            global BOARD_TARGET
-            BOARD_TARGET = args[i + 1]
+            global TARGET, BOARD_TARGET
+            TARGET = BOARD_TARGET = args[i + 1]
         elif a == "--scene-weight":
             if args[i + 1] not in ("ops", "share"):
                 raise SystemExit("--scene-weight is ops or share")
@@ -2117,7 +2122,54 @@ UTF_NATIVE = [
      ("var:v0", "var:v1", "var:v2", "var:v3", "var:v4", "var:v5", "var:v6", "var:v7", "var:v8", "var:v9", "var:v10",
       "func:round", "func:draw-sprite-part", "i16:0x58", "i16:0xD4", "ref:0x58", "ref:0xD4", "ref:0x18", "ref:0x28"),
      ".text.asgborder_late"),
+    # Omega Flowey's vine burst (engine/src/z_utburst.c, change flowend r37). The vine's Create (28 instructions): six
+    # stores, then stop(A), play(A), stop(B), play(B). Operands: con, saved, memorymode and active's
+    # IDs, the stop and play scripts' function indices, the sounds (the PushI.i16 at 0050 and 0078), the operand
+    # words of the Pops at 0004 (visible) and 0018 (image_xscale); then the two scripts, checked here (bound: the
+    # script's whole code entry is exactly audio_stop_sound(argument0) / audio_play_sound(argument0, 80, 0) by its
+    # fnv full-token digest; the operand is the function the script's table entry binds), and the builtins they call.
+    ("UtBurst_vineCreate", "fnv:17CCE436E1978B83",
+     ("var:v0", "var:v1", "var:v2", "var:v3", "func:snd-stop", "func:snd-play", "i16:0x50", "i16:0x78",
+      "ref:0x4", "ref:0x18", "bound:snd-stop:39BB8D42A0042A40", "bound:snd-play:2FE7BC17904C9A15",
+      "callee:snd-stop", "callee:snd-play"),
+     ".text.utburst_late"),
+    # The master's user event 9 (184 instructions), whose kill branch ends with the 30-vine creation loop: run with
+    # the vines' sound calls held until it returns. Operand: instance_create's function index (unused).
+    ("UtBurst_masterBatch", "fnv:F5CED9E03C77BD63", ("func:instance-create",), ".text.utburst_late"),
+    # Omega Flowey's ring attack (engine/src/z_utring.c, change flowend r39): the ring boss's Create (102 instructions),
+    # nine constant stores and then a loop that makes its seven parts and places each on the ring. Operands: its twelve
+    # variables' IDs in first-use order, the operand words of the Pops at 0188, 01EC, 0234 (three builtins of the part
+    # through its id) and 0264 (a builtin of self), the part's object (the PushI.i16 at 0084) and instance_create's
+    # function index; then the part's Create (the Create_0 code entry of the object pushed at 0084), when its fnv full
+    # token digest is the one given ("objfn:": the function its table entry binds, else nullptr), the operand words of
+    # its Pops at 0004 and 0010 and its three variables' IDs (0 when the digest differs). The operands are a constant
+    # table in .text.utring_ops (late text, after the body).
+    ("UtRing_bossCreate", "fnv:654678B53142D9BE",
+     ("var:v0", "var:v1", "var:v2", "var:v3", "var:v4", "var:v5", "var:v6", "var:v7", "var:v8", "var:v9", "var:v10",
+      "var:v11", "ref:0x188", "ref:0x1EC", "ref:0x234", "ref:0x264", "i16:0x84", "func:instance-create",
+      "objfn:0x84:D34C8E5443B80A72", "objref:0x84:0x4", "objref:0x84:0x10", "objvar:0x84:0", "objvar:0x84:1",
+      "objvar:0x84:2"),
+     ".text.utring_late", ".text.utring_ops"),
 ]
+# UTF_NATIVE items bound for one --target only (any other target, or none given, keeps the generated function): the
+# ring boss's Create is an Old 3DS cut (the New 3DS has the time, and its late-text reserve not the room).
+UTF_NATIVE_TARGET = {"UtRing_bossCreate": "o3ds"}
+
+
+def utf_object_create(dw, obj, want):
+    """(code entry name, utflames_shape's result) for the Create_0 entry of object obj when its fnv full-token digest
+    is want (UTF_NATIVE's "objfn:" operands), else None."""
+    start = dw.chunks["OBJT"][0]
+    if obj < 0 or obj >= dw.u32(start):
+        return None
+    name = "gml_Object_%s_Create_0" % dw.string(dw.u32(dw.u32(start + 4 + 4 * obj)))
+    e = dw.code_by_name.get(name)
+    if e is None:
+        return None
+    got = utflames_shape(dw, bytes(dw.data[e["abs"]:e["abs"] + e["length"]]), e)
+    if got is None or int(want, 16) != fnv1a64(" ".join(t for a, t in got[4]).encode()):
+        return None
+    return name, got
 
 
 def utflames_shape(dw, blob, entry):
@@ -2204,6 +2256,45 @@ def utflames_same(shape, by_addr, want, operands):
     return hashlib.sha256(" ".join(tokens).encode()).hexdigest() == digest
 
 
+def utf_script_call(dw, func_index, want):
+    """(code entry name, the builtin's function index) when function func_index runs a script whose whole code entry
+    has the fnv full-token digest want (UTF_NATIVE's "bound:" operands: a script that is exactly one builtin call),
+    else None."""
+    if func_index is None:
+        return None
+    name = dw.funcs[func_index]["name"]
+    code_name = name if name in dw.code_by_name else "gml_Script_" + name
+    e = dw.code_by_name.get(code_name)
+    if e is None:
+        return None
+    got = utflames_shape(dw, bytes(dw.data[e["abs"]:e["abs"] + e["length"]]), e)
+    if got is None or int(want, 16) != fnv1a64(" ".join(t for a, t in got[4]).encode()):
+        return None
+    calls = [ins.extra for a, ins in sorted(got[3].items()) if ins.op == OP_CALL]
+    return (code_name, calls[0]) if len(calls) == 1 else None
+
+
+def utf_resolve_bound(text, func_keys, entry_parts, entries, report):
+    """UTF_NATIVE's "bound:" placeholders in aot_table.c's text: @@AOTFN:<part>:<code entry>@@ becomes the function
+    that entry's table line binds (its AotEntry.fn), or nullptr when the entry wasn't generated; @@AOTDECL:...@@ its
+    declaration, as the entry's own (or a comment). One line each, so no line moves."""
+    def sym(m):
+        part, name = int(m.group(1)), m.group(2)
+        for i, (_, n) in enumerate(func_keys):
+            if n == name and entry_parts[i] == part:
+                return re.search(r"0x[0-9A-F]+ULL, (\w+), ", entries[i]).group(1)
+        return None
+
+    def decl(m):
+        s = sym(m)
+        report.append("utburst bound %s: %s" % (m.group(2), s or "not generated (the native body always falls back)"))
+        if s is None:
+            return "/* %s: not generated */" % m.group(2)
+        return "RValue %s(VMContext* ctx)%s;" % (s, " AOT_FN_DECL" if s.startswith("aotf_") else "")
+    text = re.sub(r"@@AOTDECL:(\d+):([^@]+)@@", decl, text)
+    return re.sub(r"@@AOTFN:(\d+):([^@]+)@@", lambda m: sym(m) or "nullptr", text)
+
+
 def utflames_native(dw, blob, entry, k):
     """(C text to add after aotf_<k>, native body's name) when the entry matches a UTF_NATIVE shape, else None."""
     got = utflames_shape(dw, blob, entry)
@@ -2212,6 +2303,8 @@ def utflames_native(dw, blob, entry, k):
     shape, var_order, funcs, by_addr, full, fvar_order = got
     for item in UTF_NATIVE:
         fn_name, want, operands = item[:3]
+        if UTF_NATIVE_TARGET.get(fn_name, BOARD_TARGET) != BOARD_TARGET:
+            continue
         ops = len(item) > 3 and item[3] == "ops"
         if want.startswith("fnv:"):
             wild = set(int(op.split(":", 1)[1], 16) for op in operands if op.split(":", 1)[0] in ("obj", "wild"))
@@ -2225,12 +2318,45 @@ def utflames_native(dw, blob, entry, k):
             continue
         else:
             order = var_order
+        scripts = {}   # bound operands: function name -> (code entry name, the builtin it calls)
+        for op in operands:
+            kind, what = op.split(":", 1)
+            if kind == "bound":
+                fname, want_s = what.split(":")
+                scripts[fname] = utf_script_call(dw, funcs.get(fname), want_s)
+        if None in scripts.values():
+            continue   # a script isn't exactly its call: no native body (the generated function runs)
+        sub = None     # "obj*" operands: the Create of the object pushed at an address, checked by its digest
+        for op in operands:
+            kind, what = op.split(":", 1)
+            if kind == "objfn":
+                at, want_s = what.split(":")
+                sub = utf_object_create(dw, to_i16(by_addr[int(at, 16)].word), want_s)
         args = []
+        decls = []
         for op in operands:
             kind, what = op.split(":", 1)
             if kind == "wild":
                 continue
-            if kind == "var":
+            if kind == "bound":
+                code_name = scripts[what.split(":")[0]][0]
+                # Resolved when the table is written (utf_resolve_bound): the function the script's table entry
+                # binds, or nullptr when the script has none (the native body then always runs the generated one).
+                args.append("(int32_t) (intptr_t) @@AOTFN:%d:%s@@" % (getattr(dw, "part", 0), code_name))
+                decls.append("@@AOTDECL:%d:%s@@" % (getattr(dw, "part", 0), code_name))
+            elif kind == "callee":
+                args.append("%d" % scripts[what][1])
+            elif kind == "objfn":
+                if sub is None:
+                    args.append("0")
+                else:
+                    args.append("(int32_t) (intptr_t) @@AOTFN:%d:%s@@" % (getattr(dw, "part", 0), sub[0]))
+                    decls.append("@@AOTDECL:%d:%s@@" % (getattr(dw, "part", 0), sub[0]))
+            elif kind == "objref":
+                args.append("0" if sub is None else "(int32_t) 0x%08Xu" % sub[1][3][int(what.split(":")[1], 16)].extra)
+            elif kind == "objvar":
+                args.append("0" if sub is None else "%d" % dw.vars[sub[1][5][int(what.split(":")[1])]]["varID"])
+            elif kind == "var":
                 args.append("%d" % dw.vars[order[int(what[1:])]]["varID"])
             elif kind == "func":
                 args.append(("%du" if ops else "%d") % funcs[what])
@@ -2246,7 +2372,7 @@ def utflames_native(dw, blob, entry, k):
                 "#else",
                 "#define AOT_UTF_LATE",
                 "#endif",
-                "#endif"]
+                "#endif"] + decls
         if ops:
             # The monster dust: its wrapper in the body's own late section, so that it moves no late code.
             text += ["#ifndef AOT_UTK_LATE",
@@ -2265,6 +2391,21 @@ def utflames_native(dw, blob, entry, k):
             return text, fn_name
         text += ["RValue %s(VMContext* ctx, uint32_t k, AotFn generated, const int32_t* a);" % fn_name,
                  "RValue aotu_%d(VMContext* ctx);" % k]
+        if len(item) > 4:
+            # The operands as a constant table in the item's 5th section (late text too): a wrapper that only passes
+            # its address, not one that stores each operand.
+            text += ["#if defined(__arm__) && defined(__3DS__)",
+                     "__attribute__((section(\"%s\")))" % item[4],
+                     "#endif",
+                     "static const int32_t aotua_%d[%d] = {" % (k, len(args))]
+            text += ["    (int32_t) %s," % v for v in args]
+            text += ["};",
+                     "#if defined(__arm__) && defined(__3DS__)",
+                     "__attribute__((section(\"%s\")))" % item[3],
+                     "#endif",
+                     "RValue aotu_%d(VMContext* ctx) {" % k,
+                     "    return %s(ctx, %d, aotf_%d, aotua_%d);" % (fn_name, k, k, k), "}"]
+            return text, fn_name
         if len(item) > 3:
             text += ["#if defined(__arm__) && defined(__3DS__)",
                      "__attribute__((section(\"%s\")))" % item[3],
@@ -2530,7 +2671,7 @@ def generate_function(dw, name, k, report):
             out.append(typed_mod.prototype(r) + ";")
             text = ((inline_text + "\n\n" if r is typed_regions[0] and inline_text else "")
                     + typed_mod.function_text(r, name))
-        TYPED_TEXTS.append((name, k, text, r.straight, r.lo))
+        TYPED_TEXTS.append((name, k, text, r.straight, r.lo, getattr(dw, "folder", None)))
     nloc = len(em.locals)
     if nloc:
         local_vars = [idx for idx, num in sorted(em.locals.items(), key=lambda kv: kv[1])]
@@ -2623,8 +2764,9 @@ def main(argv):
         print(__doc__)
         return 2
     t0 = time.time()
-    global TYPED, BOARDGRID, BOARD_TARGET
+    global TYPED, TARGET, BOARDGRID, BOARD_TARGET
     TYPED = None   # prepare.py runs main once per chapter in one process: --typed sets it again
+    TARGET = None  # (and --target)
     BOARDGRID, BOARD_TARGET = True, None   # and --no-boardgrid / --target too
     del TYPED_TEXTS[:]
     del TYPED_BIND[:]
@@ -2819,7 +2961,7 @@ def main(argv):
             f.write(header + "\n\n".join(funcs_out[j][0] for j in order) + footer)
     with open(os.path.join(out_dir, "aot_table.c"), "w", encoding="utf-8", newline="\n") as f:
         f.write(header)
-        f.write("\n\n".join(tables_out))
+        f.write(utf_resolve_bound("\n\n".join(tables_out), func_keys, entry_parts, entries, report))
         f.write("\n\nstatic const AotEntry aotEntries[] = {\n")
         f.write("\n".join(entries) if entries else "    { \"\", 0, 0, 0, 0, nullptr, nullptr, 0, nullptr, 0 },")
         f.write("\n};\n")
@@ -2871,7 +3013,13 @@ def main(argv):
             f.write("\n\n".join(t[1] for t in TYPED_BIND))
             f.write(footer)
         files = []
-        for t in sorted(TYPED_TEXTS, key=lambda t: (t[3], t[1], t[4])):
+        order = {}   # --typed-priority: (folder, code entry, region start) -> place, from each game's own section
+        if opts.get("typed-priority"):   # (a chapter run also compiles the launcher's data.win, which has none)
+            import typed_priority
+            order = typed_priority.merged(opts["typed-priority"],
+                                          [(dw.folder, groups[gi]["data_win"]) for gi, dw in games], report)
+        for t in sorted(TYPED_TEXTS, key=lambda t: (0, order[(t[5], t[0], t[4])]) if (t[5], t[0], t[4]) in order
+                        else (1, t[3], t[1], t[4])):
             if not files or (files[-1][1] + len(t[2]) > TYPED_FILE_CHARS and files[-1][0]):
                 files.append([[], 0])
             files[-1][0].append(t[2])

@@ -72,6 +72,8 @@ static void DSP_FlushDataCache(const void* p, uint32_t n) { (void)p; (void)n; }
 // 2daeffa4a moved the platform cache flush behind adFlush. Cache maintenance
 // is a platform service in this simulated DSP; PCM/lease/stop bodies stay exact.
 static void adFlush(const void* p, uint32_t n) { DSP_FlushDataCache(p, n); }
+// cbcut A: with an ADPCM feeder, ctr_audio_utaudio.h sends tails and loop seams through adFlush as well.
+#define UTA_DECLICK_FLUSH adFlush
 static unsigned utaUnstarted, utaTails, utaPieces;
 static void utaClearPhys(int p, UtaChan* c) { (void)p; c->state = UTA_IDLE; }
 static int16_t queued[UTA_TAIL_MAX * 2];

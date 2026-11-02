@@ -1,6 +1,8 @@
 #if defined(ENABLE_WAD17) && defined(CTRPORT_TARGET_N3DS)
 /* DELTARUNE New 3DS: exact tower face retention only (flowergpu); Old keeps everything below. */
 #include "vine_new_retain.inc"
+/* Lazy surface hand-off splits (titancpu L1). */
+#include "vine_titancpu.inc"
 #else
 #line 1
 /* Stage 2 of X-F1-Full (Correct Rotating Cylindrical Tower on Old 3DS + Byte-Exact Optimizations).

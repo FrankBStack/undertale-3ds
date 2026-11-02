@@ -116,7 +116,14 @@ def layout_file(game):
 GMLAOT_EXTRA = []
 # The Python files that generate the code: gmlaot.py and what it imports, and this file, which picks its arguments.
 GENERATOR_FILES = ("gmlaot.py", "builtin_audit.py", "corpus.py", "prepare.py", "btnprompt.py", "escape.py",
-                   "late_numeric.py", "typed.py", "padrefs.py")
+                   "late_numeric.py", "typed.py", "typed_priority.py", "padrefs.py")
+
+
+def typed_priority_file(game, target):
+    """tools/aot/selection/typed-priority-<game>-<target>.txt (typed_priority.py), or None when there is none: the order
+    a chapter module keeps its typed regions in (gmlaot.py --typed-priority, chapter runs with --typed all only)."""
+    path = os.path.join(HERE, "selection", "typed-priority-%s-%s.txt" % (game, target))
+    return path if os.path.exists(path) else None
 
 
 def padrefs_file(game, target, chapters=False):
@@ -155,7 +162,8 @@ def gmlaot_runs(game, target, found, out, selection, chapters=False, typed=None,
                 "--tag", tag, "--budget", "%g" % budget] + layout
         if target in CHAPTER_BYTES_PER_INSTR:
             args += ["--bytes-per-instr", "%g" % CHAPTER_BYTES_PER_INSTR[target]]
-        runs.append((d, args + typed_args + GMLAOT_EXTRA))
+        priority = typed_priority_file(game, target) if typed == "all" else None
+        runs.append((d, args + typed_args + (["--typed-priority", priority] if priority else []) + GMLAOT_EXTRA))
     return runs
 
 
@@ -199,6 +207,8 @@ def fingerprint(game, target, data, selection, chapters=False, runs=(), typed=No
             h.update(Path(path).read_bytes())
         if typed == "all":
             h.update(b"typed all")
+            priority = typed_priority_file(game, target) if chapters else None
+            h.update(Path(priority).read_bytes() if priority else b"no typed priority")
     h.update(engine_inputs().encode())
     import btnprompt   # the rules gmlaot.py finds UNDERTALE's prompt sites by (also in GENERATOR_FILES)
     h.update(btnprompt.source_text().encode())

@@ -151,7 +151,7 @@ COLLINE14_LATE void Colline14_registerAll(VMContext* ctx) {
 }
 
 #if defined(__3DS__)
-// ===[ selfVars presize       creddodge, 10-31) ]===
+// ===[ selfVars presize (change creddodge, 10-31) ]===
 // A credits-dodger bullet's Create event makes 11 stores, and its selfVars map grows from nothing to 8 entries and then
 // to 16 under them: two allocations, two fills, a 6-entry rehash and a free per bullet, 20-24 bullets per spawn.
 // Each object's map size when its last instance was freed is kept here (log2 of the capacity, 4 bits per object, the
@@ -161,11 +161,11 @@ COLLINE14_LATE void Colline14_registerAll(VMContext* ctx) {
 // size picks it), which changes nothing UNDERTALE can see. Nothing in UNDERTALE walks an instance's variables in slot
 // order: it calls none of instance_copy, variable_instance_get_names, struct_get_names or instance_create_layer, the
 // runner's reference clears give the same result in any order, the identity state hash sums its entries, and the
-// state dumps are F12 debug only       creddodge, lever 3 proof). A map that would pass a load of 0.75 still grows as
+// state dumps are F12 debug only (change creddodge, lever 3 proof). A map that would pass a load of 0.75 still grows as
 // before. A failed allocation leaves the map empty, as without this.
 #define CD_CAP_OBJECTS 2048
 static uint8_t cdCapLog2[CD_CAP_OBJECTS / 2] __attribute__((section(".bss.cdcap_late")));
-// selfVars table reuse       creddodge p23 lever 1, 11-01): a freed instance's table of 8, 16 or 32 entries is kept
+// selfVars table reuse (change creddodge p23 lever 1, 11-01): a freed instance's table of 8, 16 or 32 entries is kept
 // (up to CD_POOL_DEPTH a size) instead of freed, its values freed as IntRValueHashMap_freeAllValues frees them, and the
 // next new instance of an object whose last map had that size takes it, filled with the empty key as a fresh one is.
 // The tables are malloc's own blocks of the same size, so nothing but which block an instance gets changes; at most

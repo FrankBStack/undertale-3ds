@@ -3,8 +3,8 @@
 The console converts every texture page of a data.win into pageNNN.dtx files and a "complete" marker in a "cache"
 folder beside it (platform/3ds/source/ctr_texture_pack.c) the first time a game starts: about 30 s for UNDERTALE on
 an Old 3DS and several minutes for DELTARUNE. tools/texprep builds that same console code for the PC, so the builder
-can write those folders onto the SD card itself. The host alone clears hidden RGB in the normal Final Froggit
-head's alpha-0 texels; all other texels use the unchanged console packer. The console's checks
+can write those folders onto the SD card itself. Both host and console clear hidden RGB in the normal and hurt Final
+Froggit heads' alpha-0 texels in recognized Steam/GOG layouts. UT cache epochs 5/6 invalidate old pages and complete markers; DR stays on 3/4. Checks
 stay as they are: it reads a page only when its header matches the data.win, and it prepares any page that is
 missing or stale, so an absent or partial folder only means the console does that work as before.
 
@@ -70,10 +70,14 @@ PINNED = {
     # re-pinned for creddodge cdPop's engine/src/vm.h (3DS-only lines; only the embedded digest changes, 2026-11-01),
     # rebuilt from the export_scrub copy of those sources (builderx hygiene; the kit ships scrubbed copies, 2026-11-01),
     # re-pinned for uthunt dprank's engine/src/runner.h (3DS-only lines; only the embedded digest changes, 2026-11-01),
-    # re-pinned for creddodge presize's engine/src/instance.h (3DS-only lines; only the embedded digest changes, 2026-11-01).
-    # texprep-src-1:4998b527301932b5f4b32f7ec242a97893f8e610635039232db5878c97fa9545
-    ("win32", "x86_64"): ("texprep-windows-x64.exe", 356982,
-                          "01572b863b9fafb3ccc5d246ed3a39771f3cc562041259f308ca5bad2be88bd6"),
+    # re-pinned for creddodge presize's engine/src/instance.h (3DS-only lines; only the embedded digest changes, 2026-11-01),
+    # rebuilt on stage75zn for change racefix's platform/3ds/source/ctr_texture_pack.c (worker hurry slot, damaged-page
+    # marker, c26rev r93 F2's marker turn), from the export_scrub copy of the stage's sources (2026-11-02),
+    # rebuilt on stage75zo for change redpix (UT epochs 5/6, DR 3/4; normal/hurt heads, Steam/GOG, the console's
+    # post-conversion correction) on top of racefix's, from the export_scrub copy of the merged sources (2026-11-02).
+    # texprep-src-1:aec266aff4b83431e4d86741903380e9206ca063d2d55c2f6ca8f7c9cb1bb433
+    ("win32", "x86_64"): ("texprep-windows-x64.exe", 359656,
+                          "a55c7ef5c0c33a33d22c1237e4098cf4d8fd643f0b6019936a4e9f176f3187ca"),
     # Linux builds locally with the system compiler. The former static glibc 2.39 binary is
     # retired: it lacked a corresponding-source/relink kit and did not fit older Debian hosts.
     # macOS (arm64 and x86_64): texprep-macos-universal, built on an M1 Mac (steps in builder-status.md).

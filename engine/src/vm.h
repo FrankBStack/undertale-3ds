@@ -526,7 +526,7 @@ void VM_runEventBound(VMContext* ctx, VMEventRun* run, struct Instance* instance
 #define VM_RUN_EVENT_IN_RUN VM_runEvent
 #endif
 
-// evguard       asgore30, z_evguard.c, late text, UNDERTALE only): the runner's event runs begin with
+// evguard (change asgore30, z_evguard.c, late text, UNDERTALE only): the runner's event runs begin with
 // VM_BEGIN_EVENT_RUN, which notes a code entry that starts with a test of a global jumping to its end when false,
 // and VM_RUN_EVENT_IN_RUN (above) skips the run's events while that test is false (they would do nothing).
 #if defined(ENABLE_WAD16)
@@ -537,7 +537,7 @@ void VM_runEventGuarded(VMContext* ctx, VMEventRun* run, struct Instance* instan
 #define VM_BEGIN_EVENT_RUN VM_beginEventRun
 #endif
 
-// creddodge pop       creddodge, 10-31; the round-8 step unit's cdPop on stage75ze; UNDERTALE 3DS only): aotSitePop's
+// creddodge pop (change creddodge, 10-31; the round-8 step unit's cdPop on stage75ze; UNDERTALE 3DS only): aotSitePop's
 // handlePop call, decoded as aotSiteHandlePop decodes it, goes to cdPop (late text, defined in aot/vm_aot_bridge.inc
 // just before aotSitePop), which takes a Pop.v.v of a builtin through an instance id on the stack (`cb_a[i].x = x`) the
 // way handlePop and resolveVariableWrite end up taking it, and gives every other pop to handlePop. Every other build

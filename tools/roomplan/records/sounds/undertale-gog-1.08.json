@@ -9,7 +9,9 @@
   "room_count": 336,
   "sound_count": 443,
   "sources": ["Steam sound observations re-bound to measured GOG data after equal CODE/ROOM/SOND and indexed audio payload proof (relocated pointers; only Ogg serial/CRC metadata differs). utsfx boss1: Azahar New, recorder a8b0f752f-era rec1 (410103bf), seed 5, bosscov_scenes.txt, the roomplan boss2b word list (188 scenes)", "Steam sound observations re-bound to measured GOG data after equal CODE/ROOM/SOND and indexed audio payload proof (relocated pointers; only Ogg serial/CRC metadata differs). utsfx smoke1: sans", "Steam sound observations re-bound to measured GOG data after equal CODE/ROOM/SOND and indexed audio payload proof (relocated pointers; only Ogg serial/CRC metadata differs). flowend laser: Photoshop Flowey whole fight (scratch bench recipe bench_fe.txt, seed 5), Azahar New, recorder ffREC4 (utflowey2 P4 era), room 294: the mouth beam only"],
-  "source_record_sha256": "f645cf9e594aff85375bc2da518f00675db6d745c91501af94c8accb94dfd180",
+  "source_record_sha256": "fdd10684fd8cd237c88c7ca1a5979bc5d7bfe94c0f6e643d9882d53f02e83375",
+  "streams": [{"room": 294, "sounds": [354, 365, 371, 373, 374]}],
+  "stream_sources": ["Steam stream list re-bound to GOG data (equal SOND indices, as the scenes above). omegaflowey L2: room 294 (Omega Flowey's fight), sounds of 256 KiB and more decoded into the sound cache in the background in stage75zj console rows integ25-zjut-{o2,o3,xl}-flowey-2B (whole ut_flowey sweep, seed 5)", "Steam stream list re-bound to GOG data (equal SOND indices, as the scenes above). omegaflowey L2 rev 2: without the sounds whose plays opened their file more often streaming than cached (Azahar, whole ut_flowey sweep, seed 5: stage75zk vs the unit with the first list; spares cover the rest)"],
   "scenes": [
     {"room":0,"sub":-1,"visits":189,"sounds":[]},
     {"room":1,"sub":-1,"visits":190,"sounds":[[3,214],[5,95]]},

@@ -42,18 +42,22 @@ Asriel, Mad Dummy and Lemon Bread were measured before the 29 October sound fix,
 
 We also measured every room of a full playthrough on the older models, on an earlier build: 589 of 595 rooms pass on a 3DS.
 
-## What changed since the last update (31 October)
+## What changed since the last update (1 November)
 
-- Older models: in Asriel's fight, the scene where you save Alphys no longer holds one frame on screen for three refreshes. Our test runs on a 2DS, a 3DS and a 3DS XL show none now.
-- Older models: the Omega Flowey finale has slightly fewer slow frames in our test runs on the 2DS and the 3DS. The difference is small, and the 3DS XL didn't show it.
-- Older models: the part of the ending credits where you dodge the names, and Mettaton's opera, measured the same as before.
-- Coming in the next build: an object created while alarms were being run could fire its own alarm one frame early. We found this on PC; the fix is done and checked there.
+- Older models: loading into a battle is much shorter. In our console tests: the battle at the Snowdin ice exit about 1.0-1.5 s down to 0.5-0.8 s, Papyrus 0.45-0.67 s down to 0.2-0.26 s, and a Waterfall battle 0.3-0.5 s down to 0.09-0.16 s.
+- Older models: the slowest frame during the Omega Flowey fight (before the ending's load) is lower: 2DS 70 to 50 ms, 3DS 65 to 51 ms, 3DS XL 56 to 53 ms. A locked 30 needs about 33 ms or less.
+- Older models: in our console tests, the fights with Asgore, Undyne, Sans and Mettaton EX ran at a locked 30 on all three models, apart from the one Asgore hitch below.
+- FPS counter: with the game on the bottom screen and the counter on the top, black lines no longer flicker through the counter.
+- The dialogue box at a save point no longer lingers for a moment over the SAVE menu. We first saw it at a Waterfall save point.
+- The red pixels around the last Froggit in the ending credits: the builder now cleans up that art when it prepares the game. This should hide them, but it isn't a full fix, and we haven't confirmed it on a console yet.
+- The alarm-timing fix mentioned last time is in this build.
 
 ## Setbacks
 
-- Older models: the Omega Flowey finale still doesn't run at a locked 30 fps.
-- Older models: in the ending credits, the part where you dodge the names still drops one frame each time a new wave of names appears.
-- The beta is still not out. The hardest scenes on the older models, above all the ending credits, still drop frames.
+- Older models: the Asgore fight has one hitch near its start, when its art loads for the first time. The fix is planned for the next build.
+- Older models: the Omega Flowey fight still drops frames for a second or two after the 2nd SOUL.
+- Older models: the spinning circles of text in the ending credits still drop frames.
+- Older models: in Asriel's fight, the music cut out once in play-testing when we went to save Alphys. We're looking into it.
 
 ## Known issues
 
@@ -62,7 +66,7 @@ We also measured every room of a full playthrough on the older models, on an ear
 - On older models, opening the Rosalina menu while the game runs can freeze the console. Save before using it.
 - Smart smoothing can lose fine lines in some large artwork, such as Mettaton NEO, Asriel's wings and Asgore's cape.
 - Opening Options lets the music fade out instead of stopping at once, and a sound that was playing can be cut off or play twice afterwards.
-- A few stray red pixels can appear around the last Froggit in the ending credits. We're looking into it.
+- A few stray red pixels can appear around the last Froggit in the ending credits. This build should hide them; we haven't confirmed it on a console yet.
 - Rarely, an older model can crash when you press HOME, and a 2DS can freeze or crash around Asriel's fight or the ending credits. We're looking into it. Save first.
 
 ## Supported consoles

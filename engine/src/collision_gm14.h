@@ -221,8 +221,8 @@ typedef struct {
 static inline __attribute__((always_inline)) bool Colflip14_shape(Sprite* spr, Instance* inst, Colflip14Shape* out) {
     if (0.0001 > GMLReal_fabs(inst->imageXscale)) return false;
     if (0.0001 > GMLReal_fabs(inst->imageYscale)) return false;
-    bool masked = Collision_hasFrameMasks(spr);
-    out->mask = masked ? spr->masks[((uint32_t) inst->imageIndex) % spr->maskCount] : nullptr;
+    bool masked = spr != nullptr && spr->maskCount > 0 && (spr->masks != nullptr || spr->sepMasks != 1); // hitbox: a non-precise one's too (DataWin_sep0Masks)
+    out->mask = masked && spr->masks != nullptr ? spr->masks[((uint32_t) inst->imageIndex) % spr->maskCount] : nullptr;
     out->rowBytes = (spr->maskWidth + 7) / 8;
     out->ix = GMLReal_bankersRound(inst->x);
     out->iy = GMLReal_bankersRound(inst->y);

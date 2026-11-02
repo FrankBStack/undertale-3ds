@@ -18,6 +18,13 @@ WORK_AREAS = {'build': ('src', 'ccache', 'data', 'chapter-data', 'texcache', 'sf
               'downloads': (), 'tools': ()}
 
 
+def available(work):
+    """Cheap first-screen entry check; the preview performs the ownership validation."""
+    work = Path(work)
+    return (work/JOURNAL).is_file() or any((work/name).exists()
+        for names in WORK_AREAS.values() for name in names)
+
+
 def linked(path):
     """Reject symbolic links AND Windows junction/reparse points, including ancestors."""
     for p in (path, *path.parents):

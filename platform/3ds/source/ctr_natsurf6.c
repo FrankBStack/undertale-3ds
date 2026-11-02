@@ -737,3 +737,18 @@ NS6_TEXT bool __wrap_CtrRenderer_loadFlickerProbe(Renderer* renderer, const char
     return loaded;
 }
 #endif
+
+// ---[ titancpu lever 1 (DELTARUNE New 3DS, late code) ]---
+// Whether the table's drawSurface, ns6DrawSurface (ours, or a copy of our table that a later wrapper put in front, as
+// smalltext's on DELTARUNE), would pass this draw straight on to `inner` with nothing else done: ns6ObserveDraw returns
+// false at once for a surface it doesn't watch (inactive, out of range, none or full), so NS6_SOFTLY leaves the filter
+// as it is, and the entry before ours is `inner`. vine_titancpu.inc's Titan_stripDraw then calls the renderer's own
+// drawSurface itself. In late_reserve.ld's titancpu tail line, after every other late function.
+#if defined(ENABLE_WAD17) && defined(CTRPORT_TARGET_N3DS)
+bool Titan_ns6PassesDraw(const Renderer* renderer, int32_t id, const void* inner);
+__attribute__((noinline, used, section(".text.titancpu_tail")))
+bool Titan_ns6PassesDraw(const Renderer* renderer, int32_t id, const void* inner) {
+    if (renderer->vtable->drawSurface != ns6DrawSurface || (const void*) ns6.prev.drawSurface != inner) return false;
+    return !ns6.active || 0 > id || id >= NS6_MAX || ns6.s[id].state == NS6_NONE || ns6.s[id].state == NS6_FULL;
+}
+#endif

@@ -9,6 +9,8 @@
   "room_count": 336,
   "sound_count": 443,
   "sources": ["utsfx boss1: Azahar New, recorder a8b0f752f-era rec1 (410103bf), seed 5, bosscov_scenes.txt, the roomplan boss2b word list (188 scenes)", "utsfx smoke1: sans", "flowend laser: Photoshop Flowey whole fight (scratch bench recipe bench_fe.txt, seed 5), Azahar New, recorder ffREC4 (utflowey2 P4 era), room 294: the mouth beam only"],
+  "streams": [{"room": 294, "sounds": [354, 365, 371, 373, 374]}],
+  "stream_sources": ["omegaflowey L2: room 294 (Omega Flowey's fight), sounds of 256 KiB and more decoded into the sound cache in the background in stage75zj console rows integ25-zjut-{o2,o3,xl}-flowey-2B (whole ut_flowey sweep, seed 5)", "omegaflowey L2 rev 2: without the sounds whose plays opened their file more often streaming than cached (Azahar, whole ut_flowey sweep, seed 5: stage75zk vs the unit with the first list; spares cover the rest)"],
   "scenes": [
     {"room":0,"sub":-1,"visits":189,"sounds":[]},
     {"room":1,"sub":-1,"visits":190,"sounds":[[3,214],[5,95]]},

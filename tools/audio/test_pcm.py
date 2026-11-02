@@ -161,6 +161,42 @@ class PcmTests(unittest.TestCase):
                 result.extend(piece)
             self.assertEqual(result, struct.pack('<43h', *expected))
 
+    def test_any_frame_content_any_history_any_piece(self):
+        # pcFrames reads a frame's header and nibbles once per frame (cbcut B): random predictors, scales and nibbles,
+        # extreme coefficients and block-start histories, read in pieces that start and end anywhere in a frame.
+        rng = random.Random(1102)
+        edges = (-32768, -32767, -16385, -2049, -2048, -1, 0, 1, 2047, 2048, 16384, 32767)
+        value = lambda: rng.choice(edges) if rng.randrange(3) == 0 else rng.randrange(-32768, 32768)
+        for channels in (1, 2):
+            frames, blocks = 3 * 2044 + 101, 4
+            header = bytearray(128)
+            dsp.HEADER.pack_into(header, 0, b'DTAD', 1, 128, 32728, channels, frames, 2044, blocks, 0)
+            coefs = [[value() for _ in range(16)] for _ in range(channels)]
+            for ch in range(channels):
+                struct.pack_into('<16h', header, 40 + ch * 40, *coefs[ch])
+            data, expected = bytearray(header), [[] for _ in range(channels)]
+            for block in range(blocks):
+                n = min(2044, frames - block * 2044)
+                for ch in range(channels):
+                    loud = rng.randrange(4) == 0  # mostly saturating frames
+                    scale = (lambda: rng.randrange(12, 16)) if loud else (lambda: rng.randrange(16))
+                    byte = (lambda: rng.choice((0x77, 0x88))) if loud else (lambda: rng.randrange(256))
+                    body = b''.join(bytes([rng.randrange(8) << 4 | scale()] + [byte() for _ in range(7)])
+                                    for _ in range((n + 13) // 14))
+                    history = (value(), value()) if block else (0, 0)
+                    data += dsp.CONTEXT.pack(body[0], *history, 0) + body
+                    expected[ch] += dsp.decode_channel(body, n, coefs[ch], history)[0]
+            pcm = struct.pack(f'<{frames * channels}h',
+                              *(expected[ch][i] for i in range(frames) for ch in range(channels)))
+            cursor, at = self.opened(bytes(data)), 0
+            for _ in range(400):
+                if rng.randrange(4) == 0:
+                    at = rng.randrange(frames)
+                n = min(frames - at, rng.choice((1, 2, 13, 14, 15, 27, 29, 160, 654, 2043, 2045)))
+                piece, _ = self.piece(cursor, at, n)
+                self.assertEqual(piece, pcm[at * channels * 2:(at + n) * channels * 2], (channels, at, n))
+                at = (at + n) % frames
+
 
 if __name__ == '__main__':
     unittest.main()

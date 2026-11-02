@@ -53,10 +53,19 @@ static bool publishDirect = true;
 static LightLock sdWriteLock;
 
 // "DTX1". Bump PACK_VERSION whenever the conversion or the layout of packed
-// pages changes, so old cache files are rebuilt instead of misread. Rounded
-// packing makes version 3's files; version 4 holds every tile exactly.
+// pages changes, so old cache files are rebuilt instead of misread. UT uses
+// versions 5/6 after redpix; DR retains rounded/exact versions 3/4.
 #define PACK_MAGIC 0x31585444u
+#if defined(CTRPORT_TEXPREP_UT_CACHE)
+// The generic PC tool packs both games; its parsed WAD version selects the epoch.
+#define PACK_VERSION (CTRPORT_TEXPREP_UT_CACHE ? (packExact ? 6u : 5u) : (packExact ? 4u : 3u))
+#elif defined(ENABLE_WAD16)
+// UT: rebuild pre-redpix pages and the complete marker through the normal prepare screen.
+#define PACK_VERSION (packExact ? 6u : 5u)
+#else
 #define PACK_VERSION (packExact ? 4u : 3u)
+#endif
+#line 60
 // Cache files are a few MB at most; anything bigger is not ours.
 #define PACK_MAX_FILE_SIZE (64u * 1024u * 1024u)
 
@@ -1182,7 +1191,7 @@ static bool packRow(void* user, const CtrPageLayout* layout, int32_t ty, const u
         b->table[i].format = layout->formats[i];
         if (layout->formats[i] == CTR_TILE_EMPTY) continue;
         uint64_t t0 = nowNanos();
-        CtrPack_convertTile(b->texels, layout, tx, ty, rows);
+        CtrPack_convertTileRedpix(b->texels, layout, tx, ty, rows);
         uint64_t t1 = nowNanos();
         uint32_t texelBytes = CtrPack_texelBytes((CtrTileFormat) layout->formats[i]);
         size_t compressed = CtrLz_compress(b->texels, CtrPack_tileBytes(layout, i), b->scratch, texelBytes);
@@ -1592,14 +1601,16 @@ static void napUnlessQuit(CtrPackWorker* worker, uint32_t ms) {
     }
 }
 
+static int32_t racefixTakeHurry(CtrPackWorker* worker); // the file's end
+static void racefixPublish(CtrPackWorker* worker);      // the file's end
+
 // Takes the page to pack next: the one the game asked for if it is still
 // pending, else the first pending one from *next on. Returns -1 if none is.
 static int32_t claimPage(CtrPackWorker* worker, uint32_t* next) {
     lockWorker(worker);
     int32_t page = -1;
-    int32_t hurried = worker->hurryPage;
+    int32_t hurried = racefixTakeHurry(worker);
     if (0 <= hurried) {
-        worker->hurryPage = -1;
         if (worker->pageCount > (uint32_t) hurried && worker->pageStates[hurried] == PAGE_PENDING) page = hurried;
     }
     while (0 > page && worker->pageCount > *next) {
@@ -1632,13 +1643,17 @@ static PackStatus finishPage(CtrPackWorker* worker, uint32_t page, PackStatus st
         complete = worker->pagesLeft == 0 && !worker->anyFailed;
     }
     LightLock_Unlock(&worker->lock);
-    if (complete) writeCompleteMarker(&worker->key, worker->pageCount);
+    if (complete) racefixPublish(worker);
     return status;
 }
 
 static void workerMain(void* arg) {
     WorkerThread* self = arg;
     CtrPackWorker* worker = self->worker;
+    // Keeps the slot of 1,644 B (change racefix: claimPage, inlined here, now calls racefixTakeHurry).
+#if defined(__3DS__) && defined(NDEBUG) // the Release layout only (texprep builds this file for the PC)
+    __asm__(".pushsection .text.workerMain, 1\n.org 1644\n.popsection");
+#endif
     static const char* const names[WORKER_MAX_THREADS] = { "texture prepare 1", "texture prepare 2", "texture prepare 3" };
     CtrWatchdog_nameThread(names[self - worker->threads]);
     // Pages that don't fit in RAM now may fit once the game frees some, so
@@ -1985,7 +2000,7 @@ int32_t CtrPackWorker_utstallState(CtrPackWorker* worker, uint32_t pageId, uint3
 }
 #endif
 
-// ===[ A finished worker gives back its data.win       utstall, item 8 step 1b') ]===
+// ===[ A finished worker gives back its data.win (change utstall, item 8 step 1b') ]===
 
 // Late code, the --wrap of CtrPackWorker_poll (CMakeLists.txt), which the game thread calls every frame. Each worker
 // thread opens data.win for itself, and freeWorker closed those only when the worker was stopped, at the chapter's
@@ -2017,7 +2032,7 @@ UTSTALL8B_TEXT bool __wrap_CtrPackWorker_poll(CtrPackWorker* worker, CtrPackResu
     return got;
 }
 
-// ===[ With the cache complete, the background worker stops checking page files one by one       utstall, step 1c) ]===
+// ===[ With the cache complete, the background worker stops checking page files one by one (change utstall, step 1c) ]===
 
 // Late code: --wraps of CtrPack_isComplete (the pack screen's call at each chapter start) and
 // CtrPackWorker_setKeepPacked (the game thread's, when packed copies stop fitting in RAM). Until then the background
@@ -2065,4 +2080,59 @@ void __wrap_CtrPackWorker_setKeepPacked(CtrPackWorker* worker, bool keep) UTSTAL
 void __wrap_CtrPackWorker_setKeepPacked(CtrPackWorker* worker, bool keep) {
     __real_CtrPackWorker_setKeepPacked(worker, keep);
     if (!keep && !worker->foreground) CtrPackWorker_trustCompleteMarker(worker);
+}
+
+// ===[ change racefix (2026-11-01): the worker's hurry slot and a damaged page the game deletes ]===
+
+#define RACEFIX_PACK_TEXT __attribute__((noinline, section(".text.racefix_late")))
+#define RACEFIX_PACK_SMALL __attribute__((noinline, optimize("Os"), section(".text.racefix_late"))) // cold: once a session
+
+// claimPage's read of the page the game hurried, and its clear, in one step: CtrPackWorker_hurry (game thread)
+// writes the slot without the worker's lock, so a hurry posted between a separate read and clear was lost.
+static int32_t racefixTakeHurry(CtrPackWorker* worker) RACEFIX_PACK_TEXT;
+static int32_t racefixTakeHurry(CtrPackWorker* worker) {
+    return __atomic_exchange_n(&worker->hurryPage, -1, __ATOMIC_ACQ_REL);
+}
+
+// A page file the game found damaged and deleted (CtrPack_removeFile, through ctr_textures.c's wrap; game thread).
+// The background worker isn't told otherwise: it could still trust the complete marker it saw at the start
+// (CtrPackWorker_trustCompleteMarker marks the page done unread) or write the marker again when its last page
+// finishes, and every later session would then count the missing page as packed and decode its image at each room
+// load. So the marker answer is forgotten and the worker counts a failure, which keeps it from writing the marker
+// this session; the next session's worker finds the page missing and packs it. The page is not put back to pending:
+// the worker's results hold one entry per page.
+// The worker decides the marker under its lock but writes it after (finishPage), so the failure alone could land
+// between the two and the marker be written over the deleted page (c26rev r93 F2). The marker's writer and this
+// take the marker turn below: the writer checks for a failure and writes the marker inside its turn, and this sets
+// the failure inside its own, before the caller deletes the page and the marker. Either the marker is written before
+// that delete, or the writer sees the failure and writes nothing.
+// The turn: taken by racefixMarkerTake, given back by storing 0.
+static uint32_t racefixMarkerBusy __attribute__((section(".bss.racefix_late")));
+
+static void racefixMarkerTake(void) RACEFIX_PACK_SMALL;
+static void racefixMarkerTake(void) {
+    while (__atomic_exchange_n(&racefixMarkerBusy, 1, __ATOMIC_ACQUIRE) != 0) svcSleepThread(1000000);
+}
+
+void CtrPackWorker_racefixPageRemoved(CtrPackWorker* worker) RACEFIX_PACK_TEXT;
+void CtrPackWorker_racefixPageRemoved(CtrPackWorker* worker) {
+    racefixMarkerTake();
+    markerSeen.complete = false;
+    if (worker != nullptr) {
+        lockWorker(worker);
+        worker->anyFailed = true;
+        LightLock_Unlock(&worker->lock);
+    }
+    __atomic_store_n(&racefixMarkerBusy, 0, __ATOMIC_RELEASE);
+}
+
+// finishPage found every page packed: writes the complete marker unless a page has failed since (see above).
+static void racefixPublish(CtrPackWorker* worker) RACEFIX_PACK_SMALL;
+static void racefixPublish(CtrPackWorker* worker) {
+    racefixMarkerTake();
+    lockWorker(worker);
+    bool failed = worker->anyFailed;
+    LightLock_Unlock(&worker->lock);
+    if (!failed) writeCompleteMarker(&worker->key, worker->pageCount);
+    __atomic_store_n(&racefixMarkerBusy, 0, __ATOMIC_RELEASE);
 }

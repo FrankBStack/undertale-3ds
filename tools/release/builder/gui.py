@@ -1174,75 +1174,140 @@ class UtCheck(Wrapping, ttk.Checkbutton):
 
 
 class UtProgressbar(ttk.Progressbar):
-    """A ttk.Progressbar subclass that draws a white pixel-bordered bar with the red SOUL as its progress marker."""
+    """Native bar or persistent canvas items, with one animation timer."""
 
     def __init__(self, parent, mode="determinate", length=500, maximum=100, **kw):
         self._theme = _find_theme(parent)
-        self._length = length
-        self._max = maximum
-        self._mode = mode
+        self._length, self._height = length, 20
+        self._max, self._mode = maximum, mode
         self._val = float(kw.get("value", 0.0))
         self._step = 0
-        self._animating = False
-        self._img = None
+        self._animating = self._native_running = False
+        self._interval = None
+        self._tick_id = self._render_id = None
+        self._img = self._mask = self._geometry = None
+        self._overlay_visible = False
         super().__init__(parent, mode=mode, length=length, maximum=maximum, **kw)
-        self._overlay = tk.Label(self, text="", bd=0, highlightthickness=0, bg="#000000")
+        # Window-level cancellation must unregister from the same command owner.
+        self._clock = self.winfo_toplevel()
+        self._overlay = tk.Canvas(self, bd=0, highlightthickness=0, bg="#000000")
         self._overlay._lint_skip = True
-        self._overlay.place(x=0, y=0, relwidth=1, relheight=1)
-        # The picture follows the bar's real size (it may be stretched to the page width).
+        self._fill = self._overlay.create_rectangle(0, 0, 0, 0, fill="#ffff00", width=0)
+        self._border = self._overlay.create_rectangle(0, 0, 0, 0, outline="#ffffff", width=2)
+        self._heart = self._overlay.create_image(0, 0, anchor="nw")
         self.bind("<Configure>", self._resized, add="+")
+        self.bind("<Destroy>", self._destroyed, add="+")
         if self._theme is not None:
             self._theme.register(self)
-            self._render()
+        self._render()
 
     def _resized(self, event):
-        if (event.width, event.height) != (self._length, getattr(self, "_height", 0)):
+        if (event.width, event.height) != (self._length, self._height):
             self._length, self._height = event.width, event.height
-            self._render()
+            self._request_render()
+
+    def _request_render(self):
+        # Coalesce worker bursts and repeated polling; never enter a nested Tk update.
+        if self._render_id is None:
+            self._render_id = self._clock.after(50, self._render)
 
     def _render(self):
-        if self._theme is None:
+        if self._render_id is not None:
+            self._clock.after_cancel(self._render_id)
+            self._render_id = None
+        if self._theme is None or self._theme.native:
+            if self._overlay_visible:
+                self._overlay.place_forget()
+                self._overlay_visible = False
+            if not self._native_running:
+                super().configure(value=self._val)
             return
-        if self._theme.native:
-            self._overlay.place_forget()
-            self._overlay.configure(image="")
-            self._img = None
+        if not self._overlay_visible:
+            self._overlay.configure(bg="#000000")
+            self._overlay.place(x=0, y=0, relwidth=1, relheight=1)
+            self._overlay_visible = True
+        mask = tuple(tuple(row) for row in self._theme.soul_mask)
+        if mask != self._mask:
+            # Transparent pixels let the existing fill show through the sprite.
+            image = tk.PhotoImage(master=self, width=16, height=16)
+            for y, row in enumerate(mask[:16]):
+                for x, on in enumerate(row[:16]):
+                    if on:
+                        image.put("#ff0000", (x, y))
+            self._overlay.itemconfigure(self._heart, image=image)
+            self._img, self._mask = image, mask
+        w, h = max(60, int(self._length)), max(18, int(self._height))
+        inner = w - 6
+        fraction = max(0.0, min(1.0, self._val / max(1.0, float(self._max))))
+        fill = int(round(inner * fraction))
+        moving = self._mode == "indeterminate" and self._animating
+        x = 3 + ((self._step * 12) % max(1, inner - 16) if moving else
+                 max(0, min(inner - 16, fill - 8)))
+        geometry = (w, h, fill, x, max(1, (h - 16) // 2), moving)
+        if geometry == self._geometry:
             return
-        self._overlay.place(x=0, y=0, relwidth=1, relheight=1)
-        self._img = self._theme.render_progressbar_image(
-            self._length, max(18, getattr(self, "_height", 20)), self._val, self._max,
-            indeterminate=(self._mode == "indeterminate" and self._animating), step=self._step,
-        )
-        self._overlay.configure(image=self._img)
+        previous = self._geometry
+        if previous is None or previous[:2] != geometry[:2]:
+            self._overlay.coords(self._border, 1, 1, w-1, h-1)
+        if previous is None or previous[:3] != geometry[:3]:
+            self._overlay.coords(self._fill, 3, 3, 3+fill, h-3)
+        if previous is None or previous[2] != fill or previous[5] != moving:
+            self._overlay.itemconfigure(self._fill, state="hidden" if moving or not fill else "normal")
+        if previous is None or previous[3:5] != geometry[3:5]:
+            self._overlay.coords(self._heart, x, geometry[4])
+        self._geometry = geometry
 
     def refresh_theme(self):
         self._render()
+        self._sync_timer()
+
+    def _cancel_tick(self):
+        if self._tick_id is not None:
+            self._clock.after_cancel(self._tick_id)
+            self._tick_id = None
+
+    def _sync_timer(self):
+        native = self._theme is None or self._theme.native
+        if native and self._animating:
+            self._cancel_tick()
+            if not self._native_running:
+                super().start(self._interval)
+                self._native_running = True
+        else:
+            if self._native_running:
+                super().stop()
+                self._native_running = False
+            if self._animating and self._mode == "indeterminate":
+                if self._tick_id is None:
+                    self._tick_id = self._clock.after(120, self._tick)
+            else:
+                self._cancel_tick()
 
     def start(self, interval=None):
+        self._interval = interval
         self._animating = True
-        self._step += 1
-        super().start(interval)
-        self._render()
-        if getattr(self, "_tick_id", None) is None:
-            self._tick()
+        self._sync_timer()
+        self._request_render()
 
     def _tick(self):
-        # ttk animates only its own (covered) bar; the SOUL moves here, a few times a second.
         self._tick_id = None
         if not self._animating or not self.winfo_exists():
             return
-        if self._mode == "indeterminate" and self._theme is not None and not self._theme.native:
-            self._step += 1
-            self._render()
-        self._tick_id = self.after(120, self._tick)
+        self._step += 1
+        self._render()
+        self._sync_timer()
 
     def stop(self):
         self._animating = False
-        super().stop()
-        if getattr(self, "_tick_id", None) is not None:
-            self.after_cancel(self._tick_id)
-            self._tick_id = None
-        self._render()
+        self._sync_timer()
+        self._request_render()
+
+    def _destroyed(self, event):
+        if event.widget is self:
+            self._cancel_tick()
+            if self._render_id is not None:
+                self._clock.after_cancel(self._render_id)
+                self._render_id = None
 
     def configure(self, cnf=None, **kw):
         if isinstance(cnf, dict):
@@ -1250,6 +1315,7 @@ class UtProgressbar(ttk.Progressbar):
             cnf = None
         if not cnf and not kw:
             return super().configure()
+        before = (self._mode, self._val, self._max)
         if "mode" in kw:
             self._mode = kw["mode"]
             if self._mode != "indeterminate":
@@ -1258,9 +1324,11 @@ class UtProgressbar(ttk.Progressbar):
             self._val = float(kw["value"])
         if "maximum" in kw:
             self._max = float(kw["maximum"])
-        res = super().configure(cnf, **kw)
-        self._render()
-        return res
+        result = super().configure(cnf, **kw)
+        if before != (self._mode, self._val, self._max):
+            self._sync_timer()
+            self._request_render()
+        return result
 
     config = configure
 
@@ -1578,6 +1646,14 @@ class WelcomePage(Page):
             for key, p in products.PRODUCTS.items():
                 radiobutton(self.frame, text=p.title, value=key, variable=self.game,
                             command=self.changed).pack(anchor="w")
+        self.cleanup_button = button(self.frame, text="Clean up previous build files",
+                                     command=self.app.open_cleanup)
+
+    def on_show(self):
+        if cleanup.available(self.app.opts.work):
+            self.cleanup_button.pack(anchor="w", pady=(12, 0))
+        else:
+            self.cleanup_button.pack_forget()
 
     def changed(self):
         if self.game.get() != self.st.game:
@@ -2351,18 +2427,32 @@ class DeliverPage(Page):
 
     def _show_status(self):
         how = self.how.get()
-        for w in (self.bar, self.status):
-            w.pack_forget()
-        anchor = self.panels[how]
-        if not anchor.winfo_manager():
-            return  # mode() shows the panel, then calls this again
+        panel = self.panels[how]
+        if not panel.winfo_manager():
+            for widget in (self.bar, self.status):
+                if widget.winfo_manager():
+                    widget.pack_forget()
+            self._status_layout = None
+            return
+        text = self.texts[how]
+        if self.status.cget("text") != text:
+            self.status.config(text=text)
+        layout = (how, self.bar_used[how], bool(text))
+        if (layout == getattr(self, '_status_layout', None)
+                and bool(self.bar.winfo_manager()) == bool(self.bar_used[how])
+                and bool(self.status.winfo_manager()) == bool(text)):
+            return  # Progress text must not unmap/remap the bar or the heart.
+        anchor = panel
         if self.bar_used[how]:
             self.bar.pack(fill="x", pady=(4, 6), after=anchor)
             anchor = self.bar
-        text = self.texts[how]
-        self.status.config(text=text)
+        elif self.bar.winfo_manager():
+            self.bar.pack_forget()
         if text:
             self.status.pack(anchor="w", pady=(0, 6), after=anchor)
+        elif self.status.winfo_manager():
+            self.status.pack_forget()
+        self._status_layout = layout
 
     def show_progress(self, how, value):
         self.bar_used[how] = True
@@ -2542,6 +2632,7 @@ class DeliverPage(Page):
             return
         self.wifi_busy(True)
         self.st.delivered = False
+        self._ftp_update, self._ftp_phase = 0, None
         self.set_status('wifi', 'Preparing files and textures on the PC...')
         self.show_progress("wifi", 0)
 
@@ -2554,6 +2645,7 @@ class DeliverPage(Page):
             self.wifi_busy(False)
             self.set_status("wifi", ftp_delivery.error_text(res) if isinstance(res, Exception) else "Sent and checked. You can close ftpd.")
             if not isinstance(res, Exception):
+                self.show_progress("wifi", 100)
                 self.st.sd_root = None
                 self.st.ftp_console = addr
                 self.st.files_root = res.root
@@ -2574,16 +2666,17 @@ class DeliverPage(Page):
 
     def ftp_progress(self, event):
         if event.phase == 'Finished':
-            return  # The completion callback supplies the final status.
-        # Bound Tk's event queue during fast local/mock transfers.
+            return  # Completion callback marks 100 only after send returns successfully.
         now = __import__('time').monotonic()
-        if now - getattr(self, '_ftp_update', 0) < 0.15:
+        phase = 'Checking files' if event.phase.startswith('Checking') else 'Sending'
+        if phase == getattr(self, '_ftp_phase', None) and now - getattr(self, '_ftp_update', 0) < 0.15:
             return
-        self._ftp_update = now
-        left = _fmt_secs(event.seconds_left) if event.seconds_left is not None else 'measuring...'
-        text = '%s: %s\n%.1f MB/s, about %s left' % (event.phase, event.path, event.speed/1e6, left)
-        self.app.call(self.set_status, 'wifi', text)
-        self.app.call(self.show_progress, 'wifi', 100*event.done/max(1, event.total))
+        self._ftp_update, self._ftp_phase = now, phase
+        self.app.call(self._show_ftp_progress, min(99, int(event.percent)), phase)
+
+    def _show_ftp_progress(self, percent, phase):
+        self.show_progress('wifi', percent)
+        self.set_status('wifi', '%d%% - %s' % (percent, phase))
 
     def find_console(self, permission_retry=False):
         if self.copying:
@@ -2856,9 +2949,11 @@ class DonePage(Page):
         self.buttons_row = ttk.Frame(self.frame)
         self.buttons_row.pack(anchor="w", pady=(8, 0))
         self.cleaning = False
+        self.cleanup_only = False
+        self.cleanup_plan = None
         self.cleanup_box = ttk.Frame(self.frame)
         self.cleanup_box.pack(fill='x', pady=(12, 0))
-        label(self.cleanup_box, 'Free up space on this PC (optional)', bold=True)
+        label(self.cleanup_box, 'Free up space on this computer (optional)', bold=True)
         self.cleanup_choices = {}
         self.cleanup_checks = {}
         for key, title in [('build', 'Build files and caches'), ('downloads', 'Downloaded installers'),
@@ -2868,12 +2963,24 @@ class DonePage(Page):
             widget.pack(anchor='w')
             self.cleanup_choices[key] = value
             self.cleanup_checks[key] = (widget, title)
+            value.trace_add('write', lambda *_: self.app.update_nav())
         label(self.cleanup_box, 'Removing build files makes the next build slower. Removed tools are installed again from the compiler page when needed.')
+        label(self.cleanup_box, 'Clean up and finish removes the ticked items, then shows a report before closing. Finish closes without cleanup. To return later, choose Clean up previous build files on the first screen.')
         self.cleanup_notice = label(self.cleanup_box, '')
         self.cleanup_preview = button(self.cleanup_box, text='Show files to delete', command=self.preview_cleanup)
         self.cleanup_preview.pack(anchor='w')
 
     def on_show(self):
+        if self.cleanup_only:
+            self.headline.config(text="Clean up previous build files")
+            self.summary_label.config(text="No build is needed. Choose what to remove below. Your game, saves and finished builds are kept.")
+            self.steps_label.config(text="")
+            for widget in self.buttons_row.winfo_children():
+                widget.destroy()
+            for value in self.cleanup_choices.values():
+                value.set(False)
+            self.refresh_cleanup()
+            return
         p = self.st.product
         self.headline.config(text="%s is ready." % p.title)
         summary = [
@@ -2912,8 +3019,29 @@ class DonePage(Page):
             value.set(False)
         self.refresh_cleanup()
 
+    def selected_cleanup(self):
+        return [key for key, choice in self.cleanup_choices.items() if choice.get()]
+
+    def finish_label(self):
+        return 'Clean up and finish' if self.selected_cleanup() else 'Finish'
+
+    def can_finish(self):
+        return not self.cleaning and (not self.selected_cleanup() or self.cleanup_plan is not None)
+
+    def finish(self):
+        if self.cleaning:
+            return False
+        selected = self.selected_cleanup()
+        if not selected:
+            return True
+        if self.cleanup_plan is None:
+            return False  # Keep the counting/ownership error on screen.
+        self.run_cleanup(self.cleanup_plan, selected, finish=True)
+        return False  # The report's Close button exits after the user reviews it.
+
     def refresh_cleanup(self):
         self.cleaning = True
+        self.cleanup_plan = None
         self.cleanup_preview.state(['disabled'])
         self.cleanup_notice.config(text='Counting files...')
         def after(result):
@@ -2929,7 +3057,7 @@ class DonePage(Page):
                 self.cleanup_preview.state(['!disabled'])
             self.app.update_nav()
         self.app.work(lambda: cleanup.plan(self.app.opts.work, protected=(self.st.folder, self.st.sd_root,
-                                                                         self.st.files_root)), after, errors=True)
+                                                                         self.st.files_root, self.app.opts.folder)), after, errors=True)
 
     def preview_cleanup(self):
         selected = [key for key, choice in self.cleanup_choices.items() if choice.get()]
@@ -2955,21 +3083,66 @@ class DonePage(Page):
         self.app.bind_scroll_area(text)
         def remove():
             window.destroy()
-            self.cleaning = True
-            self.cleanup_preview.state(['disabled'])
-            self.cleanup_notice.config(text='Removing the selected files...')
-            self.app.update_nav()
-            def after(result):
-                self.cleaning = False
-                if isinstance(result, Exception):
-                    self.cleanup_notice.config(text=str(result))
-                else:
-                    deleted, kept = result
-                    self.cleanup_notice.config(text='Removed %d files.\n%s' % (len(deleted), '\n'.join(kept)))
-                self.app.update_nav()
-            self.app.work(lambda: cleanup.remove(plan, selected), after, errors=True)
+            self.run_cleanup(plan, selected)
         button(window, text='Delete these files', command=remove).pack(side='right', padx=8, pady=8)
         button(window, text='Cancel', command=window.destroy).pack(side='right', padx=8, pady=8)
+        window.transient(self.app.root)
+        window.grab_set()
+
+    def run_cleanup(self, plan, selected, *, finish=False):
+        if self.cleaning:
+            return
+        self.cleaning = True
+        self.cleanup_preview.state(['disabled'])
+        for widget, _ in self.cleanup_checks.values():
+            widget.state(['disabled'])
+        self.cleanup_notice.config(text='Removing the selected files...')
+        self.app.update_nav()
+        def after(result):
+            self.cleaning = False
+            for widget, _ in self.cleanup_checks.values():
+                widget.state(['!disabled'])
+            self.cleanup_preview.state(['!disabled'])
+            if isinstance(result, Exception):
+                self.cleanup_notice.config(text=str(result))
+            else:
+                deleted, kept = result
+                self.cleanup_notice.config(text='Removed %d files.\n%s' % (len(deleted), '\n'.join(kept)))
+                for value in self.cleanup_choices.values():
+                    value.set(False)
+                # Invalidate the consumed list; another deletion requires a new preview.
+                self.cleanup_plan = None
+                self.cleanup_preview.state(['disabled'])
+                if finish:
+                    self.report_cleanup(deleted, kept)
+                else:
+                    self.refresh_cleanup()
+            self.app.update_nav()
+        self.app.work(lambda: cleanup.remove(plan, selected), after, errors=True)
+
+    def report_cleanup(self, deleted, kept):
+        window = tk.Toplevel(self.frame)
+        window.title('Cleanup report')
+        window.geometry('760x480')
+        label(window, 'Removed %d files. Review the list, then click Close to finish.' % len(deleted), bold=True)
+        box = ttk.Frame(window)
+        box.pack(fill='both', expand=True)
+        text = tk.Text(box, wrap='none')
+        scroll = ttk.Scrollbar(box, command=text.yview)
+        text.config(yscrollcommand=scroll.set)
+        scroll.pack(side='right', fill='y')
+        text.pack(fill='both', expand=True)
+        report = ['Removed files:'] + (list(deleted) or ['None.'])
+        if kept:
+            report += ['', 'Kept files:'] + list(kept)
+        text.insert('1.0', '\n'.join(report))
+        text.config(state='disabled')
+        self.app.bind_scroll_area(text)
+        def close():
+            window.destroy()
+            self.app.root.destroy()
+        button(window, text='Close', command=close).pack(side='right', padx=8, pady=8)
+        window.protocol('WM_DELETE_WINDOW', close)
         window.transient(self.app.root)
         window.grab_set()
 
@@ -3143,8 +3316,9 @@ class App:
             self.theme.load_from_game_dir(self.state.folder)
         self.page.box.pack_forget()
         self.index = i
-        self.heading.config(text="* " + self.page.title)
-        self.stepno.config(text="Step %d of %d" % (i + 1, len(self.pages)))
+        cleanup_only = isinstance(self.page, DonePage) and self.page.cleanup_only
+        self.heading.config(text="* Clean up previous build files" if cleanup_only else "* " + self.page.title)
+        self.stepno.config(text="" if cleanup_only else "Step %d of %d" % (i + 1, len(self.pages)))
         self.page.box.pack(fill="both", expand=True)
         self.page.canvas.yview_moveto(0)
         stop = (self.opts.autopilot or {}).get("stop_at")
@@ -3159,10 +3333,10 @@ class App:
 
     def update_nav(self):
         last = self.index == len(self.pages) - 1
-        self.next_btn.config(text="Finish" if last else "Next >")
+        self.next_btn.config(text=self.page.finish_label() if last else "Next >")
         ok = self.page.can_next() and not self.page.busy()
         if last:
-            ok = not self.page.busy()
+            ok = self.page.can_finish()
         self.next_btn.state(["!disabled"] if ok else ["disabled"])
         self.back_btn.state(["!disabled"] if self.index > 0 and not self.page.busy() else ["disabled"])
 
@@ -3170,7 +3344,8 @@ class App:
         if self.index == len(self.pages) - 1:
             if self.page.busy():
                 return
-            self.root.destroy()
+            if self.page.finish():
+                self.root.destroy()
             return
         if self.page.can_next() and not self.page.busy():
             if not self.page.on_next():
@@ -3178,9 +3353,17 @@ class App:
                 return
             self.show(self.index + 1)
 
+    def open_cleanup(self):
+        self.pages[-1].cleanup_only = True
+        self.show(len(self.pages)-1)
+
     def back(self):
         if self.index > 0 and not self.page.busy():
-            self.show(self.index - 1)
+            if isinstance(self.page, DonePage) and self.page.cleanup_only:
+                self.page.cleanup_only = False
+                self.show(0)
+            else:
+                self.show(self.index - 1)
 
     def about(self):
         app = products.PRODUCTS[self.state.game].app_name

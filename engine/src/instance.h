@@ -34,7 +34,7 @@ struct Instance {
     struct Instance* staticParent;
     float x, y;
     float xprevious, yprevious;
-    float pathPosition, pathPositionPrevious; // path fields here, beside x/y: the line the animate pass reads       pacer)
+    float pathPosition, pathPositionPrevious; // path fields here, beside x/y: the line the animate pass reads (change pacer)
     bool persistent, solid, active, destroyed, visible, createEventFired, outsideRoom, spatialGridDirty, mouseOver;
     // Used to track which alarms are set without looping through the entire alarm array
     uint16_t activeAlarmMask;
@@ -73,7 +73,7 @@ struct Instance {
     float hspeed, vspeed;
     float friction;
     float gravity, gravityDirection;
-    int32_t pathIndex; // -1 = no path active; here, in the line the motion pass reads (hspeed..gravity;      pacer)
+    int32_t pathIndex; // -1 = no path active; here, in the line the motion pass reads (hspeed..gravity; change pacer)
     float physicsContact[5]; // point count, first point x/y, normal x/y
 
     // Path following state
@@ -136,7 +136,7 @@ void Instance_computeComponentsFromSpeed(Instance* inst);
 
 char* Instance_toStringFancy(Instance* inst, DataWin* dataWin);
 
-// utorder       credfix,             2026-10-27; UNDERTALE on the 3DS, where runner.c draws through utkDrawRoom: the
+// utorder (change credfix, review decision 2026-10-27; UNDERTALE on the 3DS, where runner.c draws through utkDrawRoom: the
 // conditions of runner.h's UTK_PLAIN_RUNS): an instance's draw order key among the instances of its depth, ascending =
 // drawn first. GameMaker 1.4 puts an instance at the front of its depth's list (drawn first, so under the others) when
 // it is made and when its depth changes to another value, so at equal depth the newest is drawn first and the oldest
@@ -159,7 +159,7 @@ void Utorder_keep(struct Runner* runner);
 #define UTORDER_KEPT(runner) false
 #endif
 
-// creddodge presize       creddodge, 10-31; UNDERTALE 3DS only; colline_gm14.c's end): a new instance's selfVars map
+// creddodge presize (change creddodge, 10-31; UNDERTALE 3DS only; colline_gm14.c's end): a new instance's selfVars map
 // starts at the capacity the last freed instance of its object had, instead of growing 0 -> 8 -> 16 under the first
 // stores of its Create event. createAndInitInstance's Instance_create and Instance_freeContents' map free go to the two
 // late functions; every other build keeps the calls as they were.

@@ -1,4 +1,4 @@
-// writerfirst       codeclose, lever 2; UNDERTALE Old 3DS writerfront builds only): a text writer's first Draw takes
+// writerfirst (change codeclose, lever 2; UNDERTALE Old 3DS writerfront builds only): a text writer's first Draw takes
 // writerfront's hand front instead of the generated function.
 //
 // Why: writerfront (z_writerfront.c) runs the dialogue writer's Draw as hand code, but only when every variable it

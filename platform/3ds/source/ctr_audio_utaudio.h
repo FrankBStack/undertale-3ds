@@ -180,5 +180,40 @@ UTS_LATE static float utsSilentLength(CtrAudioSystem* ca, int32_t soundIndex);
 #define CTR_UPDATE_ENTRY pcmWaitUpdate
 #define CTR_STOP_ENTRY ctrStopSound
 #endif
+// audofix drone (UNDERTALE, Tremor): the update publishes the cached copies of the sounds that streams play
+// (audofixUpdate, then flowendBurstUpdate), flowhitch's read link reads them (audofixFeedRead, then the real read),
+// and pcmwait's frees take a copy off first (audofixFree, then the real free). The two links are asm aliases, so
+// GCC sees the same external calls there as before. ctr_audio_system.c's end says why.
+// audofix play-through (UNDERTALE): the load hold's two physical pause writes (lmPaused, the load transport) go
+// through audofixPtPaused, an asm alias of ptPhysPaused (ctr_loadaudio_mix.inc's end), so GCC sees the same external
+// call there as before.
+#define PT_PHYS_PAUSED audofixPtPaused
+void audofixPtPaused(int p, bool paused);
+#if defined(ENABLE_WAD16) && defined(CTRPORT_HAVE_TREMOR)
+#define AUDOFIX_FEED_DECL __attribute__((noinline, noipa, optimize("Os"), section(".text.audofix_feed"))) static void \
+    audofixUpdate(AudioSystem* audio, float deltaTime);
+#undef CTR_UPDATE_ENTRY
+#define CTR_UPDATE_ENTRY audofixUpdate
+#define AUDOFIX_FREE_LINK audofixFreeLink
+#define AUDOFIX_READ_LINK audofixReadLink
+#else
+#define AUDOFIX_FEED_DECL
+#define AUDOFIX_FREE_LINK __wrap_linearFree
+#define AUDOFIX_READ_LINK __real_CtrDecoder_read
+#endif
+
+// cbcut A: a tail's or a loop seam's PCM leaves the CPU's data cache as the ADPCM feeder's pieces do (adFlush in
+// ctr_adpcm_sfx_pieces.inc: the kernel SVC where it is allowed, the dsp service otherwise), not through the dsp
+// service's IPC, which waits behind core 1 inside the NDSP callback (~0.6 ms a tail in maintainer's Omega Flowey log).
+// Same bytes flushed at the same point, so the DSP reads the same samples. adFlush is reached by its assembler name:
+// a direct call to the static function adds call-graph edges, and GCC then emits utaStop 1280 B later in
+// .text.late.utaudio2 (check_layout --full FAIL); through this declaration every function keeps its place.
+// Builds without the ADPCM feeder keep the service.
+#if defined(CTRPORT_ADPCM_SFX) || defined(CTRPORT_ADPCM_MUSIC) || defined(CTRPORT_ADPCM_SFXPACK)
+void utaDeclickFlush(const void* data, uint32_t bytes) __asm__("adFlush");
+#define UTA_DECLICK_FLUSH utaDeclickFlush
+#else
+#define UTA_DECLICK_FLUSH DSP_FlushDataCache
+#endif
 
 #endif

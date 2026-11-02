@@ -45,7 +45,7 @@ UW_TEXT void CtrUtWindow_pendingRoom(Runner* runner) {
     runner->getWindowPosition = uwGetHook;
     runner->setWindowPosition = uwSetHook;
     // A new game must not inherit the previous game's window position. Ordinary room changes preserve it.
-    if (runner->pendingRoom == ROOM_RESTARTGAME) uwPosition[0] = uwPosition[1] = 0;
+    if (runner->pendingRoom <= ROOM_RESTARTGAME) uwPosition[0] = uwPosition[1] = 0; // or RESTART_EXACT
     __real_Runner_handlePendingRoomChange(runner);
 }
 

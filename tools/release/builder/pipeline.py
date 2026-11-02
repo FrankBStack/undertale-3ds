@@ -158,10 +158,12 @@ def source_wanted(relative, game=None):
         # stmenu.py: UNDERTALE's Smoothing menu data beside them (souls, sharp sprites, previews). symverdict.py: symmetric halving's table,
         # which fontverdict.py's build mode writes for UNDERTALE and DELTARUNE's New 3DS builds (DELTARUNE's builder
         # makes both models). itemverdict.py: Smart smoothing's item verdicts, which it writes for both games. credits.py:
-        # the Credits page text (build.sh runs it for both games).
+        # the Credits page text (build.sh runs it for both games). typed_priority.py: the typed regions' saving order,
+        # which gmlaot.py imports for a typed-priority list (part of its import closure for both games).
         return len(parts) == 3 and (parts[-1] in (
             "builtin_audit.py", "btnprompt.py", "corpus.py", "data_versions.py", "escape.py", "fontverdict.py",
-            "gmlaot.py", "itemverdict.py", "prepare.py", "padrefs.py", "aot_select.py", "typed.py", "loadscreen_art.py", "late_numeric.py",
+            "gmlaot.py", "itemverdict.py", "prepare.py", "padrefs.py", "aot_select.py", "typed.py", "typed_priority.py",
+            "loadscreen_art.py", "late_numeric.py",
             "symverdict.py", "stglyphs.py", "stpack.py", "stasrtext.py", "credits.py")
             # dskip.py: UNDERTALE Old's covered-star key (build.sh runs it for UNDERTALE only).
             or (parts[-1] in ("pixgrid.py", "btnprompt_build.py", "stmenu.py", "dskip.py") and game != "deltarune")

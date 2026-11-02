@@ -8,6 +8,6 @@ LM_CODE void CtrAudio_transportMixLocked(CtrAudioSystem* ca, bool hold, int exce
         int i = *CtrLoadmix_legacy.mapped ? CtrLoadmix_legacy.inverse[p] : p;
         const UtaChan* c = &CtrLoadmix_legacy.channels[p];
         const Voice* v = &ca->voices[i];
-        UTA_PHYS_PAUSED(p, hold || (c->state != UTA_IDLE ? c->paused : ca->suspended || v->paused));
+        PT_PHYS_PAUSED(p, hold || (c->state != UTA_IDLE ? c->paused : ca->suspended || v->paused));
     }
 }

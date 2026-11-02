@@ -1546,4 +1546,18 @@ void Utsw_stateHashEndFrame(Runner* runner) {
     arrfree(built);
 }
 
+// For z_utring.c's part creates (change flowend r39): what a call of fn (a funcCallCache entry of instance_create) with
+// object target as its third argument runs: fn itself, or for this file's wrapper the engine's instance_create when
+// swInstanceCreate would only call it (no late bind for the arm strip, not the strip object, no materialize for the
+// heart), else nullptr. Placed with z_utring.c's code (late_reserve.ld), after everything that existed.
+void* Utsw_plainCreate(void* fn, int32_t target) __attribute__((noinline, section(".utring_sw")));
+void* Utsw_plainCreate(void* fn, int32_t target) {
+    if (fn != (void*) swInstanceCreate) return fn;
+    if (swState == 0 && target == swArmStrip) return nullptr;
+    if (swState > 0 && ((target == swStripObject && swStripObject >= 0) ||
+                        (swAny() && (target == swHeart || target == SW_UNKNOWN))))
+        return nullptr;
+    return (void*) swOrigCreate;
+}
+
 #endif

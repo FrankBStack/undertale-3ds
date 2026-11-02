@@ -1246,7 +1246,7 @@ void __attribute__((noipa, section(".text.late.flowervramg_cia80"))) __wrap___sy
 #undef CTRPORT_ALLOCATE_CIA80
 #endif
 
-// knightgpu A       knightgpu, DELTARUNE New only): moving a live VRAM block to an address the caller picked, for the
+// knightgpu A (change knightgpu, DELTARUNE New only): moving a live VRAM block to an address the caller picked, for the
 // renderer's bank compaction (ctr_renderer.c's end). The block is given back and taken again at once, not held
 // until the GPU is done: what the GPU still has queued that reads or writes the old place runs before the copy the
 // caller queues next, and the copy before anything queued after it (it is all one GX queue). Placed as
@@ -1375,6 +1375,103 @@ void* CtrMemory_vramMoveTo(void* old, uintptr_t to) {
         }
     }
     CtrMemory_linearLockRelease(&CtrMemory_linearLockStore);
+    return p;
+}
+#endif
+
+// knightgpu FC (DELTARUNE New only): as CtrMemory_vramAllocTop, but at the top of the smallest free gap that holds
+// `size` (best fit), and only if a free gap of `keep` bytes is left after it; else nullptr. Tiles' copies made this way
+// leave room for what a room wants in one piece, not merely in all (ctr_renderer.c's "knightgpu FC"). VRAM is two
+// pools (libctru's banks A and B, split at the middle) and nothing allocated crosses between them, so neither does a
+// gap here; the fillers and the copy are allocated in the target's bank. The same doubts give nullptr.
+#if defined(ENABLE_WAD17) && defined(CTRPORT_KGFC_ON)
+#define KGFC_BLOCKS 160
+void* CtrMemory_vramAllocFit(size_t size, size_t keep) __attribute__((noinline, optimize("Os"), section(".text.knightgpu_fc_late")));
+void* CtrMemory_vramAllocFit(size_t size, size_t keep) {
+    CtrVramBlock used[KGFC_BLOCKS];
+    void* fillers[KGFC_BLOCKS + 1];
+    const uintptr_t lo = (uintptr_t) OS_VRAM_VADDR, hi = lo + (uintptr_t) OS_VRAM_SIZE;
+    const uintptr_t mid = lo + (uintptr_t) OS_VRAM_SIZE / 2;
+    size = (size + 0x7Fu) & ~(size_t) 0x7Fu;
+    lockLinear();
+    releaseHeldFrees();
+    uint32_t n = 0;
+    bool ok = !vramBlocksLost;
+    for (uint32_t i = 0; vramBlockCount > i && ok; i++) {
+        ok = KGFC_BLOCKS > n;
+        if (ok) used[n++] = vramBlocks[i];
+    }
+    for (uint32_t i = 0; heldCount > i && ok; i++) {
+        if (!heldFrees[i].vram) continue;
+        ok = KGFC_BLOCKS > n;
+        if (ok) used[n++] = (CtrVramBlock) { (uintptr_t) heldFrees[i].mem, heldFrees[i].bytes };
+    }
+    for (uint32_t i = 1; ok && n > i; i++) {
+        CtrVramBlock b = used[i];
+        uint32_t j = i;
+        for (; j > 0 && used[j - 1].addr > b.addr; j--) used[j] = used[j - 1];
+        used[j] = b;
+    }
+    // The smallest gap that fits (from the end of block k-1, or lo, to block k, or hi), and the two largest.
+    uintptr_t gapLo = 0, target = 0, best = ~(uintptr_t) 0, big1 = 0, big2 = 0;
+    for (uint32_t k = 0; ok && n >= k; k++) {
+        uintptr_t start = k > 0 ? used[k - 1].addr + used[k - 1].size : lo;
+        uintptr_t end = k < n ? used[k].addr : hi;
+        start = (start + 0x7Fu) & ~(uintptr_t) 0x7Fu;
+        for (uint32_t h = 0; 2 > h; h++) { // each bank's part of the gap (VRAM is two pools: none crosses the middle)
+            uintptr_t s = h == 0 ? start : mid > start ? mid : start, e = h != 0 ? end : mid > end ? end : mid;
+            if (e <= s) continue;
+            uintptr_t g = e - s;
+            if (g > big1) {
+                big2 = big1;
+                big1 = g;
+            } else if (g > big2) {
+                big2 = g;
+            }
+            if (g >= size && best > g) {
+                best = g;
+                gapLo = s;
+                target = (e - size) & ~(uintptr_t) 0x7Fu;
+            }
+        }
+    }
+    // What is left in one piece after it: the largest other gap, or the rest of its own.
+    uintptr_t left = best == big1 ? big2 : big1;
+    if (target - gapLo > left) left = target - gapLo;
+    void* p = nullptr;
+    uint32_t f = 0;
+    ok = ok && target >= gapLo && target != 0 && left >= keep;
+    // Fill every gap below the target in its bank, in address order, and the target gap's bottom (libctru's
+    // vramAllocAt takes that pool's first gap that fits).
+    const uintptr_t bankLo = target >= mid ? mid : lo;
+    const vramAllocPos bank = target >= mid ? VRAM_ALLOC_B : VRAM_ALLOC_A;
+    for (uint32_t k = 0; ok && n >= k; k++) {
+        uintptr_t start = k > 0 ? used[k - 1].addr + used[k - 1].size : lo;
+        start = (start + 0x7Fu) & ~(uintptr_t) 0x7Fu;
+        if (bankLo > start) start = bankLo;
+        if (start >= target) break;
+        uintptr_t end = k < n ? used[k].addr : hi;
+        if (end > target) end = target;
+        if (end <= start) continue;
+        void* q = __real_vramAllocAt((size_t) (end - start), bank);
+        if (q != nullptr) fillers[f++] = q;
+        ok = q == (void*) start;
+    }
+    if (ok) {
+        p = __real_vramAllocAt(size, bank);
+        if (p != (void*) target) {
+            if (p != nullptr) __real_vramFree(p);
+            p = nullptr;
+        }
+    }
+    for (uint32_t i = 0; f > i; i++) __real_vramFree(fillers[i]);
+    if (p != nullptr && VRAM_BLOCKS_MAX > vramBlockCount) {
+        vramBlocks[vramBlockCount++] = (CtrVramBlock) { (uintptr_t) p, (uint32_t) vramGetSize(p) };
+    } else if (p != nullptr) {
+        __real_vramFree(p);
+        p = nullptr;
+    }
+    CtrMemory_linearLockRelease(&linearLock);
     return p;
 }
 #endif

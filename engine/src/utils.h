@@ -274,7 +274,7 @@ static inline void dropMappedRange(uint8_t *base, size_t off, size_t len) {
 
 #endif /* _BS_UTILS_H_ */
 
-//      freewins (diagnostic builds only, build.sh ... freewins; platform/3ds/source/z_freewins.c): timing probes at the
+// change freewins (diagnostic builds only, build.sh ... freewins; platform/3ds/source/z_freewins.c): timing probes at the
 // ends of existing lines in runner.c and ctr_renderer.c. Empty in every other build, so those files compile to the
 // release code with unchanged line numbers.
 #ifndef BS_FREEWINS_PROBES

@@ -99,3 +99,37 @@ ARGBIND_CODE void CtrArgbind_unloadGame(Runner* runner) {
 }
 
 #endif
+
+#if defined(ENABLE_WAD17)
+// A null check alone does not retire an in-flight GSP-thread paint: its cache
+// invalidate IPC can yield while the main thread nulls and frees the cache.
+// Try-lock in the painter, so the GSP event thread never blocks on main. Only
+// unload waits; it releases the lock before any renderer/GPU teardown waits.
+// LightLock_Init in the installed libctru stores 1 (unlocked).
+static LightLock fps75PaintLock __attribute__((section(".data.fpsbox75zm_late"))) = 1;
+#define FPS75_LIFETIME __attribute__((noinline, noipa, optimize("Os"), section(".text.fpsbox75zm_late")))
+bool CtrFpsbox_tryPaint(void);
+void CtrFpsbox_endPaint(void);
+void __real_CtrArgbind_unloadGame(Runner* runner);
+void __wrap_CtrArgbind_unloadGame(Runner* runner);
+
+FPS75_LIFETIME bool CtrFpsbox_tryPaint(void) {
+    if (threadGetCurrent() == nullptr) return true; // only main can unload; do not exclude the swap painter
+    if (LightLock_TryLock(&fps75PaintLock)) return false;
+    if (CtrArgui_state.texCache != nullptr) return true;
+    LightLock_Unlock(&fps75PaintLock);
+    return false;
+}
+
+FPS75_LIFETIME void CtrFpsbox_endPaint(void) {
+    if (threadGetCurrent() != nullptr) LightLock_Unlock(&fps75PaintLock);
+}
+
+FPS75_LIFETIME void __wrap_CtrArgbind_unloadGame(Runner* runner) {
+    LightLock_Lock(&fps75PaintLock);
+    CtrArgui_state.texCache = nullptr;
+    CtrArgui_state.assetIds[2] = CtrArgui_state.assetIds[3] = CtrArgui_state.assetIds[4] = -1;
+    LightLock_Unlock(&fps75PaintLock);
+    __real_CtrArgbind_unloadGame(runner);
+}
+#endif

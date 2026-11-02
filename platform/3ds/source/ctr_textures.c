@@ -1185,7 +1185,7 @@ static bool loadImageRow(void* user, const CtrPageLayout* layout, int32_t ty, co
                 return false;
             }
         }
-        CtrPack_convertTile(tile->tex.data, layout, tx, ty, rows);
+        CtrPack_convertTileRedpix(tile->tex.data, layout, tx, ty, rows);
         C3D_TexFlush(&tile->tex);
         if (load->cache->probeHashes) tile->probeHash = CtrTextures_hashTexels(&tile->tex);
         // Tiles nobody asked for are the first to go.
@@ -3375,7 +3375,7 @@ UTFLOWEY_TEXT static void rlfPasses(CtrTextureCache* cache, uint64_t deadline, u
     rlSwapEnd(cache);
 }
 
-// ===[ The tile reader's game-thread reads use the game thread's open files (utstall, item 8 step 1) ]===
+// ===[ The tile reader's game-thread reads use the game thread's open files (change utstall, item 8 step 1) ]===
 
 // Late code. CtrTileReader_wait's wrap (ctr_tile_reader.c) has the game thread perform queued reads with the files
 // cacheFile keeps open; this --wrap of CtrTileReader_start notes whose files they are: CtrTextures_init starts the
@@ -3463,4 +3463,85 @@ __attribute__((noinline, section(".text.flowstream_late"))) bool CtrTextures_flo
     releaseRead(cache, page);
     return result == LOAD_OK;
 }
+
+// btlentry (z_btlentry.c; UNDERTALE Old): tile t of the page's finished read installed (installTile; the caller checks
+// that the read holds it and has reserved its texture), the read kept for its other tiles; or, with t < 0, the read
+// released (releaseRead, which frees a reserved texture left uninstalled). False if it didn't install: it loads when
+// drawn. installTile and releaseRead by their assembler names (RULES: no call-graph edge to this file's statics).
+__attribute__((noinline, section(".text.btlentry_late"))) bool CtrTextures_btlentryInstall(CtrTextureCache* cache, CtrPage* page, int32_t t) {
+    extern LoadResult btlentryInstallTile(CtrTextureCache*, CtrPage*, CtrTile*, const uint8_t*) __asm__("installTile");
+    extern void btlentryReleaseRead(CtrTextureCache*, CtrPage*) __asm__("releaseRead");
+    if (0 > t) {
+        btlentryReleaseRead(cache, page);
+        return true;
+    }
+    return btlentryInstallTile(cache, page, &page->tiles[t], CtrTileReader_tileData(page->read, t)) == LOAD_OK;
+}
 #endif
+
+#if defined(ENABLE_WAD16) && defined(CTRPORT_TARGET_O3DS)
+// omegaflowey L1 (UNDERTALE Old): once the room load is over (argui's prefetch wrapper calls this in place of the room
+// load), the game thread closes each kept-open cache file that no currently missing wanted tile needs: a page with a
+// packed copy in RAM loads from that, and one without needs its file only for a tile the room wants that isn't
+// resident. This is a check of the moment, not of the file's lifetime: a later heap relief can free the packed copy,
+// and a later animation or room can want a missing tile; that read reopens the file through cacheFile, as after the
+// poll below. They close here, under the room change, not in play: a crowded card (an open elsewhere failing at about
+// 16 files) otherwise has the game thread close all of them at its next poll, 43-46 ms in one frame on the Old models
+// (Omega Flowey's fight, whose whole set is resident or packed from its load on). A file also stays open while its
+// page has a tile in one of the room's plan scenes (own or any battle group's) that isn't resident, or any tile its
+// keep scene lists (sub 0xFFFE, build_plan.py KEEP_SUB; no loader takes it): a battle room changes its scene by Room
+// restart, with no room load, and those tiles would otherwise reopen the file in play (SAVE-sequence restarts: 35 ms
+// an open on Azahar, 8-13 ms on the Old models). In late text; a 12 B pad after it and its log NULs keep the phase.
+#include "roomplan_format.h"
+void CtrRoomload_prefetchRoom(CtrTextureCache* cache, Runner* runner);
+const uint8_t* RoomPlan_utstallPlan(const CtrTextureCache* cache);
+static const char ofClosedLog[] __attribute__((aligned(4), section(".rodata.omegaflowey_in_text"))) =
+    "Files: %u kept-open texture files closed after the room load (%u kept for planned tiles)\n\0\0\0\0"; // NULs after: a phase pad
+__attribute__((noinline, optimize("Os"), section(".text.omegaflowey_late"))) void CtrTextures_roomLoadedOld(CtrTextureCache* cache, Runner* runner) {
+    CtrRoomload_prefetchRoom(cache, runner);
+    const uint8_t* plan = RoomPlan_utstallPlan(cache);
+    uint32_t room = runner != nullptr ? (uint32_t) runner->currentRoomIndex : UINT32_MAX;
+    uint32_t closed = 0, kept = 0;
+    for (int32_t i = 0; CTR_OPEN_FILES > i; i++) {
+        if (cache->files[i] == nullptr || cache->filePages[i] >= cache->pageCount) continue;
+        const CtrPage* page = &cache->pages[cache->filePages[i]];
+        bool needed = page->packed == nullptr && !page->layoutKnown;
+        for (int32_t t = 0; !needed && page->packed == nullptr && page->tilesX * page->tilesY > t; t++) {
+            const CtrTile* tile = &page->tiles[t];
+            needed = tile->wanted && !tile->valid && (!page->formatsKnown || tile->format != CTR_TILE_EMPTY);
+        }
+        // A tile of the page in one of the room's plan scenes (a checked plan: 4-byte aligned, scenes in order) that
+        // isn't resident, or any tile of the page in a keep scene.
+        bool planned = false;
+        size_t at = sizeof(RoomPlanHeader);
+        for (uint32_t s = 0; !needed && !planned && page->packed == nullptr && plan != nullptr && ((const RoomPlanHeader*) plan)->sceneCount > s; s++) {
+            const RoomPlanScene* scene = (const RoomPlanScene*) (plan + at);
+            const uint32_t* tiles = (const uint32_t*) (scene + 1);
+            for (uint32_t k = 0; !planned && scene->room == room && scene->tileCount > k; k++) {
+                int32_t t = ROOM_TILE_INDEX(tiles[k]);
+                planned = ROOM_TILE_PAGE(tiles[k]) == cache->filePages[i] && page->tilesX * page->tilesY > t && (scene->sub == 0xFFFE || !page->tiles[t].valid) &&
+                          (!page->formatsKnown || page->tiles[t].format != CTR_TILE_EMPTY);
+            }
+            at += RoomPlan_sceneSize(scene);
+        }
+        kept += planned;
+        if (needed || planned) continue;
+        CTR_TRACE_CLOSE(cache->files[i], CTR_SITE_GAME, cache->filePages[i]);
+        cache->files[i] = nullptr;
+        closed++;
+    }
+    if (closed + kept > 0) logInfo(ofClosedLog, (unsigned) closed, (unsigned) kept);
+} __asm__(".pushsection .text.omegaflowey_late, 1\n.space 12\n.popsection"); // phase pad (c26rev R108): what follows keeps its 32 B phase
+#endif
+// ===[ change racefix (2026-11-01): a damaged page's deletion reaches the background worker ]===
+
+// distrustPack deletes the damaged page's file and the complete marker; this --wrap tells the cache's worker first
+// (ctr_texture_pack.c's end), so it can't write the marker again after the deletion. readerGameCache is the game's
+// one texture cache (CtrTextures_init); its worker is null once stopped.
+void CtrPackWorker_racefixPageRemoved(CtrPackWorker* worker);
+void __real_CtrPack_removeFile(uint32_t pageId);
+void __wrap_CtrPack_removeFile(uint32_t pageId) __attribute__((noinline, section(".text.racefix_late")));
+void __wrap_CtrPack_removeFile(uint32_t pageId) {
+    CtrPackWorker_racefixPageRemoved(readerGameCache != nullptr ? readerGameCache->worker : nullptr);
+    __real_CtrPack_removeFile(pageId);
+}

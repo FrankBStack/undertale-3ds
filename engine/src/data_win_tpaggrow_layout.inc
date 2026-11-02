@@ -41,6 +41,13 @@ __asm__(
     ".popsection\n"
     ".pushsection .text.parseSPRT,\"ax\",%progbits\n.balign 4\n"
     ".popsection\n"
+#if defined(ENABLE_WAD16)
+    // hitbox: UNDERTALE's parseSPRT calls DataWin_sep0Masks (collision_gm14.c) for a non-precise sprite's mask where
+    // it skipped the bytes inline, 28 B shorter; this retained slot keeps parseGEN8 and everything after in place.
+    ".pushsection .text.hitbox_slot_parseSPRT,\"axR\",%progbits\n"
+    ".space 28\n"
+    ".popsection\n"
+#endif
     ".pushsection .text.parseGEN8,\"ax\",%progbits\n.balign 4\n"
     ".popsection\n"
     ".pushsection .text.parseAGRP,\"ax\",%progbits\n.balign 4\n"

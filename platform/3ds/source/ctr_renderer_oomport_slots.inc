@@ -2,6 +2,15 @@
 // Subsection 1 follows the complete body and literal pool.
 // The verifier must prove every tail is unreachable before --allow.
 #if defined(__3DS__) && defined(NDEBUG) && !defined(CTRPORT_RENDER_TIMING) && !defined(CTRPORT_DEBUG_RECORD_FAIL_AFTER)
+// DELTARUNE New: drawTowerStrips writes the strips for the shared texture itself (cut 7d, change flowerhw), a body longer
+// than main's 8816 B slot; the slot grows by whole 32 B lines, so every function after it keeps its cache-line phase.
+#if defined(ENABLE_WAD17) && defined(CTRPORT_TARGET_N3DS) && defined(CTRPORT_FLOWERHW_TPROF)
+#define OOMPORT_DRAWTOWERSTRIPS_SLOT "11440" // towerprof only: its phase and emit timers (test word)
+#elif defined(ENABLE_WAD17) && defined(CTRPORT_TARGET_N3DS)
+#define OOMPORT_DRAWTOWERSTRIPS_SLOT "9392" // 8816 + 576: body 9,352 B (main 8,784 + 568)
+#else
+#define OOMPORT_DRAWTOWERSTRIPS_SLOT "8816"
+#endif
 __attribute__((used, noipa, section(".text.late.oomport")))
 static void oomport_ctr_renderer_slots(void) {
     __asm__(
@@ -64,7 +73,7 @@ static void oomport_ctr_renderer_slots(void) {
         ".popsection\n"
         ".pushsection .text.drawTowerStrips, 1\n"
         "oomport_tail_drawTowerStrips:\n"
-        ".org 8816\n"
+        ".org " OOMPORT_DRAWTOWERSTRIPS_SLOT "\n"
         ".popsection\n"
         ".pushsection .text.initSurfaceTexture, 1\n"
         "oomport_tail_initSurfaceTexture:\n"

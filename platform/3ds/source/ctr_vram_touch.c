@@ -18,6 +18,7 @@
 #include <stdint.h>
 
 #include "ctr_textures.h"
+#include "ctr_wrap_chain.h"
 
 // A section per function, so that --gc-sections drops the wrappers a build never calls (UNDERTALE has no
 // vramMemAlign caller: keeping its wrapper would link libctru's vramMemAlign into .text and move what follows).
@@ -50,25 +51,25 @@ void* __real_CtrMemory_vramAllocAtOnce(size_t size, vramAllocPos pos);
 void* __real_CtrMemory_vramMemAlignOnce(size_t size, size_t alignment);
 void* __real_CtrMemory_vramMemAlignAtOnce(size_t size, size_t alignment, vramAllocPos pos);
 bool __real_CtrTextures_addMirror(CtrTextureCache* cache, CtrTile* tile, void* vram);
-void* __wrap_CtrMemory_vramAllocOnce(size_t size) VRAM_TOUCH_LATE(alloc);
-void* __wrap_CtrMemory_vramAllocAtOnce(size_t size, vramAllocPos pos) VRAM_TOUCH_LATE(allocAt);
-void* __wrap_CtrMemory_vramMemAlignOnce(size_t size, size_t alignment) VRAM_TOUCH_LATE(memAlign);
-void* __wrap_CtrMemory_vramMemAlignAtOnce(size_t size, size_t alignment, vramAllocPos pos) VRAM_TOUCH_LATE(memAlignAt);
+void* CTR_VRAMALLOCONCE_TOUCH(size_t size) VRAM_TOUCH_LATE(alloc);
+void* CTR_VRAMALLOCATONCE_TOUCH(size_t size, vramAllocPos pos) VRAM_TOUCH_LATE(allocAt);
+void* CTR_VRAMMEMALIGNONCE_TOUCH(size_t size, size_t alignment) VRAM_TOUCH_LATE(memAlign);
+void* CTR_VRAMMEMALIGNATONCE_TOUCH(size_t size, size_t alignment, vramAllocPos pos) VRAM_TOUCH_LATE(memAlignAt);
 bool __wrap_CtrTextures_addMirror(CtrTextureCache* cache, CtrTile* tile, void* vram) VRAM_TOUCH_LATE(mirror);
 
-void* __wrap_CtrMemory_vramAllocOnce(size_t size) {
+void* CTR_VRAMALLOCONCE_TOUCH(size_t size) {
     return vramTouch(__real_CtrMemory_vramAllocOnce(size), size);
 }
 
-void* __wrap_CtrMemory_vramAllocAtOnce(size_t size, vramAllocPos pos) {
+void* CTR_VRAMALLOCATONCE_TOUCH(size_t size, vramAllocPos pos) {
     return vramTouch(__real_CtrMemory_vramAllocAtOnce(size, pos), size);
 }
 
-void* __wrap_CtrMemory_vramMemAlignOnce(size_t size, size_t alignment) {
+void* CTR_VRAMMEMALIGNONCE_TOUCH(size_t size, size_t alignment) {
     return vramTouch(__real_CtrMemory_vramMemAlignOnce(size, alignment), size);
 }
 
-void* __wrap_CtrMemory_vramMemAlignAtOnce(size_t size, size_t alignment, vramAllocPos pos) {
+void* CTR_VRAMMEMALIGNATONCE_TOUCH(size_t size, size_t alignment, vramAllocPos pos) {
     return vramTouch(__real_CtrMemory_vramMemAlignAtOnce(size, alignment, pos), size);
 }
 
@@ -84,7 +85,7 @@ bool __wrap_CtrTextures_addMirror(CtrTextureCache* cache, CtrTile* tile, void* v
 __asm__(".globl CtrVramTouch_emulator\n.type CtrVramTouch_emulator, %function\n.set CtrVramTouch_emulator, vramTouchOn\n");
 
 #ifdef CTRPORT_KNIGHTGPU_COMPACT_ON
-// Knight GPU A       knightgpu): a surface moved within VRAM (ctr_renderer.c's kgcRun) and a spilled surface moved
+// Knight GPU A (change knightgpu): a surface moved within VRAM (ctr_renderer.c's kgcRun) and a spilled surface moved
 // into a gap the moves made (kgcPromote) take VRAM through CtrMemory_vramMoveTo and CtrMemory_vramAllocNow, which
 // libctru's allocator serves directly, so they are touched through this alias of vramTouch (code and statics as they
 // were). Without it, a later GX copy out of a moved surface returned dead surfaces' pixels in Azahar's full DR44.

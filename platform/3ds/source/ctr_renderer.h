@@ -312,7 +312,7 @@ void CtrSurfaceCensus_install(Renderer* renderer);
 #define UTK_DRAW_SPRITE ctrDrawSprite
 #endif
 
-// Lazy blend and fog state       knightgpu O9; end of ctr_renderer.c). Which builds get it is one CMake condition
+// Lazy blend and fog state (change knightgpu O9; end of ctr_renderer.c). Which builds get it is one CMake condition
 // (CTRPORT_KNIGHTGPU_LAZY's): DELTARUNE New now. ctrVtable's four state
 // setters become kglL_ ones (KGL_SET) that may hold the change while the open batch stays open, and every other entry
 // that can reach the renderer's state is reached through kglC_ check stubs (KGL_CHK) that first put held changes in,

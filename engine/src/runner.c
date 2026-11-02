@@ -224,7 +224,7 @@ static void restoreVMInstanceContext(VMContext* vm, Instance* savedInstance) {
     vm->currentInstance = savedInstance;
 }
 
-static void executeCode(Runner* runner, Instance* instance, int32_t codeId) {
+static void executeCode(Runner* runner, Instance* instance, int32_t codeId) { // L1: see the file end
     // GameMaker does use codeIds less than 0, we'll just pretend we didn't hear them...
     if (0 > codeId) return;
 
@@ -246,11 +246,11 @@ static void executeCode(Runner* runner, Instance* instance, int32_t codeId) {
     int32_t savedCodeIndex = vm->currentCodeIndex;
     int32_t savedStackTop = vm->stack.top;
 
-    // Save stack values (VM_executeCode resets stack.top to 0, which would let
-    // the nested execution overwrite the caller's stack slot values)
-    RValue* savedStackValues = nullptr;
+    // Save stack values (VM_executeCode resets stack.top to 0, which would let the nested execution overwrite the
+    // caller's stack slot values): up to 4 in this frame, more on the heap (cpugen L1; the stack holds VM_STACK_SIZE)
+    RValue savedStackBuf[4], * savedStackValues = savedStackBuf; if (savedStackTop > VM_STACK_SIZE) __builtin_unreachable();
     if (savedStackTop > 0) {
-        savedStackValues = (RValue *)safeMalloc((uint32_t) savedStackTop * sizeof(RValue));
+        if (__builtin_expect(savedStackTop > 4, 0)) savedStackValues = (RValue *)safeMalloc((uint32_t) savedStackTop * sizeof(RValue));
         memcpy(savedStackValues, vm->stack.slots, (uint32_t) savedStackTop * sizeof(RValue));
     }
 
@@ -278,7 +278,7 @@ static void executeCode(Runner* runner, Instance* instance, int32_t codeId) {
     // Restore stack values
     if (savedStackTop > 0) {
         memcpy(vm->stack.slots, savedStackValues, (uint32_t) savedStackTop * sizeof(RValue));
-        free(savedStackValues);
+        if (__builtin_expect(savedStackTop > 4, 0)) free(savedStackValues);
     }
 }
 
@@ -4633,14 +4633,14 @@ static void persistRoomState(Runner* runner, int32_t roomIndex) {
 
 void Runner_handlePendingRoomChange(Runner* runner) {
     // Handle game restart
-    if (runner->pendingRoom == ROOM_RESTARTGAME) {
-        // See you soon!
+    if (runner->pendingRoom <= ROOM_RESTARTGAME) { // game_restart (RESTART_EXACT) or a bench's fresh start
+        { void Restartexact_end(Runner* runner, int32_t pending); Restartexact_end(runner, runner->pendingRoom); } // (end)
         // Free the currently-loaded non-eager room before reset so lazyLoadRooms stays steady-state.
         if (runner->dataWin->lazyLoadRooms && runner->currentRoom != nullptr && !runner->currentRoom->eagerlyLoaded) {
             DataWin_freeRoomPayload(runner->currentRoom);
         }
-        Runner_reset(runner);
-        Runner_initFirstRoom(runner);
+        { void Restartexact_restart(Runner* runner); Restartexact_restart(runner); } // the reset, the first room
+        // (game_restart keeps what the PC runner keeps: this file's end)
         return;
     }
 
@@ -5025,6 +5025,15 @@ static void stepFrame(Runner* runner) {
     RUNNER_PHASE(runner, "<runner: begin step>");
     Runner_executeEventForAll(runner, EVENT_STEP, STEP_BEGIN);
     RUNNER_PHASE(runner, "<runner: alarms>");
+    // Alarm membership is frozen at the phase's entry (change alarmbirth; maintainer 2026-11-01: a fix, always on). An
+    // instance created while this phase runs (IDs come from the monotonic nextInstanceId) keeps the values Create and
+    // its creator assigned and counts down from the next step's alarm phase on, as the PC runners do
+    // (docs/research/game-internals.md, "Alarm phase"). The per-bucket snapshot below alone admitted a newborn whose
+    // slot or object bucket was still ahead, one frame early. volatile keeps the cutoff in a stack slot and
+    // __builtin_expect keeps the skip off the fall-through path: +16 B of stepFrame (UNDERTALE) where a register-held
+    // cutoff cost +72 B through reallocation across the loop nest.
+    volatile uint32_t alarmBirthCutoff = runner->nextInstanceId;
+#line 4982
 
     // Process alarms. Outer loop is over alarm slots (matching the native runner's HandleAlarm), and for each slot we walk only the objects in the event table's bySlot range and only those objects' exact instance buckets. Idle instances are further skipped via activeAlarmMask.
     repeat(GML_ALARM_COUNT, alarmIdx) {
@@ -5045,7 +5054,7 @@ static void stepFrame(Runner* runner) {
             int32_t codeId = ResolvedEventTable_lookup(table, objIdx, alarmSlot, &ownerObjectIndex);
             if (0 > codeId) continue;
 
-            // Snapshot the bucket before dispatch: alarm code can call instance_change/instance_destroy/instance_create which mutate the live bucket. Iterating the snapshot also ensures newly-created instances do not fire alarms in this same phase.
+            // Snapshot the bucket before dispatch: alarm code can call instance_change/instance_destroy/instance_create which mutate the live bucket. Instances created during this phase are skipped by the phase-entry cutoff above, not by the snapshot.
             int32_t snapshotBase = (int32_t) arrlen(runner->instanceSnapshots);
             arrsetlen(runner->instanceSnapshots, snapshotBase + bucketCount);
             memcpy(&runner->instanceSnapshots[snapshotBase], bucket, (size_t) bucketCount * sizeof(Instance*));
@@ -5054,7 +5063,15 @@ static void stepFrame(Runner* runner) {
                 Instance* inst = runner->instanceSnapshots[snapshotBase + i];
                 if (!inst->active) continue;
                 uint16_t bit = (uint16_t) (1u << alarmIdx);
+#if IS_WAD17_OR_HIGHER_ENABLED
+                // DELTARUNE: the birth test joins the active-bit test in one branch. GCC lays the loop out 20 B shorter
+                // than without the test; stepFrameTail below keeps the 20 B, so no later symbol moves (Old hot pins).
+                if (__builtin_expect(((inst->activeAlarmMask & bit) == 0) | (inst->instanceId >= alarmBirthCutoff), 1)) continue;
+#else
                 if ((inst->activeAlarmMask & bit) == 0) continue;
+                if (__builtin_expect(inst->instanceId >= alarmBirthCutoff, 0)) continue;
+#endif
+#line 5012
 
 #ifdef ENABLE_VM_TRACING
                 GameObject* object = &runner->dataWin->objt.objects[inst->objectIndex];
@@ -6695,7 +6712,7 @@ __attribute__((naked, used, section(".text.late.utkill"))) static void utkDskipT
 // (tools/analysis/check_utdust_slots.py). UNDERTALE only (Policy E); the same on Old and New (GCC 16.1.0 Release).
 #define UTDUST_CLEANUP_TAIL ".space 80"
 #if defined(UTSW_ON)
-#define UTDUST_STEP_TAIL ".space 96" // UT-040: another 40 B retained after the nonnegative alarm loop
+#define UTDUST_STEP_TAIL ".space 80" // UT-040's 96 B, less the 16 B of alarmbirth's phase-entry cutoff (Old and New)
 #else
 #define UTDUST_STEP_TAIL ".space 68" // 172 B less stepFrame's Utdust_insideRoom call (utkill)
 #endif
@@ -6706,6 +6723,15 @@ __attribute__((naked, used, section(".text.stepFrame"))) static void stepFrameTa
     __asm__(UTDUST_STEP_TAIL);
 }
 #endif
+#if defined(__3DS__) && defined(NDEBUG) && IS_WAD17_OR_HIGHER_ENABLED
+// alarmbirth, DELTARUNE retained slot: stepFrame is 20 B shorter with the joined alarm test (GCC 16.1.0 Release, Old
+// and New). These zero bytes, in stepFrame's own input section and defined after it, keep every later symbol at the
+// stage address. Never executed or referenced (tools/analysis/check_alarmbirth_layout.py).
+__attribute__((naked, used, section(".text.stepFrame"))) static void stepFrameTail(void) {
+    __asm__(".space 20");
+}
+#endif
+#line 6654
 #if defined(UTSW_ON)
 // The monster dust: utkDrawRoom's list rebuild, then the dust swarm's entries merged in (z_utkill_swarm.c).
 static void utswRebuildIfDirty(Runner* runner) {
@@ -7384,3 +7410,111 @@ static DPRANK_TAIL void dprankCount(int kind, int32_t n) {
     if (kind != 0) scanned += (uint32_t) n;
 }
 #endif
+
+// cpugen L1 (lead GO 2026-11-01): executeCode keeps the caller's VM stack values in a 4-value buffer in its own frame
+// instead of safeMalloc + free whenever a nested event runs from code with a non-empty VM stack (every instance_create
+// from code: UNDERTALE's Omega Flowey ending runs 30 such Creates a frame, always with 1 value). More than 4 values still
+// go to the heap. Exact: the same bytes are saved and restored in the same order; only where they wait differs. The
+// body shrank (UNDERTALE 460 -> 456 B, DELTARUNE 492 -> 488 B, nm -S): the "top <= VM_STACK_SIZE" hint (the stack is an
+// array of that many slots, so a larger top has already written past it) lets GCC drop safeMalloc's size-0 test, and the
+// heap path is marked unlikely. Not -Os: there GCC aligns string constants to 1 byte, so the malloc failure message got
+// a second copy in a new .rodata.str1.1 and every later .rodata constant moved (+40 B). It keeps its slot, so nothing
+// after it moves: the padding is subsection 1 of its own section, after its code and literal pool, outside its symbol
+// size (as Collision_computeBBox's above; proven by tools/analysis/check_cpugen_slot.py --func executeCode).
+// The frame grows by the 64 B buffer: each nested event level on the game thread's 32 KiB stack costs 64 B more.
+#if defined(CTRPORT_LAYERFIX_RELEASE_LAYOUT) && defined(__3DS__) && defined(__GNUC__)
+#if defined(ENABLE_WAD17)
+__asm__(".pushsection .text.executeCode,\"ax\",%progbits\n.subsection 1\n.org 492, 0\n.popsection\n");
+#else
+__asm__(".pushsection .text.executeCode,\"ax\",%progbits\n.subsection 1\n.org 460, 0\n.popsection\n");
+#endif
+#endif
+
+// restartexact (change restartexact, 2026-11-01; both games): game_restart as UNDERTALE 1.08's and DELTARUNE's own
+// runners do it, proved on them with the pcref harness (our restartexact notes have the objects and
+// scripts seen). The builtin asks for RESTART_EXACT (vm_builtins.h's end). The bench's restart and its return to the
+// game ask for the older code and get the fresh start they always had (Runner_reset, then Runner_initFirstRoom: a boot
+// without reading data.win again), so every bench scene still starts from the same state.
+//
+// At game_restart the PC runner, at the end of the frame as for a room change:
+// - fires Room End for every instance, then CleanUp (a Room End sprite_delete, a Room End surface_free and a CleanUp
+//   surface_free all ran), but not Destroy (Destroy events' random() calls and global writes did not happen) or
+//   Game End;
+// - destroys every instance, persistent ones too (a persistent controller is created again, with its room id), and
+//   stops all sound;
+// - keeps every global variable and does not run DELTARUNE's global init scripts again; keeps ds_* structures (their
+//   ids too), buffers, surfaces and added sprites (this runner never freed those three), the game speed, health and
+//   the instance id counter (new instances continue from it); score goes to 0, lives to -1;
+// - then builds the first room and fires Game Start and Room Start, as at boot. The random seed is not set again.
+// So UNDERTALE's time controller finds its text tables in globals and skips building them again (~300 ms of the black
+// screen after Omega Flowey), and DELTARUNE keeps its d3d camera, chroma-key surfaces and draw colour from boot.
+// Struct instances stay (globals and ds_* hold them), and script statics with them. gameStartTime is kept:
+// current_time and get_timer keep counting. Everything else Runner_reset drops is held by instances on the PC
+// (particles, emitters, mp_grids, call_later) and goes with them.
+#include "vm_builtins.h" // RESTART_EXACT
+#if defined(__3DS__) && defined(__GNUC__)
+#define RESTARTEXACT_LATE __attribute__((noinline, section(".text.late.restartexact")))
+#else
+#define RESTARTEXACT_LATE NOINLINE
+#endif
+
+void Restartexact_end(Runner* runner, int32_t pending);
+void Restartexact_restart(Runner* runner);
+typedef char restartexactPoolsAdjacent[offsetof(Runner, dsGridPool) - offsetof(Runner, dsMapPool) == 5 * sizeof(void*)
+                                      && offsetof(Runner, dsListPool) - offsetof(Runner, dsMapPool) == sizeof(void*) ? 1 : -1];
+
+// Before the room's payload goes: the events may read the room, as at a room change. pending is the restart's code.
+RESTARTEXACT_LATE void Restartexact_end(Runner* runner, int32_t pending) {
+    if (pending != RESTART_EXACT) return;
+    runner->pendingRoom = -1; // the dispatch gate lets events through only with no change pending
+    Runner_executeEventForAll(runner, EVENT_OTHER, OTHER_ROOM_END);
+    for (int32_t i = 0; (int32_t) arrlen(runner->instances) > i; i++) Runner_executeCleanupEvent(runner, runner->instances[i]);
+    runner->pendingRoom = RESTART_EXACT; // a room change asked for in those events loses to the restart
+}
+
+RESTARTEXACT_LATE void Restartexact_restart(Runner* runner) {
+    if (runner->pendingRoom != RESTART_EXACT) {
+        Runner_reset(runner);
+        Runner_initFirstRoom(runner);
+        return;
+    }
+    // Runner_reset frees what it finds: what the PC keeps is taken out first and put back after.
+    VMContext* vm = runner->vmContext;
+    Instance* globals = vm->globalScopeInstance;
+    bool* staticInitialized = vm->staticInitialized;
+    Instance** staticStructs = vm->staticStructs;
+    vm->globalScopeInstance = nullptr;
+    vm->staticInitialized = nullptr;
+    vm->staticStructs = nullptr;
+    // The six ds_* pools, dsMapPool to dsGridPool, are adjacent pointers (runner.h): one copy keeps them all.
+    void* pools[6];
+    memcpy(pools, &runner->dsMapPool, sizeof(pools));
+    memset(&runner->dsMapPool, 0, sizeof(pools));
+    Instance** structs = runner->structInstances;
+    runner->structInstances = nullptr;
+    uint32_t nextInstanceId = runner->nextInstanceId;
+    GMLReal gameSpeed = runner->gameSpeedOverride;
+    GMLReal health = runner->health;
+
+    Runner_reset(runner);
+
+    // VM_reset made a new global scope (and, from WAD 17, new statics tables): the kept ones replace them.
+    Instance_free(vm->globalScopeInstance);
+    free(vm->staticInitialized);
+    free(vm->staticStructs);
+    vm->globalScopeInstance = globals;
+    vm->staticInitialized = staticInitialized;
+    vm->staticStructs = staticStructs;
+    memcpy(&runner->dsMapPool, pools, sizeof(pools));
+    runner->structInstances = structs;
+    for (int32_t i = 0; (int32_t) arrlen(structs) > i; i++) hmput(runner->instancesById, structs[i]->instanceId, structs[i]);
+    runner->nextInstanceId = nextInstanceId;
+    runner->gameSpeedOverride = gameSpeed;
+    runner->health = health;
+
+    // Runner_initFirstRoom without the global and extension init scripts, and with the game's start time kept.
+    initRoom(runner, runner->dataWin->gen8.roomOrder[0]);
+    Runner_executeEventForAll(runner, EVENT_OTHER, OTHER_GAME_START);
+    runner->gameStartFired = true;
+    Runner_executeEventForAll(runner, EVENT_OTHER, OTHER_ROOM_START);
+}

@@ -169,6 +169,14 @@ static const char* const arguiAssetNames[5] ARGUI_RO = {
 static const uint8_t arguiMorton[8] ARGUI_RO = { 0, 1, 4, 5, 16, 17, 20, 21 };
 
 void CtrRoomload_prefetchRoom(CtrTextureCache* cache, Runner* runner); // z_roomload.c; it calls __real_
+#if defined(ENABLE_WAD16) && defined(CTRPORT_TARGET_O3DS)
+// omegaflowey L1: the room load, then the kept-open texture files it left with nothing to read close (ctr_textures.c).
+void CtrTextures_roomLoadedOld(CtrTextureCache* cache, Runner* runner);
+#define ARGUI_ROOM_LOAD CtrTextures_roomLoadedOld
+#else
+#define ARGUI_ROOM_LOAD CtrRoomload_prefetchRoom
+#endif
+#line 172
 void CtrOptmenu_prepareGlyphs(void);
 void __wrap_CtrTextures_prefetchRoom(CtrTextureCache* cache, Runner* runner);
 
@@ -179,7 +187,7 @@ ARGUI_CODE void __wrap_CtrTextures_prefetchRoom(CtrTextureCache* cache, Runner* 
         g.assetIds[i] = (int16_t) shget(runner->assetsByName, arguiAssetNames[i]);
     }
     CtrOptmenu_prepareGlyphs(); // ctr_optmenu.c: the menu's glyphs, from the tiles resident now
-    CtrRoomload_prefetchRoom(cache, runner);
+    ARGUI_ROOM_LOAD(cache, runner);
 }
 
 ARGUI_STATIC bool arguiSampleGlyph(uint8_t ch, int32_t gx, int32_t gy) {
@@ -510,8 +518,8 @@ ARGUI_CODE CtrMenuAction CtrArgui_menuUpdate(CtrMenu* menu, u32 down) {
 
 ARGUI_STR(strHint, "SELECT: Options"); void CtrHint_draw(int32_t x, int32_t y, const char* s, uint32_t col); // hintpos: ctr_hintpos.c
 
-// Both screens keep the live counter while Options is open. The menu restores its own pixels under the digits
-// before this transparent paint; the game screen gets a fresh transfer as usual. Measurement is sampled once per
+// Both screens keep the live counter while Options is open. Digits and their backdrop are composed in one pass;
+// the game screen gets a fresh transfer as usual. Measurement is sampled once per
 // main-thread iteration by the consoles' flush wrapper below, including paused iterations.
 ARGUI_NOINLINE void arguiPaintScreen(void* fb, bool rgb565) {
     bool open = g.menuIsOpen;
@@ -527,13 +535,20 @@ ARGUI_NOINLINE void arguiPaintScreen(void* fb, bool rgb565) {
     if (!draw) return;
     if (fb == nullptr && (fb = CtrPacer_backFramebuffer(screen, GFX_LEFT)) == nullptr) return;
 
+#if defined(ENABLE_WAD17)
+    // The GSP callback must never wait for a paint on the main thread. Unload
+    // waits for an already-started paint, then withdraws the cache under this lock.
+    bool CtrFpsbox_tryPaint(void);
+    void CtrFpsbox_endPaint(void);
+    if (!CtrFpsbox_tryPaint()) return;
+#endif
     uint32_t xMul = (!rgb565 && gfxIsWide()) ? 2u : 1u;
     g.rgb565 = rgb565;
     g.adv = 5;
     // The main-thread flush below samples the pacer, including paused frames.
 #line 539
-    if (!rgb565) GSPGPU_InvalidateDataCache(fb, 320u * 240u * 2u);
-    else if (otherFree && !open) memset(fb, 0, 320u * 240u * 2u);
+    GSPGPU_InvalidateDataCache(fb, 320u * 240u * 2u); // dialogue can transfer into RGB565 too
+    // The other framebuffer can hold dialogue; never erase it for a counter.
     g.fb = fb;
     g.menuIsOpen = false; // the counter's own font and cells, not the menu's
     if (draw & 1u) {
@@ -550,15 +565,22 @@ ARGUI_NOINLINE void arguiPaintScreen(void* fb, bool rgb565) {
     }
     g.menuIsOpen = open;
     GSPGPU_FlushDataCache(fb, 320u * 240u * 2u);
+#if defined(ENABLE_WAD17)
+    CtrFpsbox_endPaint();
+#endif
 }
 
 void CtrScreens_pacerSwap(gfxScreen_t screen, bool hasStereo);
 void CtrArgui_pacerSwap(gfxScreen_t screen, bool hasStereo);
 
-ARGUI_CODE void CtrArgui_pacerSwap(gfxScreen_t screen, bool hasStereo) {
-    arguiPaintScreen(nullptr, false);
-    CtrScreens_pacerSwap(screen, hasStereo);
+ARGUI_CODE __attribute__((naked)) void CtrArgui_pacerSwap(gfxScreen_t screen __attribute__((unused)), bool hasStereo __attribute__((unused))) {
+    // Same 40 B slot, including a dead word. Paint the screen whose transfer
+    // just completed, before its flip; dialogue is RGB565 on the other one.
+    __asm__ volatile("push {r0,r1,r4,lr}\nldr r1,1f\nldrb r1,[r1]\neor r1,r0,r1\n"
+                     "mov r0,#0\nbl arguiPaintScreen\npop {r0,r1,r4,lr}\nb CtrScreens_pacerSwap\n"
+                     "1: .word CtrScreens_game\n.space 4");
 }
+#line 566
 
 void __real_C3D_SyncDisplayTransfer(u32* inadr, u32 indim, u32* outadr, u32 outdim, u32 flags);
 void __wrap_C3D_SyncDisplayTransfer(u32* inadr, u32 indim, u32* outadr, u32 outdim, u32 flags);

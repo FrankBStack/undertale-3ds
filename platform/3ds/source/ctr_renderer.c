@@ -8221,12 +8221,22 @@ static bool tryVramTarget(C3D_Tex* tex, C3D_RenderTarget** target, int32_t texW,
 }
 
 static bool yieldMirrors(CtrRenderer* r, size_t need);
+#if defined(ENABLE_WAD17) && defined(CTRPORT_KGSY_ON)
+// knightgpu SY (ctr_renderer.c's end): copies are given up only when that makes room. Called by a name only the
+// assembler binds to kgYieldMirrors (".set" there): to GCC it is an outside function, so its order of this file's
+// functions (knightgpu A's late ones) stays as without SY.
+bool kgsyYieldCall(CtrRenderer* r, size_t need);
+#define KG_YIELD_MIRRORS kgsyYieldCall
+#else
+#define KG_YIELD_MIRRORS yieldMirrors
+#endif
+#line 7928
 
 // A VRAM texture with a render target over its stored rows, or false if
 // VRAM is short, even without tiles' copies in it (see "Tiles in VRAM").
 static bool initVramTarget(CtrRenderer* r, C3D_Tex* tex, C3D_RenderTarget** target, int32_t texW, int32_t texH, int32_t rows) {
     if (tryVramTarget(tex, target, texW, texH, rows)) return true;
-    while (yieldMirrors(r, (size_t) texW * (size_t) rows * 4u)) {
+    while (KG_YIELD_MIRRORS(r, (size_t) texW * (size_t) rows * 4u)) {
         if (tryVramTarget(tex, target, texW, texH, rows)) return true;
     }
     return false;
@@ -9914,11 +9924,12 @@ static void applyBottomBacklight(CtrRenderer* r) {
 // A branch over padding that never runs, then the tail call, keep main's start and size (the padding goes in the
 // compaction round). Main's body is there too, as screensConfigure with the game on top.
 static void screensConfigureKeepBottom(CtrRenderer* r);
+static void fps75Configure(CtrRenderer* r);
 #line 9789
 WAD17_ONLY(static void screensConfigure(CtrRenderer* r);)
 static void __attribute__((noinline)) configureScreens(CtrRenderer* r) {
     __asm__ volatile("b 1f\n\t.space 700\n1:");
-    screensConfigureKeepBottom(r);
+    fps75Configure(r);
 }
 
 // ===[ The game on either screen (screens-port) ]===
@@ -13654,6 +13665,24 @@ static void drawWindowed(CtrRenderer* r, int32_t surfaceId, float sx0, float sy0
 // pixel centre, against rounding where the GPU interpolates it.
 #define TOWER_TEXEL_MARGIN 0.05f
 
+#if defined(ENABLE_WAD17) && defined(CTRPORT_TARGET_N3DS)
+/* Cut 7d (flowerhw, DELTARUNE New): the tower strips are written as the shared texture draws them.
+ *
+ * Fhw_emitBegin (vine_new_retain.inc) says, before the strips are written, whether their batch will be drawn from the
+ * shared texture (cut 3: vdBatchOk's state, every strip's columns within its two windows). If so, towerEmit and
+ * towerEmitCovered write each strip's u on the shared texture's columns (vdRemap's arithmetic, once per strip and
+ * segment instead of a second pass over the batch), and cut a flat strip's quad to the scissor's rows, 2 rows wider
+ * either side (Fhw_clipSpan: cut 7's rule, once per segment or coverage run instead of per quad). A batch about to be
+ * split by the vertex ring's wrap is drawn first, as the strips' own flush draws it (Fhw_emitRoom). */
+typedef struct {
+    bool on;
+    const float* u;     // each strip's u0 and u1 on the shared texture
+    float top, bottom;  // the clip's rows in world y (+-1e30 for none)
+    float ky, ay, y0, s0, h;
+} FhwEmit;
+#define CTRPORT_FHW_EMIT 1
+#endif
+
 typedef struct {
     CtrRenderer* r;
     CtrSurface* s;
@@ -13665,6 +13694,9 @@ typedef struct {
         float row0, row1; // surface rows
     } seg[TOWER_MAX_SEGMENTS];
     int32_t segCount;
+#ifdef CTRPORT_FHW_EMIT
+    FhwEmit fhw;
+#endif
 } TowerDraw;
 
 // Surface columns [srcA, srcB) onto world x [xa, xb) (whole target pixel
@@ -13673,6 +13705,48 @@ typedef struct {
     float xa, xb, srcA, srcB;
     CtrColor ca, cb;
 } TowerStrip;
+
+#ifdef CTRPORT_FHW_EMIT
+bool Fhw_emitBegin(CtrRenderer* r, FhwEmit* e, const TowerDraw* d, const TowerStrip* strips, int32_t n);
+bool Fhw_clipSpan(const FhwEmit* e, float* span);
+void Fhw_emitRoom(CtrRenderer* r);
+#endif
+#if defined(CTRPORT_FLOWERHW_TPROF) && defined(CTRPORT_FHW_EMIT)
+// Test word towerprof only: drawTowerStrips' time by phase (ticks), then its columns and strips (vine_new_retain.inc
+// prints them per frame).
+extern uint64_t Fhw_tpPh[24];
+#define FHW_PH_START uint64_t fhwPh = svcGetSystemTick()
+#define FHW_PH(k)                              \
+    do {                                       \
+        uint64_t t_ = svcGetSystemTick();      \
+        Fhw_tpPh[k] += t_ - fhwPh;             \
+        fhwPh = t_;                            \
+    } while (0)
+#define FHW_PH_COUNT(k, n) (Fhw_tpPh[k] += (uint64_t) (n))
+// A call's ticks into k, and a pair of tick reads with nothing between into 13 (what the timer adds).
+#define FHW_TIMED(k, call)                                 \
+    do {                                                   \
+        uint64_t a_ = svcGetSystemTick();                  \
+        call;                                              \
+        uint64_t b_ = svcGetSystemTick();                  \
+        Fhw_tpPh[k] += b_ - a_;                            \
+        Fhw_tpPh[13] += svcGetSystemTick() - b_;           \
+    } while (0)
+#define FHW_T0 uint64_t fhwT0 = svcGetSystemTick()
+#define FHW_T1(k)                                          \
+    do {                                                   \
+        uint64_t b_ = svcGetSystemTick();                  \
+        Fhw_tpPh[k] += b_ - fhwT0;                         \
+        Fhw_tpPh[13] += svcGetSystemTick() - b_;           \
+    } while (0)
+#else
+#define FHW_PH_START (void) 0
+#define FHW_PH(k) (void) 0
+#define FHW_PH_COUNT(k, n) (void) 0
+#define FHW_TIMED(k, call) call
+#define FHW_T0 (void) 0
+#define FHW_T1(k) (void) 0
+#endif
 
 // A column's class bits (TowerPlacement.kind): which side of the middle it
 // is on, whether it is an edge column, and above those its mix step.
@@ -13940,6 +14014,23 @@ static inline CtrVertex* towerQuad(CtrVertex* v, uint32_t per, const TowerStrip*
     return v + 6;
 }
 
+#ifdef CTRPORT_FHW_EMIT
+// TOWER_NEXT_RUN_BEGIN (tools/analysis/tower_next_run_test.py checks this on the PC against __builtin_ctzll)
+// Takes the lowest run of set bits off m (not 0): its first bit in *start and the bit past its top in *end. The run's
+// lowest bit added to m carries through the run (out of bit 63 for a run reaching it), so the bits m loses are the
+// run. clz on 32-bit halves, without the __ctzdi2 calls and 64-bit shifts of __builtin_ctzll on this CPU.
+static inline __attribute__((always_inline)) void towerNextRun(uint64_t* m, int32_t* start, int32_t* end) {
+    uint64_t low = *m & (0 - *m);
+    uint64_t next = *m + low;
+    uint64_t run = *m & ~next;
+    *m &= next;
+    uint32_t lowLo = (uint32_t) low, runHi = (uint32_t) (run >> 32);
+    *start = lowLo != 0 ? 31 - __builtin_clz(lowLo) : 63 - __builtin_clz((uint32_t) (low >> 32));
+    *end = runHi != 0 ? 64 - __builtin_clz(runHi) : 32 - __builtin_clz((uint32_t) run);
+}
+// TOWER_NEXT_RUN_END
+#endif
+
 // Draws segment i of the strips where the surface's coverage says they may
 // not be clear: each strip as one quad per run of 8-row blocks its columns
 // have pixels in, a column and a row wider on each side. Those margins keep
@@ -13971,11 +14062,13 @@ static void towerEmitCovered(TowerDraw* d, int32_t i, const TowerStrip* strips, 
                 // pixels.
                 masks[e - k] = 0;
                 quads++;
+                FHW_PH_COUNT(18, 1);
                 continue;
             }
             int32_t ca = (int32_t) t->srcA - 1, cb = (int32_t) t->srcB + 1;
             ca = 0 > ca ? 0 : ca;
             cb = cb > last ? last : cb;
+            FHW_PH_COUNT(10, cb - ca + 1);
             uint64_t m = 0;
             for (int32_t c = ca; cb >= c; c++) m |= d->cover[c];
             m &= rows;
@@ -13986,27 +14079,69 @@ static void towerEmitCovered(TowerDraw* d, int32_t i, const TowerStrip* strips, 
         k = e;
         if (quads == 0) continue;
         uint32_t per = r->batchQuads ? 4 : 6;
+        FHW_PH_COUNT(16, quads);
+        FHW_PH_COUNT(14, 1);
+        FHW_T0;
+#ifdef CTRPORT_FHW_EMIT
+        if (d->fhw.on && r->vertexCount + quads * per > r->vertexLimit) Fhw_emitRoom(r);
+#endif
         CtrVertex* v = reserveBatchVertices(r, d->tex, quads * per, multiSafe);
+        FHW_T1(15);
         if (v == nullptr) return;
         float z = r->vertexZ;
+#ifdef CTRPORT_FHW_EMIT
+        uint32_t out = 0; // runs left out of this batch: their room is given back after it
+#endif
         for (int32_t j = first; e > j; j++) {
             const TowerStrip* t = &strips[j];
             uint64_t m = masks[j - first];
             float u0 = t->srcA * invW, u1 = t->srcB * invW;
+#ifdef CTRPORT_FHW_EMIT
+            if (d->fhw.on) {
+                u0 = d->fhw.u[2 * j];
+                u1 = d->fhw.u[2 * j + 1];
+            }
+#endif
             if (!colorsEqual(t->ca, t->cb)) {
                 v = towerQuad(v, per, t, y0, y1, u0, row0 * invH, u1, row1 * invH, z);
                 continue;
             }
             while (m != 0) {
+#ifdef CTRPORT_FHW_EMIT
+                int32_t start, end;
+                towerNextRun(&m, &start, &end);
+#else
                 int32_t start = __builtin_ctzll(m);
                 uint64_t rest = ~(m >> start);
                 int32_t end = rest == 0 ? 64 : start + __builtin_ctzll(rest);
                 // The runs go from the lowest bit up, so none are left under start.
                 m = end == 64 ? 0 : m & ~(((uint64_t) 1 << end) - 1);
+#endif
                 float ra = maxF(row0, (float) (start * 8 - 1)), rb = minF(row1, (float) (end * 8 + 1));
+#ifdef CTRPORT_FHW_EMIT
+                float q[4] = { y0 + (ra - row0) * yPerRow, y0 + (rb - row0) * yPerRow, ra * invH, rb * invH };
+                if (d->fhw.on && !(q[0] >= d->fhw.top && d->fhw.bottom >= q[1])) {
+                    FHW_PH_COUNT(11, 1);
+                    // A run wholly beyond the scissor's rows and the 2 kept past them gives no pixels: left out
+                    // (its room given back after the batch), where the clip would cut it to 2 rows out of the scissor.
+                    if (q[1] > q[0] && (d->fhw.top >= q[1] || q[0] >= d->fhw.bottom)) {
+                        out++;
+                        FHW_PH_COUNT(12, 1);
+                        continue;
+                    }
+                    Fhw_clipSpan(&d->fhw, q);
+                }
+                v = towerQuad(v, per, t, q[0], q[1], u0, q[2], u1, q[3], z);
+#else
                 v = towerQuad(v, per, t, y0 + (ra - row0) * yPerRow, y0 + (rb - row0) * yPerRow, u0, ra * invH, u1, rb * invH, z);
+#endif
             }
         }
+#ifdef CTRPORT_FHW_EMIT
+        // The batch's vertices end where the last written quad ends.
+        r->vertexCount -= out * per;
+        r->vertexUsed -= out * per;
+#endif
     }
 }
 
@@ -14040,19 +14175,48 @@ static void towerEmit(TowerDraw* d, const TowerStrip* strips, int32_t n) {
         float invW = 1.0f / (float) d->tex->width, th = (float) d->tex->height;
         float v0 = d->seg[i].row0 / th, v1 = d->seg[i].row1 / th;
         bool multiSafe = v0 >= MULTI_MIN_V && v1 >= MULTI_MIN_V && 1.0f >= v0 && 1.0f >= v1;
+        FHW_PH_COUNT(19, 1);
         if (d->cover != nullptr) {
             towerEmitCovered(d, i, strips, n, multiSafe);
             continue;
         }
         uint32_t per = r->batchQuads ? 4 : 6;
+#ifdef CTRPORT_FHW_EMIT
+        // The segment cut to the clip's rows, for its flat strips.
+        float q[4] = { y0, y1, v0, v1 };
+        if (d->fhw.on && !(y0 >= d->fhw.top && d->fhw.bottom >= y1)) {
+            FHW_PH_COUNT(11, 1);
+            Fhw_clipSpan(&d->fhw, q);
+        }
+#endif
         for (int32_t k = 0; n > k;) {
             int32_t m = n - k > 512 ? 512 : n - k;
+            FHW_PH_COUNT(17, m);
+            FHW_PH_COUNT(14, 1);
+            FHW_T0;
+#ifdef CTRPORT_FHW_EMIT
+            if (d->fhw.on && r->vertexCount + (uint32_t) m * per > r->vertexLimit) Fhw_emitRoom(r);
+#endif
             CtrVertex* v = reserveBatchVertices(r, d->tex, (uint32_t) m * per, multiSafe);
+            FHW_T1(15);
             if (v == nullptr) return;
             float z = r->vertexZ;
             for (int32_t e = k + m; e > k; k++) {
                 const TowerStrip* t = &strips[k];
+#ifdef CTRPORT_FHW_EMIT
+                float u0 = t->srcA * invW, u1 = t->srcB * invW;
+                // The segment as it is (y0, y1, v0, v1), or for a flat strip of the shared texture's batch q, cut.
+                const float whole[4] = { y0, y1, v0, v1 };
+                const float* span = whole;
+                if (d->fhw.on) {
+                    u0 = d->fhw.u[2 * k];
+                    u1 = d->fhw.u[2 * k + 1];
+                    if (colorsEqual(t->ca, t->cb)) span = q;
+                }
+                v = towerQuad(v, per, t, span[0], span[1], u0, span[2], u1, span[3], z);
+#else
                 v = towerQuad(v, per, t, y0, y1, t->srcA * invW, v0, t->srcB * invW, v1, z);
+#endif
             }
         }
     }
@@ -14111,6 +14275,7 @@ static void towerUniforms(CtrRenderer* r, TowerUniforms* u) {
 // corner, no target), for drawing without the shader instead.
 static bool drawTowerStrips(CtrRenderer* r, int32_t surfaceId, CtrSurface* s, int32_t srcLeft, int32_t srcTop, int32_t srcWidth,
                             int32_t srcHeight, const float* px, const float* py, const CtrColor* cs, const TowerUniforms* uni) {
+    FHW_PH_START;
     if (s->windowed || r->boundTarget == nullptr || !r->inFrame || 0 >= srcWidth || 0 >= srcHeight) return false;
     if (!colorsEqual(cs[0], cs[1]) || !colorsEqual(cs[0], cs[2]) || !colorsEqual(cs[0], cs[3])) return false;
     if (px[0] != px[3] || px[1] != px[2] || py[0] != py[1] || py[2] != py[3]) return false;
@@ -14137,6 +14302,7 @@ static bool drawTowerStrips(CtrRenderer* r, int32_t surfaceId, CtrSurface* s, in
     float uLeft = (float) srcLeft / width, uSpan = (float) srcWidth / width;
     const TowerPlacement* place = towerPlacement(r->frame, c0, count, X0, span, uLeft, uSpan, scale);
     if (place == nullptr) return false;
+    FHW_PH(0);
 
     RENDER_TIMED(r, TIME_DRAW);
     TowerDraw d = { .r = r, .s = s, .kx = (px[1] - px[0]) / span };
@@ -14163,6 +14329,7 @@ static bool drawTowerStrips(CtrRenderer* r, int32_t surfaceId, CtrSurface* s, in
         n += 1.0f;
     }
     if (d.segCount == 0) return true;
+    FHW_PH(1);
     // Clear pixels leave the target as it is under the normal blend, and
     // skipping them saves the GPU blending them, or with the surface's
     // coverage, sampling them too.
@@ -14173,8 +14340,12 @@ static bool drawTowerStrips(CtrRenderer* r, int32_t surfaceId, CtrSurface* s, in
         d.tex = surfaceTexture(r, surfaceId);
         if (d.tex == nullptr) return true;
         bool linear = r->filterOverride != 0 ? r->filterOverride == FILTER_LINEAR : r->base.texFilter;
+#if defined(CTRPORT_FLOWERHW_FORCE)
+        linear = true; // test word towerforce1/2: coverage declined, as under linear filtering
+#endif
         if (skipClear && !linear) d.cover = towerCoverage(r, surfaceId, s);
     }
+    FHW_PH(2);
     float texelX = uni->texelX;
     bool front = uni->face >= 1.0f;
     const float* blendCol = uni->blendCol;
@@ -14219,6 +14390,7 @@ static bool drawTowerStrips(CtrRenderer* r, int32_t surfaceId, CtrSurface* s, in
     if (towerRecip[1] == 0.0f) {
         for (int32_t k = 1; TOWER_MAX_COLUMNS >= k; k++) towerRecip[k] = 1.0f / (float) k;
     }
+    FHW_PH(3);
 
     // At most six strips per column: the fill-ins and the main one.
     if (!CTR_ARRAY_RESERVE(towerStripList, (size_t) count * 6)) return false;
@@ -14273,6 +14445,9 @@ static bool drawTowerStrips(CtrRenderer* r, int32_t surfaceId, CtrSurface* s, in
         strips[stripCount++] = (TowerStrip) { xa, xb, anchor - slope * 0.5f, anchor + slope * ((float) (j - i) - 0.5f), ca, cb };
         i = j;
     }
+    FHW_PH(4);
+    FHW_PH_COUNT(8, count);
+    FHW_PH_COUNT(9, stripCount);
 
     flushBatch(r);
     // Strips sampling a texture go as quads, four vertices each instead of
@@ -14293,13 +14468,19 @@ static bool drawTowerStrips(CtrRenderer* r, int32_t surfaceId, CtrSurface* s, in
     r->towerColor = fxColor(blendCol[0], blendCol[1], blendCol[2], (float) cs[0].a / 255.0f);
     applyTexEnv(r);
     if (skipClear) C3D_AlphaTest(true, GPU_GREATER, 0);
+#ifdef CTRPORT_FHW_EMIT
+    d.fhw.on = d.tex != nullptr && Fhw_emitBegin(r, &d.fhw, &d, strips, stripCount);
+#endif
+    FHW_PH(5);
     towerEmit(&d, strips, stripCount);
+    FHW_PH(6);
     flushBatch(r);
     r->batchQuads = false;
     r->towerStrips = false;
     r->opAlphaCut = 0;
     applyTexEnv(r);
     if (skipClear) applyAlphaTest(r);
+    FHW_PH(7);
     return true;
 }
 #line 12954
@@ -22776,13 +22957,13 @@ void* __real_CtrMemory_vramAllocNow(size_t size);
 bool __real_C3D_TexInitWithParams(C3D_Tex* tex, C3D_TexCube* cube, C3D_TexInitParams p);
 C3D_RenderTarget* __real_C3D_RenderTargetCreate(int width, int height, GPU_COLORBUF colorFmt, C3D_DEPTHTYPE depthFmt);
 void* CtrMemory_vramAllocTop(size_t size);
-uint32_t __wrap_CtrTextures_takeHot(CtrTextureCache* cache, CtrTile** out, uint32_t max) LATE_CONTENTION;
-void* __wrap_CtrMemory_vramAllocNow(size_t size) LATE_CONTENTION;
+uint32_t CTR_TAKEHOT_CONTENTION(CtrTextureCache* cache, CtrTile** out, uint32_t max) LATE_CONTENTION;
+void* CTR_VRAMALLOCNOW_CONTENTION(size_t size) LATE_CONTENTION;
 bool __wrap_C3D_TexInitWithParams(C3D_Tex* tex, C3D_TexCube* cube, C3D_TexInitParams p) LATE_CONTENTION;
 C3D_RenderTarget* __wrap_C3D_RenderTargetCreate(int width, int height, GPU_COLORBUF colorFmt, C3D_DEPTHTYPE depthFmt) LATE_CONTENTION;
 static bool oldGiveBack(CtrRenderer* r, size_t need) LATE_CONTENTION;
 void __real_CtrTextures_destroy(CtrTextureCache* cache);
-void __wrap_CtrTextures_destroy(CtrTextureCache* cache) LATE_CONTENTION;
+void CTR_DESTROY_CONTENTION(CtrTextureCache* cache) LATE_CONTENTION;
 
 // Gives copies back for `need` bytes (yieldMirrors); false if there were none.
 // A frame ended early (suspendFrame) has what it drew so far with the GPU,
@@ -22801,7 +22982,7 @@ static bool oldGiveBack(CtrRenderer* r, size_t need) {
 // mirrorHotTiles' hot tiles, and on the Old models only those to copy now:
 // none in a room that wanted VRAM back or while 3D is shown, else those hot
 // OLD_MIRROR_STREAK frames running.
-uint32_t __wrap_CtrTextures_takeHot(CtrTextureCache* cache, CtrTile** out, uint32_t max) {
+uint32_t CTR_TAKEHOT_CONTENTION(CtrTextureCache* cache, CtrTile** out, uint32_t max) {
     uint32_t count = __real_CtrTextures_takeHot(cache, out, max);
     CtrRenderer* r = (CtrRenderer*) (void*) ((char*) cache - offsetof(CtrRenderer, textures));
     if (r->mayPromote) return count;
@@ -22842,7 +23023,7 @@ uint32_t __wrap_CtrTextures_takeHot(CtrTextureCache* cache, CtrTile** out, uint3
 // copy goes, and making them all again in a frame, up to MIRROR_COPY_BYTES,
 // made that frame late on the Old models; one a frame spreads them out.
 // mirrorHotTiles stops at a null, so the rest wait for the next frame.
-void* __wrap_CtrMemory_vramAllocNow(size_t size) {
+void* CTR_VRAMALLOCNOW_CONTENTION(size_t size) {
     CtrRenderer* r = oldMirror.r;
     if (r == nullptr) return __real_CtrMemory_vramAllocNow(size);
     if (oldMirror.copyFrame != r->frame) {
@@ -22882,7 +23063,7 @@ C3D_RenderTarget* __wrap_C3D_RenderTargetCreate(int width, int height, GPU_COLOR
 
 // The renderer going (ctrDestroy, at a chapter change): the next one starts
 // afresh, from its first frame.
-void __wrap_CtrTextures_destroy(CtrTextureCache* cache) {
+void CTR_DESTROY_CONTENTION(CtrTextureCache* cache) {
     if (oldMirror.r != nullptr && &oldMirror.r->textures == cache) memset(&oldMirror, 0, sizeof(oldMirror));
     __real_CtrTextures_destroy(cache);
 }
@@ -26449,6 +26630,16 @@ static struct {
 
 void __real_CtrRenderer_beginFrame(Renderer* renderer);
 void __real_C3D_TexDelete(C3D_Tex* tex);
+#if defined(CTRPORT_KGFC_ON)
+// knightgpu FC (this file's end): the real beginFrame, then copies placed to leave the room's wanted VRAM in one piece.
+// Called by a name only the assembler binds to kgfcBeginFrame (".set" there): to GCC it is an outside function, as
+// __real_CtrRenderer_beginFrame is, so the late functions here keep their order and addresses with FC on (c26rev KG2).
+void kgfcBeginCall(Renderer* renderer);
+#define KGFC_BEGIN kgfcBeginCall
+#else
+#define KGFC_BEGIN __real_CtrRenderer_beginFrame
+#endif
+#line 23657
 
 static bool KG_LATE kgIn(const void* p, const uint8_t* at, uint32_t size) {
     const uint8_t* q = (const uint8_t*) p;
@@ -26848,7 +27039,7 @@ void KnightGpu_beginFrame(Renderer* renderer) {
         C3D_TexDelete(&kg.spare.tex);
         kg.spare.target = nullptr;
     }
-    __real_CtrRenderer_beginFrame(renderer);
+    KGFC_BEGIN(renderer);
     CtrSurface* app = kgLender(r);
     if (app == nullptr || (kg.base != nullptr && app->tex.data != kg.base)) {
         // Given back already when its full texture was cleared (__wrap_C3D_FrameBufClear), or when the lender's texture
@@ -26884,10 +27075,10 @@ void KnightGpu_beginFrame(Renderer* renderer) {
     if (0 <= id) kgSwap(r, id);
 }
 
-// A       knightgpu, DELTARUNE New only): bank compaction. In the Knight's scenes bank A keeps 585 KB free in two
+// A (change knightgpu, DELTARUNE New only): bank compaction. In the Knight's scenes bank A keeps 585 KB free in two
 // pieces, 176 KB below surface s1 (128 KB) and 409 KB above s3 (496 KB), too small apiece for a 640x480 afterimage
 // (496 KB), so all but the ones in the lent slots stay in linear memory and pay a load and a store copy (about 1.2 ms of
-// GPU) every frame       knightgpu's GPU census, 10-31). When a hot spilled surface (kgCandidate's) finds no free gap of
+// GPU) every frame (change knightgpu's GPU census, 10-31). When a hot spilled surface (kgCandidate's) finds no free gap of
 // its size, the surfaces of one stretch of a bank (between blocks that stay) slide down to its bottom, which leaves the
 // stretch's free bytes in one gap at its top, and the spilled surface moves into that gap (kgMoveIn). Each moved texture
 // is copied by the GPU queue, after everything queued before (what reads or writes its old place) and before anything
@@ -27323,7 +27514,12 @@ static inline __attribute__((always_inline)) float utxPow2Rcp(float side) {
     memcpy(&f, &bits, sizeof f);
     return f;
 }
-// D2'       creddodge, 11-01): Smart's premultiplied colour (a text that isn't one colour) is worked out in cdPremul, at
+// creddodge d: a value the compiler may not fold or reorder past (it stays in a VFP register as it is).
+static inline __attribute__((always_inline)) float utxKeep(float v) {
+    __asm__("" : "+t"(v));
+    return v;
+}
+// D2' (change creddodge, 11-01): Smart's premultiplied colour (a text that isn't one colour) is worked out in cdPremul, at
 // the end of the late text, so that utxEmitPageRegion keeps its 2504 B slot with D2 in it (the pad after it).
 static CtrColor cdPremul(CtrColor cc);
 static __attribute__((noinline, noclone, section(".text.utext_late"))) void utxEmitPageRegion(CtrRenderer* r, CtrPage* page, float sx0,
@@ -27391,30 +27587,36 @@ static __attribute__((noinline, noclone, section(".text.utext_late"))) void utxE
         // creddodge D2: a data page's tile sides are powers of two from 8 (tileSizeFor: every data page's layout is
         // CtrPack_layoutGrid's, set by setLayout, a view's copied from such a page; the pages made elsewhere with
         // other sides are not data pages, which go the full way above), so the tile pick multiplies by their
-        // reciprocals, to the bit (see utxPow2Rcp). regionTilePart keeps its divisions (code room).
+        // reciprocals, to the bit (see utxPow2Rcp).
+        // creddodge d: and regionTilePart's sums run here for a region read forwards (w, h > 0) inside its one tile
+        // (ox <= sx0, sx1 <= ox + tileW, y alike): its clips leave cx0 = sx0 and cx1 = sx1, so s = (sx0 - sx0) / w = +0
+        // and (sx1 - sx0) / w = w / w = 1 exactly, and its uv divisions by the tile sides are products with their
+        // reciprocals. uv as compiled: (sx0 - ox) + w * s, the product rounded before the add; w * +0 = +0 adds
+        // nothing to sx0 - ox, which is never -0 (drawTextImpl, the only caller, passes whole-number page
+        // coordinates), and w * 1 = w. The quad positions are quadPosition's sums on s values the compiler can't
+        // fold. Any other region goes the full way; a tile outside the page does too (the full way's clamps leave
+        // its region over a tile's edge).
         if (page->tilesX == 1 && page->tilesY == 1) {
             goto full;
         } else {
             float rcpW = utxPow2Rcp(tileW), rcpH = utxPow2Rcp(tileH);
             float w = sx1 - sx0;
             float h = sy1 - sy0;
-            if (w == 0.0f || h == 0.0f) goto full;
-            float minX = sx0 < sx1 ? sx0 : sx1, maxX = sx0 < sx1 ? sx1 : sx0;
-            float minY = sy0 < sy1 ? sy0 : sy1, maxY = sy0 < sy1 ? sy1 : sy0;
-            int32_t tx0 = (int32_t) (minX * rcpW), tx1 = (int32_t) ((maxX - 0.001f) * rcpW);
-            int32_t ty0 = (int32_t) (minY * rcpH), ty1 = (int32_t) ((maxY - 0.001f) * rcpH);
-            if (0 > tx0) tx0 = 0;
-            if (0 > ty0) ty0 = 0;
-            if (tx1 >= page->tilesX) tx1 = page->tilesX - 1;
-            if (ty1 >= page->tilesY) ty1 = page->tilesY - 1;
-            if (tx0 != tx1 || ty0 != ty1) goto full;
+            if (!(w > 0.0f) || !(h > 0.0f)) goto full;
+            int32_t tx0 = (int32_t) (sx0 * rcpW), tx1 = (int32_t) ((sx1 - 0.001f) * rcpW);
+            int32_t ty0 = (int32_t) (sy0 * rcpH), ty1 = (int32_t) ((sy1 - 0.001f) * rcpH);
+            if (tx0 != tx1 || ty0 != ty1 || (uint32_t) tx0 >= (uint32_t) page->tilesX || (uint32_t) ty0 >= (uint32_t) page->tilesY) goto full;
             tile = &page->tiles[ty0 * page->tilesX + tx0];
-            float s[4];
-            if (!utkTileDone(r, tile) || !regionTilePart(sx0, sy0, w, h, minX, minY, maxX, maxY, tileW, tileH, tx0, ty0, s, uv)) goto full;
-            utxQuadPosition(px, py, s[0], s[1], &qx[0], &qy[0]);
-            utxQuadPosition(px, py, s[2], s[1], &qx[1], &qy[1]);
-            utxQuadPosition(px, py, s[2], s[3], &qx[2], &qy[2]);
-            utxQuadPosition(px, py, s[0], s[3], &qx[3], &qy[3]);
+            float ox = (float) tx0 * tileW, oy = (float) ty0 * tileH;
+            if (ox > sx0 || sx1 > ox + tileW || oy > sy0 || sy1 > oy + tileH || !utkTileDone(r, tile)) goto full;
+            float s0 = utxKeep(0.0f), s1 = utxKeep(1.0f);
+            float bx = utxKeep(sx0 - ox), by = utxKeep(sy0 - oy);
+            uv[0] = bx * rcpW, uv[2] = (bx + w) * rcpW;
+            uv[1] = by * rcpH, uv[3] = (by + h) * rcpH;
+            utxQuadPosition(px, py, s0, s0, &qx[0], &qy[0]);
+            utxQuadPosition(px, py, s1, s0, &qx[1], &qy[1]);
+            utxQuadPosition(px, py, s1, s1, &qx[2], &qy[2]);
+            utxQuadPosition(px, py, s0, s1, &qx[3], &qy[3]);
         }
         C3D_Tex* tex = CtrTextures_drawTex(tile);
         float u0 = uv[0], v0 = uv[1], u1 = uv[2], v1 = uv[3];
@@ -27485,7 +27687,7 @@ full:
 #endif
     emitPageRegion(r, page, sx0, sy0, sx1, sy1, ax, ay, c);
 }
-// D2' keeps utxEmitPageRegion's section at its former 2504 bytes, so that no late function after it moves (subsection
+// D2' and d keep utxEmitPageRegion's section at its former 2504 bytes, so that no late function after it moves (subsection
 // 1 follows the body and its literal pool; the assembler stops if they ever pass that).
 __asm__(".pushsection .text.utext_late, 1\n"
         "utxEmitPageRegion_pad:\n"
@@ -27512,7 +27714,7 @@ static __attribute__((noinline, noclone, section(".text.creddodge_late"))) bool 
                                                                                                const float* py) {
     const C3D_Mtx* m = &r->projection;
     if (!r->depth.active && cdBits(m->r[3].x) == 0 && cdBits(m->r[3].y) == 0 && cdBits(m->r[3].w) == 0x3f800000u) {
-        // The edges every corner so far is past: bit 0 left, 1 right, 2 top, 3 bottom. D1       creddodge, 11-01):
+        // The edges every corner so far is past: bit 0 left, 1 right, 2 top, 3 bottom. D1 (change creddodge, 11-01):
         // the answer is known false once no edge has every corner so far past it, so the loop stops there (a glyph
         // in view, at its first corner). That is quadOutsideView's answer too when a later corner isn't finite: the
         // corners so far have w exactly 1 there and the same x and y (the same two products, added in the other
@@ -27544,7 +27746,7 @@ static __attribute__((noinline, noclone, section(".text.cdtail_late"))) CtrColor
     return (CtrColor) { (uint8_t) ((tr + 1u + (tr >> 8)) >> 8), (uint8_t) ((tg + 1u + (tg >> 8)) >> 8),
                         (uint8_t) ((tb + 1u + (tb >> 8)) >> 8), cc.a };
 }
-// ===[ String box fitted to the alignment       creddodge, tbox) ]===
+// ===[ String box fitted to the alignment (change creddodge, tbox) ]===
 // drawTextImpl drops a string whose box is wholly out of view. The box is +-reachX across, reachX = textLen x advance
 // x (2 when aligned) + extent: room for the alignment to move the start by a whole line's width either way and for
 // the cursor to move a whole advance either way per character. In the credits dodger that box is about four times as
@@ -27890,7 +28092,7 @@ static void kgDrawSpriteTiled(Renderer* renderer, int32_t tpagIndex, float origi
 // DELTARUNE Chapter 3's Roaring Knight wave (ch3_kspit) toggles blending and fog some 300 times a frame, most often
 // around draws that draw nothing (roaring2's outlines: alpha 0, e5x drops them) or around nothing at all. Each eager
 // toggle draws the open batch and applies the state, so a frame is cut into some 330 batches where the same draws in
-// the same order with the same state per draw make some 255       knightgpu's census, o9/sim.py).
+// the same order with the same state per draw make some 255 (change knightgpu's census, o9/sim.py).
 //
 // Here the four setters (kglL_, KGL_SET) still make their own early return and set the renderer's fields as the eager
 // setter does, but while a batch is open in a Draw event (kglHold's test) they hold the call instead of drawing the
@@ -28234,4 +28436,613 @@ __asm__("\t.pushsection .text.CtrRenderer_selfTest,\"ax\",%progbits\n\t.subsecti
 #include "ctr_renderer_knsurf.inc"
 #if defined(ENABLE_WAD17) && defined(CTRPORT_TARGET_O3DS) && defined(CTRPORT_VINE_DIAGNOSTIC_HELPER)
 #include "drpix_replay.inc"
+#endif
+
+// HOME/sleep reconfiguration drops dlg.shown, so its normal one-time black
+// transfer cannot release a held box. Keep the lit Off screen clean once,
+// outside a frame; never erase its live dialogue in the per-frame painter.
+__attribute__((noinline, noipa, optimize("Os"), section(".text.fpsbox75zm_late")))
+static void fps75Configure(CtrRenderer* r) {
+    bool CtrArgui_keepLit(u32 screen);
+    screensConfigureKeepBottom(r);
+    if (CtrScreens_otherOff && !r->bottomYielded && !CtrScreens_onBottom &&
+        CtrArgui_keepLit(GSPLCD_SCREEN_BOTTOM)) {
+        CtrGpu_waitIdle();
+        CtrLog_beginConsole();
+        screensClearBuffers(GFX_BOTTOM);
+        gfxSetDoubleBuffering(GFX_BOTTOM, false);
+        CtrScreens_flushConsoles(); // repaint the hint/counter before waiting for another game frame
+        CtrLog_endConsole();
+    }
+}
+// ===[ knightgpu SY: tiles' copies given up only when that makes room ]===
+//
+// A surface that finds no VRAM block big enough makes tiles' copies make way first (yieldMirrors, from
+// initVramTarget): those not drawn in this frame, then, ending the frame so far, the rest. Sometimes that frees
+// nothing usable: the copies sit in gaps between surfaces, and with all of them gone VRAM still has no block the
+// surface fits. The surface then goes to linear memory anyway (moving other surfaces, or spilling it), and the room
+// has lost its copies for good: yielding raises the room's reserve past what is free (mirrorHotTiles). In the
+// drsweep22 New 3DS runs, 27 of 65 requests that gave copies up still found no room right after (one each in 27
+// rooms, most in Chapter 4's church: 384 KB given up for a 496 KB surface, then 2000 KB of surface sprites moved to
+// linear memory); the bench scenes' requests were all met. FC (below) makes copies in exactly such gaps.
+//
+// So initVramTarget asks here first: VRAM's blocks as the allocator has them (CtrMemory_vramBlocks, sorted), with only
+// those the renderer keeps however short VRAM is taken as used (kgsyKept: the screens' framebuffers, the half-width
+// strip, surfaces' and scratch targets' textures); the copies, frees held for the GPU (already off the list) and every
+// block it can't name count as free, gaps starting at 128-byte boundaries as vramAlloc makes them. If no gap then holds
+// the request, nothing is given up and the copies stay; the caller goes on to its other ways of making room, and each
+// later try asks again. Every guess is on the side of giving up (a list too long or incomplete, a block not named, such
+// as Flowery's tower layer copies, which flowergpu's wrapper gives up first): never fewer yields that would have made
+// room. The call goes on through that wrapper (vine_new_retain.inc routes every yieldMirrors call in this file).
+// Raising the room's reserve is kept, so no more copies go into VRAM the room wanted. Nothing drawn changes: a copy
+// holds its tile's bytes. DELTARUNE New only; its log line is in profile builds only.
+#if defined(ENABLE_WAD17) && defined(CTRPORT_KGSY_ON)
+#define KGSY_LATE __attribute__((noinline, optimize("Os"), section(".text.knightgpu_sy_late")))
+#define KGSY_BLOCKS 160
+#ifdef CTRPORT_RENDER_TIMING
+static const char kgsyKeptText[] __attribute__((section(".rodata.knightgpu_sy_late"))) =
+    "Renderer: %.0f KB of VRAM wanted, kept %.0f KB of tiles' copies: giving them up leaves no block that big\n";
+#endif
+
+// Whether VRAM block p is one the renderer keeps however short VRAM is: a screen's framebuffer, the half-width strip,
+// a surface's texture or a scratch target's (logVramCensus' names).
+static bool KGSY_LATE kgsyKept(CtrRenderer* r, const void* p) {
+    if ((r->topTarget != nullptr && r->topTarget->frameBuf.colorBuf == p) ||
+        (r->topRightTarget != nullptr && r->topRightTarget->frameBuf.colorBuf == p) ||
+        (r->bottomTarget != nullptr && r->bottomTarget->frameBuf.colorBuf == p) || r->shrink.strip.data == p) {
+        return true;
+    }
+    for (uint32_t k = 0; r->surfaceCount > k; k++) {
+        if (r->surfaces[k].used && r->surfaces[k].tex.data == p) return true;
+    }
+    for (ptrdiff_t k = 0; arrlen(r->scratches) > k; k++) {
+        if (r->scratches[k].target != nullptr && r->scratches[k].tex.data == p) return true;
+    }
+    return false;
+}
+
+bool kgYieldMirrors(CtrRenderer* r, size_t need) KGSY_LATE;
+__asm__(".set kgsyYieldCall, kgYieldMirrors");
+#if defined(CTRPORT_KGFC2_ON)
+bool kgfcGiveUpCopies(CtrRenderer* r);
+#endif
+bool kgYieldMirrors(CtrRenderer* r, size_t need) {
+#if defined(CTRPORT_KGFC2_ON)
+    if (kgfcGiveUpCopies(r)) return true; // FC rev 2: its copies go first, and the request is tried again
+#endif
+    CtrVramBlock b[KGSY_BLOCKS];
+    int32_t n = r->textures.mirrorBytes != 0 ? CtrMemory_vramBlocks(b, KGSY_BLOCKS) : -1;
+    if (n < 0) return yieldMirrors(r, need);
+    // VRAM is two pools (banks A and B, libctru): nothing allocated crosses the middle, so neither may a gap.
+    const uintptr_t mid = (uintptr_t) OS_VRAM_VADDR + OS_VRAM_SIZE / 2;
+    uintptr_t start = (uintptr_t) OS_VRAM_VADDR;
+    for (int32_t i = 0; n >= i; i++) {
+        if (n > i && !kgsyKept(r, (const void*) b[i].addr)) continue; // free once given up, as far as known
+        uintptr_t end = n > i ? b[i].addr : (uintptr_t) OS_VRAM_VADDR + OS_VRAM_SIZE;
+        uintptr_t cut = mid > start && end > mid ? mid : end;
+        if (end > start && (cut - start >= need || end - cut >= need)) return yieldMirrors(r, need);
+        if (n > i) start = (b[i].addr + b[i].size + 0x7Fu) & ~(uintptr_t) 0x7Fu;
+    }
+    if (need > r->mirror.extra) r->mirror.extra = (uint32_t) need;
+#ifdef CTRPORT_RENDER_TIMING
+    logInfo(kgsyKeptText, (double) need / 1024.0, (double) r->textures.mirrorBytes / 1024.0);
+#endif
+    return false;
+}
+#endif
+
+// ===[ knightgpu FC: tiles' copies that leave a room's wanted VRAM in one piece ]===
+//
+// mirrorHotTiles copies hot tiles to VRAM only while MIRROR_RESERVE, the room's wanted size (r->mirror.extra) and
+// shrinkVramWanted stay free. In native drawing (the default) the detail-keeping shrink is never used, so its strip is
+// never made and shrinkVramWanted keeps its 1408 KB back for good: on Azahar the Knight's, Titan's and the climb's
+// rooms hold 1.1-1.5 MB of VRAM free with their tiles drawn from linear memory. Counting all that is free is also blind
+// to where it is: with the strip's share simply dropped, copies filled VRAM down to the reserve in pieces, and the
+// Knight's 496 KB scratch targets then found no gap and took the copies back 3 to 6 times a minute, each ending a frame
+// early (ch3_kspit, kfinal, roar on Azahar).
+//
+// So after mirrorHotTiles, while the strip is neither made nor wanted (no retry deadline from ensureShrinkStrip or
+// reclaimVram still ahead), the tiles it took as hot that still have no copy get one placed by CtrMemory_vramAllocFit:
+// in the smallest gap that holds it (gaps end at the middle of VRAM: it is two pools), and only if a gap of the room's
+// wanted size (at least MIRROR_RESERVE) is left in one piece. At most MIRROR_COPY_BYTES a frame, none in a frame
+// mirrorHotTiles copied in, none while copies are paused after a yield, and none again in a room once a yield came
+// after one of these copies. Nothing drawn changes: a copy holds its tile's bytes, made by a GPU copy queued ahead of
+// anything drawn this frame, as mirrorHotTiles makes them.
+// DELTARUNE New only; its log lines are in profile builds only.
+#if defined(ENABLE_WAD17) && defined(CTRPORT_KGFC_ON) && defined(CTRPORT_KNIGHTGPU_LENDER)
+#define KGFC_LATE __attribute__((noinline, optimize("Os"), section(".text.knightgpu_fc_late")))
+void* CtrMemory_vramAllocFit(size_t size, size_t keep);
+static struct {
+    uint32_t roomFrame; // the room these are for (its start frame)
+    uint32_t yields;    // r->mirror.yields at the last copy made here
+    uint32_t made;      // copies made here in the room
+    bool stopped;       // a yield came after one: none more in the room
+    const void* r;      // the renderer of the last frame, and its frame number then (before its beginFrame)
+    uint32_t frame;
+} kgfc __attribute__((section(".bss.knightgpu_fc_late")));
+#ifdef CTRPORT_RENDER_TIMING
+static const char kgfcText[] __attribute__((section(".rodata.knightgpu_fc_late"))) =
+    "Renderer: %u tiles' copies placed to keep %.0f KB in one piece this room, %.0f KB of copies now (%.0f KB free)%s\n";
+#endif
+
+#if defined(CTRPORT_KGFC2_ON)
+// Rev 2's own code, constants and statics go in sections of their own: its code after kgfcBeginFrame (FC's
+// section keeps only that), its constants and statics after flowerhw tshare's (late_reserve.ld), so the late
+// objects that were there before rev 2 keep their addresses (c26rev r103 F1/F2).
+#define KGFC2_LATE __attribute__((noinline, optimize("Os"), section(".text.knightgpu_fc_late_fc2")))
+// FC rev 2: the copies FC places are invisible to everything else in VRAM. With rev 1 on the New 3DS, the Knight's
+// roar and finale ran 0.2-0.6 ms more GPU a frame (roar's HEADROOM PASS -> FAIL) and the flower's phase 4 evicted
+// 10.5 MB instead of 5.8 (flowerhw's dr75c bisect, 11-02). Nothing was drawn from the copies then: they sat in gaps
+// when the rooms set their surfaces up, so the Knight's surface 2 found no gap, all 3,200 KB of copies went at once
+// (1,792 KB without FC, for surface 5), and surfaces 2-5 landed in other banks for good (Azahar VRAM census); the
+// flower's surface 1 likewise. Now every VRAM request but FC's own sees and gets VRAM as without these copies:
+// - the free-space and block queries leave them out (CtrMemory_vramFreeNow counts them free, CtrMemory_vramBlocks
+//   and CtrMemory_vramTaken drop them);
+// - before any other allocation or block move (vramAlloc's entries, CtrMemory_vramAllocNow, CtrMemory_vramMoveTo)
+//   they are given up and their VRAM really freed: the GPU is waited for first, so no free is held back. Copies drawn
+//   from in the frame so far can only go once the frame so far has run: such a request is refused, and a surface's
+//   (initVramTarget) then comes to kgYieldMirrors, which ends the frame so far as yieldMirrors does, gives them up
+//   and has the request tried again; any other waits for the next frame's start, where they go first;
+// - mirrorHotTiles' list holds their tiles where it would without the copies (CtrTextures_ensureTiles' wraps), and
+//   the first tile it would try decides (kgfcHot): one of FC's that fits gives them up, so it is copied as without
+//   them; one that does not fit ends the list there, as mirrorHotTiles stops there without them.
+// Once given up, none more in the room (as after a yield). Nothing drawn changes: a copy holds its tile's bytes.
+#define KGFC2_LIST 64
+#define KGFC2_SEEN 256
+static struct {
+    uintptr_t addr[KGFC2_LIST];
+    CtrTile* tile[KGFC2_LIST];
+    uint32_t count;
+    uint32_t gaveUp, refused;
+    bool want; // a request was refused: give them up at the next frame's start
+    bool busy;
+    const CtrTile* lo; // the listed tiles' lowest and highest addresses
+    const CtrTile* hi;
+} kgfl __asm__("kgfcList") __attribute__((section(".bss.knightgpu_fc2_late")));
+// The tile lookups' wraps (below) test count and busy in assembly at these offsets.
+_Static_assert(offsetof(__typeof__(kgfl), count) == 512 && offsetof(__typeof__(kgfl), busy) == 525, "kgfl layout");
+static CtrVramBlock kgflSeen[KGFC2_SEEN] __attribute__((section(".bss.knightgpu_fc2_late")));
+static const char kgflText[] __attribute__((section(".rodata.knightgpu_fc2_late"))) =
+    "Renderer: FC's tiles' copies given up (%u KB, %s), none more this room\n";
+static const char kgflRefusedText[] __attribute__((section(".rodata.knightgpu_fc2_late"))) =
+    "Renderer: a VRAM request waits: FC's copies are drawn from in this frame\n";
+// The reasons, here too: as literals they would go to the shared string constants, before the late ones.
+static const char kgflWhyRequest[] __attribute__((section(".rodata.knightgpu_fc2_late"))) = "for a VRAM request";
+static const char kgflWhySurfaceRun[] __attribute__((section(".rodata.knightgpu_fc2_late"))) = "for a surface, the frame so far run first";
+static const char kgflWhySurface[] __attribute__((section(".rodata.knightgpu_fc2_late"))) = "for a surface";
+static const char kgflWhyWaited[] __attribute__((section(".rodata.knightgpu_fc2_late"))) = "a request waited";
+static const char kgflWhyHot[] __attribute__((section(".rodata.knightgpu_fc2_late"))) = "a tile of theirs is copied as without them";
+int32_t __real_CtrMemory_vramBlocks(CtrVramBlock* out, int32_t max);
+int32_t __real_CtrMemory_vramTaken(CtrVramBlock* out, int32_t max);
+uint32_t __real_CtrMemory_vramFreeNow(void);
+void* __real_CtrMemory_vramMoveTo(void* old, uintptr_t to);
+// This file's statics, called through their assembler names: no new call-graph edge, so GCC orders the functions
+// before as without these calls (RULES, cbcut 11-02).
+void kgflFlushBatch(CtrRenderer* r) __asm__("flushBatch");
+void kgflEndFrameEarly(CtrRenderer* r, CtrSuspendedFrame* f) __asm__("endFrameEarly");
+void kgflResumeFrame(CtrRenderer* r, const CtrSuspendedFrame* f) __asm__("resumeFrame");
+
+// Inline (rev 2c): the tile lookups' wraps below test this on every draw. As a call it cost the n3DS 0.07-0.23 ms of
+// draw a frame in every scene (knightgpu-fc2-r1 rows, 11-02), and kfinal 2 frames in its window.
+static inline __attribute__((always_inline)) bool kgflOn(void) {
+    return kgfl.count != 0 && !kgfl.busy;
+}
+
+// The listed copies still allocated, their bytes; the others leave the list. Reads only the allocator's list, never the
+// renderer, which may be gone (a chapter's renderer frees its copies when it goes, and nothing allocates VRAM
+// without coming here first).
+static void KGFC2_LATE kgflBounds(void) {
+    kgfl.lo = nullptr;
+    kgfl.hi = nullptr;
+    for (uint32_t i = 0; kgfl.count > i; i++) {
+        if (kgfl.lo == nullptr || kgfl.lo > kgfl.tile[i]) kgfl.lo = kgfl.tile[i];
+        if (kgfl.hi == nullptr || kgfl.tile[i] > kgfl.hi) kgfl.hi = kgfl.tile[i];
+    }
+}
+
+static uint32_t KGFC2_LATE kgflLive(void) {
+    int32_t n = __real_CtrMemory_vramBlocks(kgflSeen, KGFC2_SEEN);
+    uint32_t kept = 0, bytes = 0;
+    for (uint32_t i = 0; kgfl.count > i; i++) {
+        uint32_t size = 0;
+        for (int32_t j = 0; n > j && size == 0; j++) {
+            if (kgflSeen[j].addr == kgfl.addr[i]) size = kgflSeen[j].size;
+        }
+        if (size == 0) continue;
+        const CtrTileMirror* m = (const CtrTileMirror*) (const void*) kgfl.tile[i]->mirror;
+        if (m == nullptr || (uintptr_t) m->tex.data != kgfl.addr[i]) continue;
+        kgfl.addr[kept] = kgfl.addr[i];
+        kgfl.tile[kept] = kgfl.tile[i];
+        kept++;
+        bytes += size;
+    }
+    kgfl.count = kept;
+    kgflBounds();
+    return bytes;
+}
+
+// The blocks in b that are not listed copies, in order; their count.
+static int32_t KGFC2_LATE kgflHide(CtrVramBlock* b, int32_t n) {
+    if (!kgflOn() || 0 > n) return n;
+    int32_t k = 0;
+    for (int32_t i = 0; n > i; i++) {
+        bool fc = false;
+        for (uint32_t j = 0; kgfl.count > j && !fc; j++) fc = b[i].addr == kgfl.addr[j];
+        if (!fc) b[k++] = b[i];
+    }
+    return k;
+}
+
+// Whether a listed copy was drawn from in the current frame.
+static bool KGFC2_LATE kgflDrawn(CtrRenderer* r) {
+    bool drawn = false;
+    for (uint32_t i = 0; kgfl.count > i; i++) drawn = drawn || kgfl.tile[i]->lastUsedFrame == r->textures.frame;
+    return drawn;
+}
+
+// Every listed copy given up (dropMirror's body), once the GPU has run everything handed to it, so the frees are
+// not held back and the VRAM is free at once. A copy not drawn from in this frame may still have its GX copy queued
+// and not handed over: cancelled, as dropMirror does.
+static void KGFC2_LATE kgflDrop(CtrRenderer* r, const char* why) {
+    CtrTextureCache* cache = &r->textures;
+    while (CtrGpu_busy()) svcSleepThread(100 * 1000);
+    uint32_t bytes = 0;
+    for (uint32_t i = 0; kgfl.count > i; i++) {
+        CtrTile* tile = kgfl.tile[i];
+        CtrTileMirror* m = (CtrTileMirror*) tile->mirror;
+        if (m == nullptr || (uintptr_t) m->tex.data != kgfl.addr[i]) continue;
+        if (tile->lastUsedFrame != cache->frame) CtrGpu_cancelCopy(m->copy, tile->tex.data, m->tex.data);
+        vramFree(m->tex.data);
+        m->tex.data = tile->tex.data;
+        m->tile = nullptr;
+        m->dead = true;
+        cache->mirrorBytes -= m->tex.size;
+        bytes += m->tex.size;
+        tile->mirror = nullptr;
+    }
+    kgfl.count = 0;
+    kgfl.want = false;
+    kgfl.gaveUp++;
+    kgfc.stopped = true;
+    logInfo(kgflText, (unsigned) (bytes / 1024u), why);
+}
+
+// Before any VRAM allocation or block move but FC's own: true if it must wait (refused, see above).
+bool kgfcBeforeVram(void) KGFC2_LATE;
+bool kgfcBeforeVram(void) {
+    if (!kgflOn() || kgflLive() == 0) return false;
+    CtrRenderer* r = (CtrRenderer*) kgfc.r;
+    if (r->inFrame && kgflDrawn(r)) {
+        kgfl.want = true;
+        if (8u > kgfl.refused++) logInfo(kgflRefusedText);
+        return true;
+    }
+    kgfl.busy = true;
+    kgflDrop(r, kgflWhyRequest);
+    kgfl.busy = false;
+    return false;
+}
+
+// From kgYieldMirrors (a surface's request, initVramTarget): FC's copies first, ending the frame so far if it drew
+// from them (as yieldMirrors does); true if there were any (the request is then tried again).
+bool kgfcGiveUpCopies(CtrRenderer* r) KGFC2_LATE;
+bool kgfcGiveUpCopies(CtrRenderer* r) {
+    if (!kgflOn() || kgflLive() == 0) return false;
+    kgfl.busy = true;
+    CtrSuspendedFrame frame;
+    bool suspended = r->inFrame && kgflDrawn(r);
+    if (suspended) {
+        kgflFlushBatch(r);
+        kgflEndFrameEarly(r, &frame);
+    }
+    kgflDrop(r, suspended ? kgflWhySurfaceRun : kgflWhySurface);
+    if (suspended) kgflResumeFrame(r, &frame);
+    kgfl.busy = false;
+    return true;
+}
+
+// At a frame's start: a request refused in the frame before gives them up first.
+static void KGFC2_LATE kgflFrameStart(CtrRenderer* r) {
+    if (!kgfl.want) return;
+    if (kgflOn() && kgflLive() != 0) kgflDrop(r, kgflWhyWaited);
+    kgfl.want = false;
+}
+
+// Whether the tile has one of FC's copies.
+static bool KGFC2_LATE kgflHas(const CtrTile* tile) {
+    const CtrTileMirror* m = (const CtrTileMirror*) (const void*) tile->mirror;
+    if (m == nullptr) return false;
+    for (uint32_t j = 0; kgfl.count > j; j++) {
+        if (kgfl.tile[j] == tile && (uintptr_t) m->tex.data == kgfl.addr[j]) return true;
+    }
+    return false;
+}
+
+// mirrorHotTiles' list (CtrTextures_takeHot's wrap, before mirrorHotTiles looks at it): the first tile it would try
+// without FC's copies decides. One of FC's tiles that fits: FC's copies go, and it is copied as without them. One that
+// does not fit: the list ends before it, as mirrorHotTiles stops there without them (it skips tiles with a copy). Any
+// other: the list stays, and a copy's allocation gives FC's up first. The new count.
+uint32_t kgfcHot(CtrRenderer* r, CtrTile** out, uint32_t count) KGFC2_LATE;
+uint32_t kgfcHot(CtrRenderer* r, CtrTile** out, uint32_t count) {
+    if (!kgflOn() || !r->mayMirror || 0 < (int32_t) (r->mirror.pauseUntil - r->frame)) return count;
+    uint32_t fcBytes = kgflLive();
+    if (fcBytes == 0) return count;
+    CtrTextureCache* cache = &r->textures;
+    // mirrorHotTiles starts the room's count over after taking the list.
+    uint32_t extra = r->mirror.roomFrame == cache->roomStartFrame ? r->mirror.extra : 0u;
+    uint32_t reserve = MIRROR_RESERVE + extra + (r->shrink.ready ? 0u : SHRINK_VRAM_BYTES + SHRINK_VRAM_MARGIN);
+    uint32_t free = __real_CtrMemory_vramFreeNow() + fcBytes;
+    for (uint32_t i = 0; count > i; i++) {
+        CtrTile* tile = out[i];
+        bool fc = kgflHas(tile);
+        if (!tile->valid || (tile->mirror != nullptr && !fc)) continue;
+        if (!fc) return count;
+        uint32_t size = tile->tex.size;
+        if (size > MIRROR_COPY_BYTES || reserve + size > free) return i;
+        kgfl.busy = true;
+        kgflDrop(r, kgflWhyHot);
+        kgfl.busy = false;
+        return count;
+    }
+    return count;
+}
+
+#if defined(CTRPORT_KGFC2_HOT)
+static CtrTile* kgflHotBuf[CTR_HOT_MAX] __attribute__((section(".bss.knightgpu_fc2_late")));
+// Whether the range's tiles can hold a listed one (a page's tiles are one array, in the range's order).
+#define KGFL_NEAR(page, tx0, ty0, tx1, ty1)                                                                     \
+    ((page)->tiles != nullptr && &(page)->tiles[(ty1) * (page)->tilesX + (tx1)] >= kgfl.lo &&                     \
+     kgfl.hi >= &(page)->tiles[(ty0) * (page)->tilesX + (tx0)])
+static CtrTile* kgflFound[KGFC2_LIST] __attribute__((section(".bss.knightgpu_fc2_late")));
+void __real_CtrTextures_ensureTilesBut(CtrTextureCache* cache, CtrPage* page, int32_t tx0, int32_t ty0, int32_t tx1, int32_t ty1,
+                                       uint64_t drawnElsewise);
+void __real_CtrTextures_ensureTiles(CtrTextureCache* cache, CtrPage* page, int32_t tx0, int32_t ty0, int32_t tx1, int32_t ty1);
+
+// CtrTextures_ensureTilesBut with FC's tiles put in the hot list where it puts them without their copies: drawn in the
+// frame before and first drawn in this one now, in the range's order (the page's), up to the list's end.
+static void KGFC2_LATE kgflEnsure(CtrTextureCache* cache, CtrPage* page, int32_t tx0, int32_t ty0, int32_t tx1, int32_t ty1,
+                                 uint64_t but) {
+    uint32_t n = 0;
+    int32_t w = page->tilesX;
+    if (page->tiles != nullptr && tx1 >= tx0 && ty1 >= ty0) {
+        const CtrTile* first = &page->tiles[ty0 * w + tx0];
+        const CtrTile* last = &page->tiles[ty1 * w + tx1];
+        for (uint32_t j = 0; kgfl.count > j; j++) {
+            CtrTile* tile = kgfl.tile[j];
+            if (first > tile || tile > last) continue;
+            int32_t at = (int32_t) (tile - page->tiles);
+            int32_t tx = at % w, ty = at / w;
+            if (tx0 > tx || tx > tx1) continue;
+            uint32_t k = (uint32_t) ((ty - ty0) * (tx1 - tx0 + 1) + (tx - tx0));
+            if (64u > k && (but >> k & 1u) != 0) continue;
+            if (tile->lastUsedFrame + 1 != cache->frame || !tile->valid || !kgflHas(tile)) continue;
+            uint32_t i = n++;
+            for (; i > 0 && kgflFound[i - 1] > tile; i--) kgflFound[i] = kgflFound[i - 1];
+            kgflFound[i] = tile;
+        }
+    }
+    uint32_t before = cache->hotCount;
+    __real_CtrTextures_ensureTilesBut(cache, page, tx0, ty0, tx1, ty1, but);
+    if (n == 0 || before >= CTR_HOT_MAX) return;
+    uint32_t after = cache->hotCount, a = before, f = 0, k = 0;
+    while (CTR_HOT_MAX - before > k && (after > a || n > f)) {
+        if (n > f && (a >= after || cache->hot[a] > kgflFound[f])) kgflHotBuf[k++] = kgflFound[f++];
+        else kgflHotBuf[k++] = cache->hot[a++];
+    }
+    memcpy(&cache->hot[before], kgflHotBuf, k * sizeof(CtrTile*));
+    cache->hotCount = before + k;
+}
+
+// The listed tiles' path, out of line (rev 2c), reached from the wraps below by their assembler names.
+static void KGFC2_LATE kgflNearBut(CtrTextureCache* cache, CtrPage* page, int32_t tx0, int32_t ty0, int32_t tx1, int32_t ty1,
+                                   uint64_t drawnElsewise) __asm__("kgfcNearBut") __attribute__((used));
+static void kgflNearBut(CtrTextureCache* cache, CtrPage* page, int32_t tx0, int32_t ty0, int32_t tx1, int32_t ty1,
+                        uint64_t drawnElsewise) {
+    if (!KGFL_NEAR(page, tx0, ty0, tx1, ty1)) {
+        __real_CtrTextures_ensureTilesBut(cache, page, tx0, ty0, tx1, ty1, drawnElsewise);
+        return;
+    }
+    kgflEnsure(cache, page, tx0, ty0, tx1, ty1, drawnElsewise);
+}
+
+static void KGFC2_LATE kgflNear(CtrTextureCache* cache, CtrPage* page, int32_t tx0, int32_t ty0, int32_t tx1, int32_t ty1)
+    __asm__("kgfcNear") __attribute__((used));
+static void kgflNear(CtrTextureCache* cache, CtrPage* page, int32_t tx0, int32_t ty0, int32_t tx1, int32_t ty1) {
+    if (!KGFL_NEAR(page, tx0, ty0, tx1, ty1)) {
+        __real_CtrTextures_ensureTiles(cache, page, tx0, ty0, tx1, ty1);
+        return;
+    }
+    kgflEnsure(cache, page, tx0, ty0, tx1, ty1, 0);
+}
+
+// The wraps themselves run on every tile lookup of every draw, so they are in assembly: the usual case (no copies
+// listed, or a give-up under way: !kgflOn()) is two loads and a branch straight to the real function, with the
+// arguments, the stack and every register untouched (for the same C, GCC saved 7-9 registers and copied the stack
+// arguments). Otherwise kgflNear / kgflNearBut, with everything as passed. ip is the only register used (AAPCS: free
+// at a call).
+#define KGFL_WRAP(wrap, real, near)                                                                                     \
+    __asm__(".pushsection .text.knightgpu_fc_late_fc2,\"ax\",%progbits\n"                                                \
+            ".global " #wrap "\n.type " #wrap ", %function\n.arm\n.align 2\n" #wrap ":\n"                                  \
+            "  ldr ip, 1f\n  ldr ip, [ip, #512]\n  cmp ip, #0\n  beq " #real "\n"                                          \
+            "  ldr ip, 1f\n  ldrb ip, [ip, #525]\n  cmp ip, #0\n  bne " #real "\n  b " #near "\n"                           \
+            "1: .word kgfcList\n.size " #wrap ", . - " #wrap "\n.popsection\n")
+KGFL_WRAP(__wrap_CtrTextures_ensureTilesBut, __real_CtrTextures_ensureTilesBut, kgfcNearBut);
+KGFL_WRAP(__wrap_CtrTextures_ensureTiles, __real_CtrTextures_ensureTiles, kgfcNear);
+#endif
+
+// The textures' destroy (contention's wrap): their tiles go, and with them the list.
+void kgfcForget(void) KGFC2_LATE;
+void kgfcForget(void) {
+    kgfl.count = 0;
+    kgfl.want = false;
+}
+
+int32_t __wrap_CtrMemory_vramBlocks(CtrVramBlock* out, int32_t max) KGFC2_LATE;
+int32_t __wrap_CtrMemory_vramBlocks(CtrVramBlock* out, int32_t max) {
+    return kgflHide(out, __real_CtrMemory_vramBlocks(out, max));
+}
+
+int32_t __wrap_CtrMemory_vramTaken(CtrVramBlock* out, int32_t max) KGFC2_LATE;
+int32_t __wrap_CtrMemory_vramTaken(CtrVramBlock* out, int32_t max) {
+    return kgflHide(out, __real_CtrMemory_vramTaken(out, max));
+}
+
+uint32_t __wrap_CtrMemory_vramFreeNow(void) KGFC2_LATE;
+uint32_t __wrap_CtrMemory_vramFreeNow(void) {
+    uint32_t free = __real_CtrMemory_vramFreeNow();
+    return kgflOn() ? free + kgflLive() : free;
+}
+
+void* __wrap_CtrMemory_vramMoveTo(void* old, uintptr_t to) KGFC2_LATE;
+void* __wrap_CtrMemory_vramMoveTo(void* old, uintptr_t to) {
+    return kgfcBeforeVram() ? nullptr : __real_CtrMemory_vramMoveTo(old, to);
+}
+
+// The chains' first links (ctr_wrap_chain.h): FC rev 2, then contention or vramtouch as before.
+uint32_t CtrTextures_chainContentionTakeHot(CtrTextureCache* cache, CtrTile** out, uint32_t max);
+void* CtrMemory_chainContentionAllocNow(size_t size);
+void CtrTextures_chainContentionDestroy(CtrTextureCache* cache);
+void* CtrMemory_chainTouchAllocOnce(size_t size);
+void* CtrMemory_chainTouchAllocAtOnce(size_t size, vramAllocPos pos);
+void* CtrMemory_chainTouchMemAlignOnce(size_t size, size_t alignment);
+void* CtrMemory_chainTouchMemAlignAtOnce(size_t size, size_t alignment, vramAllocPos pos);
+
+uint32_t __wrap_CtrTextures_takeHot(CtrTextureCache* cache, CtrTile** out, uint32_t max) KGFC2_LATE;
+uint32_t __wrap_CtrTextures_takeHot(CtrTextureCache* cache, CtrTile** out, uint32_t max) {
+    uint32_t count = CtrTextures_chainContentionTakeHot(cache, out, max);
+    return kgfcHot((CtrRenderer*) (void*) ((char*) cache - offsetof(CtrRenderer, textures)), out, count);
+}
+
+void* __wrap_CtrMemory_vramAllocNow(size_t size) KGFC2_LATE;
+void* __wrap_CtrMemory_vramAllocNow(size_t size) {
+    return kgfcBeforeVram() ? nullptr : CtrMemory_chainContentionAllocNow(size);
+}
+
+void __wrap_CtrTextures_destroy(CtrTextureCache* cache) KGFC2_LATE;
+void __wrap_CtrTextures_destroy(CtrTextureCache* cache) {
+    kgfcForget();
+    CtrTextures_chainContentionDestroy(cache);
+}
+
+void* __wrap_CtrMemory_vramAllocOnce(size_t size) KGFC2_LATE;
+void* __wrap_CtrMemory_vramAllocOnce(size_t size) {
+    return kgfcBeforeVram() ? nullptr : CtrMemory_chainTouchAllocOnce(size);
+}
+
+void* __wrap_CtrMemory_vramAllocAtOnce(size_t size, vramAllocPos pos) KGFC2_LATE;
+void* __wrap_CtrMemory_vramAllocAtOnce(size_t size, vramAllocPos pos) {
+    return kgfcBeforeVram() ? nullptr : CtrMemory_chainTouchAllocAtOnce(size, pos);
+}
+
+// A section each, so that --gc-sections drops them where nothing calls vramMemAlign (as vramtouch's own wrappers are
+// dropped): kept, they would link the real entries and libctru's vramMemAlign into .text and move what follows.
+#define KGFC_LATE_APART(name) __attribute__((noinline, optimize("Os"), section(".text.knightgpu_fc_late_" #name)))
+void* __wrap_CtrMemory_vramMemAlignOnce(size_t size, size_t alignment) KGFC_LATE_APART(memAlign);
+void* __wrap_CtrMemory_vramMemAlignOnce(size_t size, size_t alignment) {
+    return kgfcBeforeVram() ? nullptr : CtrMemory_chainTouchMemAlignOnce(size, alignment);
+}
+
+void* __wrap_CtrMemory_vramMemAlignAtOnce(size_t size, size_t alignment, vramAllocPos pos) KGFC_LATE_APART(memAlignAt);
+void* __wrap_CtrMemory_vramMemAlignAtOnce(size_t size, size_t alignment, vramAllocPos pos) {
+    return kgfcBeforeVram() ? nullptr : CtrMemory_chainTouchMemAlignAtOnce(size, alignment, pos);
+}
+#endif
+
+void kgfcBeginFrame(Renderer* renderer) KGFC_LATE;
+__asm__(".set kgfcBeginCall, kgfcBeginFrame");
+void kgfcBeginFrame(Renderer* renderer) {
+    CtrRenderer* r = (CtrRenderer*) renderer;
+    CtrTextureCache* cache = &r->textures;
+    // mirrorHotTiles takes the list (CtrTextures_takeHot) and leaves its entries where they are.
+    uint32_t count = cache->hotCount < CTR_HOT_MAX ? cache->hotCount : CTR_HOT_MAX;
+    uint32_t made = r->mirror.made;
+    // A renderer made since the last frame (each DELTARUNE chapter makes its own; the address may repeat, the frame
+    // number starts over) starts as a new room does: two caches' first rooms can have the same start frame (c26rev
+    // r89 F1), and a stop carried over would keep this one from making copies.
+    bool fresh = kgfc.r != (const void*) r || kgfc.frame >= r->frame;
+    kgfc.r = r;
+    kgfc.frame = r->frame;
+#if defined(CTRPORT_KGFC2_ON)
+    if (fresh) {
+        kgfl.count = 0;
+        kgfl.want = false;
+    } else {
+        kgflFrameStart(r);
+    }
+#endif
+    __real_CtrRenderer_beginFrame(renderer);
+    uint32_t keep = MIRROR_RESERVE > r->mirror.extra ? MIRROR_RESERVE : r->mirror.extra;
+    if (fresh || kgfc.roomFrame != cache->roomStartFrame) {
+        kgfc.roomFrame = cache->roomStartFrame;
+        kgfc.made = 0;
+        kgfc.stopped = false;
+    }
+    if (kgfc.made != 0 && !kgfc.stopped && kgfc.yields != r->mirror.yields) {
+        kgfc.stopped = true;
+#ifdef CTRPORT_RENDER_TIMING
+        logInfo(kgfcText, (unsigned) kgfc.made, (double) keep / 1024.0, (double) cache->mirrorBytes / 1024.0,
+                (double) CtrMemory_vramFreeNow() / 1024.0, ", given up: no more in this room");
+#endif
+    }
+    // retryFrame is the retry's deadline itself (r->frame + SHRINK_RETRY_FRAMES when set).
+    bool stripWanted =
+        r->shrink.ready || (r->shrink.retryFrame != 0 && 0 < (int32_t) (r->shrink.retryFrame - r->frame));
+    if (kgfc.stopped || stripWanted || !r->mayMirror || r->mirror.made != made || 0 < (int32_t) (r->mirror.pauseUntil - r->frame)) {
+        return;
+    }
+    uint32_t copied = 0;
+    for (uint32_t i = 0; count > i; i++) {
+        CtrTile* tile = cache->hot[i];
+        if (!tile->valid || tile->mirror != nullptr) continue;
+        uint32_t size = tile->tex.size;
+        if (copied + size > MIRROR_COPY_BYTES) break;
+#if defined(CTRPORT_KGFC2_ON)
+        if (kgfl.count == KGFC2_LIST || kgfl.want) break; // the list is full, or a request waits
+#endif
+        // reserveGxCommands(r, 1)'s accounting, done here: calling that static function from this one changes the
+        // order GCC gives knightgpu A's late functions (check_layout). A nearly full GX queue leaves the copy to a
+        // later frame instead of running the queue mid-frame.
+        bool counted = r->inFrame;
+        if (counted && r->gxFrame != r->frame) {
+            r->gxFrame = r->frame;
+            r->gxCommands = 0;
+        }
+        if (counted && CtrGpu_queueCapacity() < r->gxCommands + 1u + GX_QUEUE_RESERVE) break;
+        void* vram = CtrMemory_vramAllocFit(size, keep);
+        if (vram == nullptr) break;
+        if (!CtrTextures_addMirror(cache, tile, vram)) {
+            vramFree(vram);
+            break;
+        }
+        r->clearedTarget = nullptr;
+        if (counted) r->gxCommands++;
+        GX_TextureCopy((u32*) tile->tex.data, 0, (u32*) vram, 0, size, GX_TRANSFER_RAW_COPY(1));
+        CtrTextures_noteMirrorCopy(tile, CtrGpu_lastQueued());
+#if defined(CTRPORT_KGFC2_ON)
+        {
+            uint32_t k = 0;
+            for (uint32_t j = 0; kgfl.count > j; j++) {
+                if (kgfl.addr[j] == (uintptr_t) vram) continue;
+                kgfl.addr[k] = kgfl.addr[j];
+                kgfl.tile[k] = kgfl.tile[j];
+                k++;
+            }
+            kgfl.addr[k] = (uintptr_t) vram;
+            kgfl.tile[k] = tile;
+            kgfl.count = k + 1;
+            kgflBounds();
+        }
+#endif
+        copied += size;
+        r->mirror.made++;
+        kgfc.yields = r->mirror.yields;
+#ifdef CTRPORT_RENDER_TIMING
+        if ((kgfc.made & 15u) == 0) {
+            logInfo(kgfcText, (unsigned) kgfc.made + 1u, (double) keep / 1024.0, (double) cache->mirrorBytes / 1024.0,
+                    (double) CtrMemory_vramFreeNow() / 1024.0, "");
+        }
+#endif
+        kgfc.made++;
+    }
+}
 #endif

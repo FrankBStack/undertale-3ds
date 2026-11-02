@@ -325,6 +325,30 @@ UTSFX_TEXT static void usPreload(Runner* runner) {
     }
 }
 
+#if defined(CTRPORT_TARGET_O3DS)
+// omegaflowey L2 (UNDERTALE Old): the plan's stream scene for the room (sub UTSFX_STREAM_SUB, build_sfxplan.py's
+// --streams, from the sound record's "streams": our logs' big compressed sounds that the room decoded into the sound
+// cache) has those sounds stream for the room from its change on (CtrAudioSystem_streamPlan, flowhitch's marks), so
+// they take no linear cache copy and no background decode, and keepLinearFloor need not shed the room's other sounds
+// for them. Older runtimes and UNDERTALE New never ask for that sub, so the scene changes nothing there. Last in late
+// text (.text.omegaflowey_late), so no earlier late function moves.
+#define UTSFX_STREAM_SUB 0xFFFEu
+uint32_t CtrAudioSystem_streamPlan(const uint8_t* entries, uint32_t count);
+static const char usStreams[] __attribute__((aligned(4), section(".rodata.omegaflowey_in_text"))) =
+    "Sound plan: %u of %u stream\n";
+__attribute__((noinline, optimize("Os"), section(".text.omegaflowey_late"))) static void usPreloadOld(Runner* runner) {
+    usPreload(runner);
+    uint32_t count, first; // UtSfx_scene sets both, and sub, on every path
+    int32_t sub;
+    if (us.plan == NULL) return;
+    const uint8_t* entries = UtSfx_scene(us.plan, (uint32_t) runner->pendingRoom, (int32_t) UTSFX_STREAM_SUB, &count, &sub, &first);
+    if (sub == (int32_t) UTSFX_STREAM_SUB) logInfo(usStreams, (unsigned) CtrAudioSystem_streamPlan(entries, count), (unsigned) count);
+}
+#define UTSFX_PRELOAD usPreloadOld
+#else
+#define UTSFX_PRELOAD usPreload
+#endif
+#line 328
 void __real_CtrRenderer_skipPresent(Renderer* renderer);
 void __wrap_CtrRenderer_skipPresent(Renderer* renderer);
 
@@ -332,7 +356,7 @@ void __wrap_CtrRenderer_skipPresent(Renderer* renderer);
 // room's events (CtrBench_handleRoomChange).
 UTSFX_TEXT void __wrap_CtrRenderer_skipPresent(Renderer* renderer) {
     __real_CtrRenderer_skipPresent(renderer);
-    if (renderer->runner != NULL) usPreload(renderer->runner);
+    if (renderer->runner != NULL) UTSFX_PRELOAD(renderer->runner);
 }
 
 #endif // UTSFX_HOST_TEST

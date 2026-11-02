@@ -61,11 +61,20 @@
 #                              [flowdiag] (UNDERTALE: every draw-time tile load and floor guard decision with free
 #                              linear and heap memory and plan membership; source/z_flowdiag.c; flowstream round 3;
 #                              separate build directory, never a release)
+#                              [titandiag] (per-frame Step/Draw/other split and the costliest events of slow bench frames,
+#                              in log.txt as [td] lines; source/z_titandiag.c; separate build directory, never a release)
 #                              [exittrail] (the exit's steps after the last log line, each in labboot.txt with its thread;
 #                              source/z_exittrail.c; o2DS kernel panic diagnosis, separate build directory, never a release)
 #                              [nowriterfront|writerfront-fallback|writerfront-count] (UNDERTALE Old: the dialogue writer's
 #                              hand front off, every Draw through its fallback, or front/fallback counts in the log;
 #                              source/z_writerfront.c; separate build directories, test builds only)
+#                              [towerprof] (tower draws' CPU per frame as [tprof] lines; source/vine_new_retain.inc;
+#                              test builds only, change flowerhw)
+#                              [towerforce1|towerforce2] (tower strips without coverage, and with every cut 7d draw
+#                              refused as well; same pictures; test builds only, change flowerhw)
+#                              [nol2] [ppforce] (DELTARUNE New: flowerhw L2 off (the control), and the phase plan's
+#                              eviction forced, with L2's counts as "Phase plan L2:" lines; source/z_phaseplan.c;
+#                              separate build directories, test builds only, change flowerhw)
 #                              [typed|typed=off|typed=all|typed=<list>] [typed-stats] [typed-stress=<n>]
 #                              [late-numeric=<entry>|late-numeric=off] (UNDERTALE lava copy on by default)
 #
@@ -198,16 +207,21 @@ pacer_csv_diag=OFF
 record_fail_after= # empty: no allocation injection
 spikerec=OFF
 freewins=OFF
-uttc_mode=     # uttc       uthunt T1, test words): empty, OFF (uttc=off) or FORCE (uttc-force)
-dprank_mode=   # dprank       uthunt, test words): empty, OFF (dprank=off: always the scan) or DIAG (dprank-diag)
+uttc_mode=     # uttc (change uthunt T1, test words): empty, OFF (uttc=off) or FORCE (uttc-force)
+dprank_mode=   # dprank (change uthunt, test words): empty, OFF (dprank=off: always the scan) or DIAG (dprank-diag)
 testpage=OFF   # testpage: one more 4 KiB page of UNDERTALE late code (measurement builds only, never a release)
 bfprobe=OFF
 frametrace=OFF
 asgprobe=OFF
 flowdiag=OFF
+titandiag=OFF
 exittrail=OFF
 writerfront=ON
 repack_test= # test builds: a folder of <data.win folder>/ repack files for the RomFS (ctr_repack.inc)
+towerprof=OFF
+towerforce=0
+ppl2=ON
+ppforce=OFF
 for arg in "$@"; do
     case "$arg" in
         undertale|deltarune) game=$arg ;;
@@ -290,10 +304,16 @@ for arg in "$@"; do
         frametrace) frametrace=ON ;;
         asgprobe) asgprobe=ON ;;
         flowdiag) flowdiag=ON ;;
+        titandiag) titandiag=ON ;;
         exittrail) exittrail=ON ;;
         nowriterfront) writerfront=OFF ;;
         writerfront-fallback) writerfront=FALLBACK ;;
         writerfront-count) writerfront=COUNT ;;
+        towerprof) towerprof=ON ;;
+        towerforce1) towerforce=1 ;;
+        towerforce2) towerforce=2 ;;
+        nol2) ppl2=OFF ;;
+        ppforce) ppforce=ON ;;
         typed-census) typed_census=ON ;;
         typed-framelog) typed_framelog=ON ;;
         typed) typed=ON ;;
@@ -573,6 +593,9 @@ fi
 if [ "$frametrace" = ON ]; then
     build="$build-frametrace"
 fi
+if [ "$titandiag" = ON ]; then
+    build="$build-titandiag"
+fi
 if [ "$exittrail" = ON ]; then
     build="$build-exittrail"
 fi
@@ -584,6 +607,18 @@ case "$writerfront" in
     FALLBACK) build="$build-writerfront-fallback" ;;
     COUNT) build="$build-writerfront-count" ;;
 esac
+if [ "$towerprof" = ON ]; then
+    build="$build-towerprof"
+fi
+if [ "$towerforce" != 0 ]; then
+    build="$build-towerforce$towerforce"
+fi
+if [ "$ppl2" = OFF ]; then
+    build="$build-nol2"
+fi
+if [ "$ppforce" = ON ]; then
+    build="$build-ppforce"
+fi
 chapters=
 if [ "$aot_mode" = chapters ]; then
     if [ "$game" != deltarune ]; then
@@ -834,7 +869,13 @@ fi
 sfxplan_file=
 if [ "$roomplan" = ON ] && [ "$game" = undertale ] && [ -n "${python:-}" ]; then
     sfx_out="$repo/build/roomplan-$game/$game-sfx.dtp"
-    sfx_args=(--out "$(native_path "$sfx_out")")
+    sfx_args=()
+    # UNDERTALE Old also gets the record's stream scenes (change omegaflowey L2), in a file of its own.
+    if [ "$target" = o3ds ]; then
+        sfx_out="$repo/build/roomplan-$game/$game-sfx-o3ds.dtp"
+        sfx_args=(--streams)
+    fi
+    sfx_args+=(--out "$(native_path "$sfx_out")")
     if [ -n "$data_dir" ]; then sfx_args+=(--data "$(native_path "$data_dir")"); fi
     set +e
     "${python[@]}" -I "$(native_path "$repo/tools/roomplan/build_sfxplan.py")" "${sfx_args[@]}"
@@ -1002,10 +1043,12 @@ cmake -S "$here" -B "$build" -G "Unix Makefiles" \
     -DCTRPORT_PACER_CSV_DIAG="$pacer_csv_diag" \
     -DCTRPORT_ROOMPLAN_FILE="$roomplan_file" -DCTRPORT_SFXPLAN_FILE="$sfxplan_file" -DCTRPORT_PHASEPLAN_FILE="$phaseplan_file" -DCTRPORT_ROOMPLAN_DIR="$roomplan_dir" -DCTRPORT_ROOMPLAN_RECORDER="$roomplan_rec" \
     -DCTRPORT_PHASE_LAYOUT="$phase_layout" \
-    -DCTRPORT_SPIKEREC="$spikerec" -DCTRPORT_FREEWINS="$freewins" \
+    -DCTRPORT_SPIKEREC="$spikerec" -DCTRPORT_TITANDIAG="$titandiag" -DCTRPORT_FREEWINS="$freewins" \
     -DCTRPORT_UTTC_MODE="$uttc_mode" -DCTRPORT_DPRANK_MODE="$dprank_mode" -DCTRPORT_TEST_LATE_PAGE="$testpage" \
     -DCTRPORT_BENCHFIX_PROBE="$bfprobe" -DCTRPORT_FRAMETRACE="$frametrace" -DCTRPORT_ASG_PROBE="$asgprobe" -DCTRPORT_FLOWSTREAM_DIAG="$flowdiag" \
     -DCTRPORT_EXITTRAIL="$exittrail" -DCTRPORT_WRITERFRONT_MODE="$writerfront" \
+    -DCTRPORT_FLOWERHW_TPROF="$towerprof" -DCTRPORT_FLOWERHW_FORCE="$towerforce" \
+    -DCTRPORT_FLOWERHW_L2="$ppl2" -DCTRPORT_FLOWERHW_PPFORCE="$ppforce" \
     "${input_cmake[@]}" \
     -DCTRPORT_TYPED_CENSUS="$typed_census" -DCTRPORT_TYPED_FRAMELOG="$typed_framelog" \
     -DCTRPORT_TYPED_AOT="$typed" -DCTRPORT_TYPED_STATS="$typed_stats" -DCTRPORT_TYPED_STRESS="$typed_stress" \

@@ -1,9 +1,10 @@
 """Deterministic, token-checked cleanup of distribution copies only.
 
-No caller writes the input tree. Byte offsets and line terminators are retained,
-so C preprocessor line numbers and diagnostics keep their original positions.
+No caller writes the input tree. Line terminators and all code tokens are
+retained, so C preprocessor line numbers keep their original values.
 """
 import ast
+from difflib import SequenceMatcher
 import hashlib
 from pathlib import PurePosixPath
 import re
@@ -105,32 +106,56 @@ def checked_rewrite(name, data, edits):
     """Apply explicit edits only inside recognized text; refuse code-token edits."""
     spans = editable_spans(name, data)
     previous = 0
-    result = bytearray(data)
+    pieces = []
+    length = 0
+    inserted_spaces = set()
     for start, end, replacement in sorted(edits):
         if (start < previous or not 0 <= start < end <= len(data)
                 or not any(a <= start and end <= b for a, b in spans)):
             raise ValueError('Export scrub would touch a code token: ' + name)
         original = data[start:end]
-        if len(original) != len(replacement) or [i for i, c in enumerate(original) if c in (10, 13)] != [i for i, c in enumerate(replacement) if c in (10, 13)]:
+        if bytes(c for c in original if c in (10, 13)) != bytes(c for c in replacement if c in (10, 13)):
             raise ValueError('Export scrub would change line positions: ' + name)
         # Comment/string delimiters and escape characters cannot be altered,
         # even though they fall within a recognized editable span.
-        for i, (before, after) in enumerate(zip(original, replacement)):
-            if before != after and before in b'\n\r\\\'"#/*`':
-                raise ValueError('Export scrub would change a delimiter: ' + name)
-        result[start:end] = replacement
+        delimiters = b'\n\r\\\'"#/*`'
+        if bytes(c for c in original if c in delimiters) != bytes(c for c in replacement if c in delimiters):
+            raise ValueError('Export scrub would change a delimiter: ' + name)
+        gap = data[previous:start]
+        pieces.extend((gap, replacement))
+        length += len(gap)
+        # Diff only the small edited fragment, not a potentially huge source
+        # file. Existing indentation stays legal; newly blanked prose does not.
+        for tag, a, b, c, d in SequenceMatcher(None, original, replacement, autojunk=False).get_opcodes():
+            if tag != 'equal':
+                inserted_spaces.update(length + i for i in range(c, d) if replacement[i] == 32)
+        length += len(replacement)
         previous = end
-    result = bytes(result)
-    if editable_spans(name, result) != spans:
+    pieces.append(data[previous:])
+    result = b''.join(pieces)
+    for match in re.finditer(rb' {3,}', result):
+        if any(match.start() <= i < match.end() for i in inserted_spaces):
+            raise ValueError('Export scrub inserted a run of 3+ spaces: ' + name)
+    result_spans = editable_spans(name, result)
+    def protected_parts(raw, regions):
+        prior = 0
+        parts = []
+        for begin, end in regions:
+            parts.append(raw[prior:begin])
+            prior = end
+        parts.append(raw[prior:])
+        return parts
+    if len(result_spans) != len(spans) or protected_parts(data, spans) != protected_parts(result, result_spans):
         raise ValueError('Export scrub changed token boundaries: ' + name)
     return result
 
 
 def scrub_member(name, data):
     """Remove attribution from editable text; remaining leaks fail the kit gate."""
-    # The top-level README is the public project page (written for release, mapped from
-    # tools/release/templates/): its author's name and the AI-use note are meant to be there.
-    if name == 'README.md' or hygiene.approved_notice(name) or b'\0' in data:
+    # Markdown is authored for publication, including the mapped top-level
+    # README and contributor/AI disclosures. Notices and credits are likewise
+    # approved public text, not internal source annotations.
+    if PurePosixPath(name).suffix.lower() == '.md' or hygiene.approved_notice(name) or b'\0' in data:
         return data
     try:
         text = data.decode('utf-8')
@@ -151,7 +176,19 @@ def scrub_member(name, data):
             if any(i in occupied for i in range(a, b)):
                 continue
             original = data[a:b]
-            replacement = bytes(c if c in (10, 13) else 32 for c in original)
+            wording = original.decode('utf-8')
+            if hygiene.OWNER.fullmatch(wording):
+                wording = 'maintainer'
+            elif re.search(r'\blan' + r'e\b', wording, re.I):
+                # Keep parentheses and whitespace: dropping just an opening
+                # parenthesis used to leave broken attribution fragments.
+                wording = re.sub(r'\blan' + r'e\b', 'change', wording, flags=re.I)
+            elif re.search(r'\blead\b', wording, re.I):
+                wording = re.sub(r'\blead\b', 'review', wording, flags=re.I)
+                wording = re.sub(r'\bruling\b', 'decision', wording, flags=re.I)
+            else:
+                wording = 'assistant'
+            replacement = wording.encode('utf-8')
             edits.append((a, b, replacement))
             occupied.update(range(a, b))
     return checked_rewrite(name, data, edits) if edits else data

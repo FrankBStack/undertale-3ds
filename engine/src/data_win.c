@@ -831,6 +831,13 @@ static void parseSpriteMessages(BinaryReader* reader, DataWin* dw, Sprite* spr, 
     BinaryReader_seek(reader, savedPos);
 }
 
+// hitbox: collision_gm14.c (a non-precise sprite's stored mask, for GMS 1.4's pair scan). A build without bytecode 16
+// (DELTARUNE's 3DS builds compile collision_gm14_dr.c in its place) skips the masks as before, with the same code.
+#if defined(ENABLE_WAD16)
+void DataWin_sep0Masks(BinaryReader* reader, DataWin* dw, Sprite* spr);
+#else
+#define DataWin_sep0Masks(reader, dw, spr) BinaryReader_skip(reader, bytesPerMask * maskDataCount); spr->masks = nullptr
+#endif
 #line 815
 static void parseSPRT(BinaryReader* reader, DataWin* dw, bool skipLoadingPreciseMasksForNonPreciseSprites) {
     Sprt* s = &dw->sprt;
@@ -961,8 +968,8 @@ static void parseSPRT(BinaryReader* reader, DataWin* dw, bool skipLoadingPrecise
                     }
                 }
             } else {
-                BinaryReader_skip(reader, bytesPerMask * maskDataCount);
-                spr->masks = nullptr;
+                // hitbox: skipped, or for GMS 1.4 kept as UNDERTALE.exe's pair scan uses it (collision_gm14.c).
+                DataWin_sep0Masks(reader, dw, spr);
             }
             // Pad the TOTAL mask data to 4-byte alignment (not per-mask)
             uint32_t totalMaskBytes = bytesPerMask * maskDataCount;

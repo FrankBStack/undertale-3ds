@@ -273,6 +273,22 @@ if(CTRPORT_GAME STREQUAL "undertale")
     list(APPEND ENGINE_SOURCES "${ENGINE_DIR}/src/z_utrect.c")
 endif()
 set_source_files_properties("${ENGINE_DIR}/src/z_utrect.c" PROPERTIES COMPILE_OPTIONS "-Os;-fno-merge-constants")
+# Omega Flowey's vine burst (utburst, change flowend r37): the vine Create's native body and the master's held sound
+# calls, bound by gmlaot.py's UTF_NATIVE. Late code only, last; UNDERTALE only. Its constants unmerged, so they stay
+# with its code in the late text; -Os, as the UNDERTALE late reserve is tight.
+list(REMOVE_ITEM ENGINE_SOURCES "${ENGINE_DIR}/src/z_utburst.c")
+if(CTRPORT_GAME STREQUAL "undertale")
+    list(APPEND ENGINE_SOURCES "${ENGINE_DIR}/src/z_utburst.c")
+endif()
+set_source_files_properties("${ENGINE_DIR}/src/z_utburst.c" PROPERTIES COMPILE_OPTIONS "-Os;-fno-merge-constants")
+# Omega Flowey's ring attack (utring, change flowend r39): the ring boss's Create's native body, bound by gmlaot.py's
+# UTF_NATIVE (for --target o3ds only). Late code only, last; UNDERTALE Old only (UT New's release late text has no
+# room for it, c26rev r94); its constants unmerged and -Os, as utburst.
+list(REMOVE_ITEM ENGINE_SOURCES "${ENGINE_DIR}/src/z_utring.c")
+if(CTRPORT_GAME STREQUAL "undertale" AND CTRPORT_TARGET STREQUAL "o3ds")
+    list(APPEND ENGINE_SOURCES "${ENGINE_DIR}/src/z_utring.c")
+endif()
+set_source_files_properties("${ENGINE_DIR}/src/z_utring.c" PROPERTIES COMPILE_OPTIONS "-Os;-fno-merge-constants")
 # Automatic depth layers' element lists as a deque (depthmove): late code only, last (after z_boardgrid.c);
 # DELTARUNE only (its macros in runner.c are the original code without CTRPORT_DEPTHMOVE). Its strings unmerged.
 list(REMOVE_ITEM ENGINE_SOURCES "${ENGINE_DIR}/src/z_depthmove.c")
@@ -368,7 +384,13 @@ option(CTRPORT_FREEWINS "Main-loop segment timers and off switches (freewins dia
 if(NOT CTRPORT_FREEWINS)
     list(REMOVE_ITEM PLATFORM_SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/source/z_freewins.c")
 endif()
-# The exit trail (credfix, build.sh ... exittrail): o2DS kernel panic diagnosis builds only, never a release.
+# The Titan CPU attribution recorder (change titancpu, build.sh ... titandiag): diagnosis builds only, never a release.
+# Without the word its file is not compiled (its wraps are further down).
+option(CTRPORT_TITANDIAG "Titan CPU recorder: slow bench frames split by phase and by event, as [td] log lines (diagnosis)" OFF)
+if(NOT CTRPORT_TITANDIAG)
+    list(REMOVE_ITEM PLATFORM_SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/source/z_titandiag.c")
+endif()
+# The exit trail (change credfix, build.sh ... exittrail): o2DS kernel panic diagnosis builds only, never a release.
 # Without the word its file is not compiled (its wraps are further down).
 option(CTRPORT_EXITTRAIL "Exit trail: the exit's steps after the last log line, in labboot.txt (diagnosis)" OFF)
 if(NOT CTRPORT_EXITTRAIL)
@@ -391,13 +413,13 @@ if(CTRPORT_GAME STREQUAL "undertale" AND CTRPORT_TARGET STREQUAL "o3ds")
     set_property(SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/source/z_textfront.c" APPEND PROPERTY COMPILE_DEFINITIONS CTRPORT_DODGEFRONT)
     set_property(SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/source/z_textfront.c" APPEND PROPERTY COMPILE_OPTIONS
         "-Os;-fno-tree-switch-conversion;-fno-jump-tables")
-    # textcase       codeclose, lever 1): the dialogue script's switch jumps straight to its case from the builder's
+    # textcase (change codeclose, lever 1): the dialogue script's switch jumps straight to its case from the builder's
     # table (source/z_textcase.c, romfs:/textcase.bin from tools/aot/textcase.py), the prefetchRoom chain's link before
     # dodgefront's (ctr_wrap_chain.h). Late text only.
     set_property(SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/source/z_textcase.c" APPEND PROPERTY COMPILE_DEFINITIONS CTRPORT_DODGEFRONT)
     set_property(SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/source/z_textcase.c" APPEND PROPERTY COMPILE_OPTIONS
         "-Os;-fno-tree-switch-conversion;-fno-jump-tables")
-    # writerfront       freebies): the dialogue writer's Draw as hand code with the generated function as its fallback
+    # writerfront (change freebies): the dialogue writer's Draw as hand code with the generated function as its fallback
     # (source/z_writerfront.c), the prefetchRoom chain's link between textfront's and dodgefront's (ctr_wrap_chain.h)
     # and vm.c's late VM_aotSwapFront. Late text only. build.sh's nowriterfront / writerfront-fallback /
     # writerfront-count words (test builds) leave it out, send every Draw to the fallback, or count.
@@ -421,13 +443,19 @@ if(CTRPORT_GAME STREQUAL "undertale" AND CTRPORT_TARGET STREQUAL "o3ds")
             CTRPORT_DODGEFRONT CTRPORT_WRITERFRONT CTRPORT_TRAILFRONT)
         set_property(SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/source/z_itemfront.c" APPEND PROPERTY COMPILE_OPTIONS
             "-Os;-fno-tree-switch-conversion;-fno-jump-tables")
-        # writerfirst       codeclose, lever 2): wraps writerfront's front so a writer's first Draw takes it too
+        # writerfirst (change codeclose, lever 2): wraps writerfront's front so a writer's first Draw takes it too
         # (source/z_writerfirst.c), the prefetchRoom chain's link between itemfront's and textcase's, with vm.c's late
         # VM_aotBoundFn. Late text only.
         set_property(SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/source/z_writerfirst.c" APPEND PROPERTY COMPILE_DEFINITIONS
             CTRPORT_DODGEFRONT CTRPORT_WRITERFRONT)
         set_property(SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/source/z_writerfirst.c" APPEND PROPERTY COMPILE_OPTIONS
             "-Os;-fno-tree-switch-conversion;-fno-jump-tables")
+        # utburst (change flowend r37b): the vine Create's stop / play scripts' check made at build time (gmlaot.py's
+        # UTF_NATIVE "bound:" operands), proven at run time through vm.c's late VM_aotBoundFn (engine/src/z_utburst.c).
+        set_property(SOURCE "${ENGINE_DIR}/src/z_utburst.c" APPEND PROPERTY COMPILE_DEFINITIONS UTBURST_BOUND)
+        # utring (change flowend r39): the ring parts made without their Create's dispatch, when the part's Create is
+        # the code gmlaot.py checked (UTF_NATIVE "objfn:"), proven at run time through VM_aotBoundFn.
+        set_property(SOURCE "${ENGINE_DIR}/src/z_utring.c" APPEND PROPERTY COMPILE_DEFINITIONS UTRING_BOUND)
         set_property(SOURCE "${ENGINE_DIR}/src/vm.c" "${CMAKE_CURRENT_SOURCE_DIR}/source/z_textfront.c"
             "${CMAKE_CURRENT_SOURCE_DIR}/source/z_writerfront.c" APPEND PROPERTY COMPILE_DEFINITIONS CTRPORT_WRITERFRONT)
         set_property(SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/source/z_writerfront.c" APPEND PROPERTY COMPILE_DEFINITIONS CTRPORT_DODGEFRONT)
@@ -635,6 +663,11 @@ set_target_properties(ctrport PROPERTIES OUTPUT_NAME "${GAME_DIR_NAME}-3ds")
 add_dependencies(ctrport ctrport_build_id)
 # The bench loader no longer references the old data; retain its placeholder and object position explicitly.
 target_link_options(ctrport PRIVATE -Wl,--undefined=bench_scenes_txt)
+# DR New's tower emit finds coverage runs with clz (towerNextRun) and no longer calls libgcc's __ctzdi2. It stays
+# linked so the code after it keeps its addresses: the late text is 4 KiB set-phase sensitive (dec-1031-setphase).
+if(GAME_WAD_DEFINE STREQUAL "ENABLE_WAD17" AND CTRPORT_TARGET STREQUAL "n3ds")
+    target_link_options(ctrport PRIVATE -Wl,--undefined=__ctzdi2)
+endif()
 
 # Late sections and their fixed reserves (late_reserve.ld says why and how features use them). ld only finds 3dsx.ld's
 # sections for that script's INSERTs when the script comes first, and the toolchain's -specs=3dsx.specs names 3dsx.ld
@@ -646,7 +679,13 @@ file(READ "${CTRPORT_LATE_LD_SOURCE}" CTRPORT_LATE_LD_TEXT)
 option(CTRPORT_PROFILE "Compile in the GML script profiler" OFF)
 if(CTRPORT_PROFILE OR CTRPORT_REACH_GATE)
     # Resolve this before ld reads the script: DEFINED with a later --defsym
-    # in 3dsx.specs' link command can still select the Release default.
+    # in 3dsx.specs' link command can still select the Release default. UNDERTALE Old's and DELTARUNE New's releases
+    # already have 0x4000 (below), so their measurement builds keep one page more.
+    if((CTRPORT_GAME STREQUAL "undertale" AND CTRPORT_TARGET STREQUAL "o3ds")
+       OR (CTRPORT_GAME STREQUAL "deltarune" AND CTRPORT_TARGET STREQUAL "n3ds"))
+        string(REPLACE "/* TEST_RODATA_RESERVE */ 0x2000" "0x5000"
+               CTRPORT_LATE_LD_TEXT "${CTRPORT_LATE_LD_TEXT}")
+    endif()
     string(REPLACE "/* TEST_RODATA_RESERVE */ 0x2000" "0x4000"
            CTRPORT_LATE_LD_TEXT "${CTRPORT_LATE_LD_TEXT}")
 endif()
@@ -699,6 +738,15 @@ endif()
 # 3,160 B; knightgpu's cover-cull needs 5,296 B of late text (+240 B late rodata, 4,312 B late bss) beside flowerhw
 # D'+E, the pinwheel and the pacer. Text does not move; only DELTARUNE New's .rodata, .data, .bss and TLS move, by
 # two pages (linear -8 KB).
+# 75zo DR New pages (lead rulings 2026-11-02): DELTARUNE New five more pages, 0x59000, sized once for 75zo and the
+# next stages: titancpu u1 5,024 B and pacer gbot's veneer move 80 B (in), then knightgpu FC2 5,744 B (+ up to 62 B of
+# phase pads), fpsbox DR ~1,576 B, titancpu u2 rev 2 +448 B (u3 0 B), pacer KM rev 3 5,104 B, titan75's climb pre-read
+# 4,096 B (ceiling) and knightgpu kolp ~1,424 B, against 7,735 B left at 75zn: about 4.6 KB spare after all of them.
+# Late rodata keeps its page (2,386 B left; FC2 +294, KM +826 and titan75 +256 leave about 1,010 B). Whole pages, so
+# text and the 4 KiB set phase do not move; only DELTARUNE New's .rodata, .data, .bss and TLS move, by five pages
+# (linear -20 KB).
+# Then one more late-constants page, 0x4000 (lead 2026-11-02): about 950 B would be left after FC2, KM and titan75, with
+# kolp's constants unpriced. Only DELTARUNE New's .data, .bss and TLS move, by one whole page (linear -4 KB).
 # bubblecheck test builds (CTRPORT_BUBBLE_CHECK, never Release): four more pages for the checker, which is late code
 # with the rest of z_smalltext.c. Added ahead of the game's own value below, which then replaces the placeholder.
 if(CTRPORT_BUBBLE_CHECK)
@@ -709,9 +757,9 @@ if(CTRPORT_GAME STREQUAL "deltarune" AND CTRPORT_TARGET STREQUAL "o3ds")
     string(REPLACE "/* LATE_TEXT_RESERVE */ 0x30000" "0x43000"
            CTRPORT_LATE_LD_TEXT "${CTRPORT_LATE_LD_TEXT}")
 elseif(CTRPORT_GAME STREQUAL "deltarune")
-    string(REPLACE "/* LATE_TEXT_RESERVE */ 0x30000" "0x54000"
+    string(REPLACE "/* LATE_TEXT_RESERVE */ 0x30000" "0x59000"
            CTRPORT_LATE_LD_TEXT "${CTRPORT_LATE_LD_TEXT}")
-    string(REPLACE "/* TEST_RODATA_RESERVE */ 0x2000" "0x3000"
+    string(REPLACE "/* TEST_RODATA_RESERVE */ 0x2000" "0x4000"
            CTRPORT_LATE_LD_TEXT "${CTRPORT_LATE_LD_TEXT}")
 else()
     # UNDERTALE, Old and New 3DS: late code 0x54000, set once for a batch of merges. A probe with all of them (the
@@ -760,9 +808,30 @@ else()
     # Page 5 (freebytes, GO 2026-11-01 on stage75zg): 0x6D000 (GOG 0x6F000). 75zg left 1,080 B; the credits scene
     # (creddodge) still misses locked 30 and its levers (lever 1 573 B + dprank 164 B, b' about 1.0-1.3 KB, the pacer
     # e-rule 400-736 B) need more. Same whole-page move, UNDERTALE Old only: linear 4 KiB less.
-    set(ctrport_ut_late 0x66000)
+    # Page 6 (freebytes, review decision 2026-11-01 on stage75zl): 0x6E000 (GOG 0x70000). 75zl left 1,120 B against the
+    # next Flowey levers (pacer's chunked kick about 3.9 KB, omegaflowey L1+L2 rev 3 about 690 B, flowend's burst front
+    # about 600 B, a possible half-art port about 1.9 KB). Same whole-page move, UNDERTALE Old only: linear 4 KiB less.
+    # Pages 7 + 8 and New page 1 (integrate21 stage75zn, GO 2026-11-02 on stage75zm): Old 0x70000 (GOG 0x72000),
+    # New 0x67000 (GOG 0x69000). 75zm left Old 3,411 B and New 1,457 B against about 8.5-9 KB (Old) and 3 KB (New) of
+    # GO units (oldexact, restartexact, racefix, audiofix, flowend G1+G2) and the ones still in review (hitbox,
+    # asgore30, cpugen one pool). The same whole-page move: text does not move; only .rodata, .data, .bss and TLS move,
+    # by whole pages (same cache sets). Linear memory 8 KiB less on Old (memcap 59,120), 4 KiB less on New.
+    # New page 2 (lead grant 2026-11-02, stage75zn): 0x68000 (GOG 0x6A000). audiofix's coming head adds about 2.7 KB on
+    # UT New (H1/M1/F1/F2/S2, drone, play-through), with restartexact 630, hitbox 960, cpugen about 1,000 and redpix
+    # about 370 B: past the 5,553 B one page left. The same whole-page move; New's linear 4 KiB less again.
+    # Pages 9 + 10 (review decision 2026-11-02, option C, on freebytes' 75zn ledger): Old 0x72000 (GOG 0x74000). After
+    # hitbox UT Old had 8,318 B left against 8,694 B of READY/gated units (cpugen, the rest of audiofix, redpix, fpsbox,
+    # ctrlui, dlgtop linger, flowend G1+G2) with btlentry and loadgame on top. The same whole-page move: text does not
+    # move; only .rodata, .data, .bss and TLS move, by whole pages. Linear memory 8 KiB less on Old (memcap 59,112).
+    # Old page 11 + New page 3 (integrate21 stage75zo, GO 2026-11-02): Old 0x73000 (GOG 0x75000), New 0x69000
+    # (GOG 0x6B000). After audiofix 75zo left Old 1,866 B (btlentry's slot holds r4 rev 2 + r5) and New 2,434 B against
+    # ctrlui (~1,152 B and its strings), loadgame/dlgtop (up to 1,924 B), dlghold (168 B), omegaflowey's room-330
+    # variant and cpugen (~1 KB). The same whole-page move. Old's heap stays 20 MiB (DEFAULT_HEAP_MIN_MB); its linear
+    # memory, the rest under the 38 MiB cap, drops 8 KiB with the late-constants page below (37.72 MiB, memcap 59,104;
+    # the Omega Flowey set evicted at 36). New's linear 4 KiB less.
+    set(ctrport_ut_late 0x69000)
     if(CTRPORT_TARGET STREQUAL "o3ds")
-        set(ctrport_ut_late 0x6D000)
+        set(ctrport_ut_late 0x73000)
     endif()
     if(CTRPORT_GOG_COMPAT)
         # Ruling, gogut round 17: GOG UT alone needs two more 4 KiB pages over Steam (integrate22: over
@@ -778,11 +847,12 @@ else()
     string(REPLACE "/* LATE_TEXT_RESERVE */ 0x30000" "${ctrport_ut_late}"
            CTRPORT_LATE_LD_TEXT "${CTRPORT_LATE_LD_TEXT}")
 endif()
-# UNDERTALE Old 3DS: one more 4 KiB page of late constants, 0x3000 (45 B
-# were left, with the per-effect fast paths still to come). After the profile/reachgate substitution above, which
-# already gives 0x4000. Only this target's .data and .bss move, by one whole page; no text or .rodata address changes.
+# UNDERTALE Old 3DS: two more 4 KiB pages of late constants, 0x4000: the first when 45 B were left, with the
+# per-effect fast paths still to come; the second (integrate21 stage75zo, GO 2026-11-02) when 731 B were left
+# against the controls page's strings. After the profile/reachgate substitution above (0x5000 on this target).
+# Only this target's .data and .bss move, by whole pages; no text or .rodata address changes.
 if(CTRPORT_GAME STREQUAL "undertale" AND CTRPORT_TARGET STREQUAL "o3ds")
-    string(REPLACE "/* TEST_RODATA_RESERVE */ 0x2000" "0x3000"
+    string(REPLACE "/* TEST_RODATA_RESERVE */ 0x2000" "0x4000"
            CTRPORT_LATE_LD_TEXT "${CTRPORT_LATE_LD_TEXT}")
 endif()
 # freebytes (lead brief 2026-10-29): UNDERTALE Old 3DS's late code reserve is the one every fix spends, while its late
@@ -852,7 +922,7 @@ if(CTRPORT_GAME STREQUAL "deltarune")
 " "    KEEP(*(.rodata.late.colflip_gm14))
 " CTRPORT_LATE_LD_TEXT "${CTRPORT_LATE_LD_TEXT}")
 endif()
-# relprep move (integrate21 stage73,             2026-10-29): the Legal page's code and constants go last in late text
+# relprep move (integrate21 stage73, review decision 2026-10-29): the Legal page's code and constants go last in late text
 # and late constants, since their size follows the release source URL (the builder's release profile). The pads left
 # in their old places keep everything after them on its stage72 / cand26 cache-line phase: each anchor is the address
 # mod 32 that followed relprep's code (text) and its constants (rodata) in stage72's Steam release link of this game
@@ -958,8 +1028,21 @@ else()
         set(ctrport_bootlog_text_phase 28)
     endif()
 endif()
+# knightgpu FC rev 2 pads (c26rev r103 F2, dec-1029-phase-pads): rev 2 grows SY and FC on DELTARUNE New. After SY:
+# stage dr75's (728fe66e8) release address mod 32 of CtrMemory_vramAllocFit, 0x3458c8 (8), FC's own proven phase.
+# After FC: 75zo's (integrate21, 11-02) flowerhw tshare tsStep0 before SY + FC came in, 0x3456b4 (20), so tshare and
+# every late function after it keep their 32 B phase. Elsewhere, and with FC off, each anchor is the pad's own start, a
+# 0 B pad.
+if(CTRPORT_GAME STREQUAL "deltarune" AND CTRPORT_TARGET STREQUAL "n3ds"
+   AND NOT (DEFINED CTRPORT_KNIGHTGPU_FRAGCOPY AND NOT CTRPORT_KNIGHTGPU_FRAGCOPY))
+    set(ctrport_kgsy_text_phase 8)
+    set(ctrport_kgfc_text_phase 20)
+else()
+    set(ctrport_kgsy_text_phase __kgsy_text_gap_start)
+    set(ctrport_kgfc_text_phase __kgfc_text_gap_start)
+endif()
 foreach(pad SMALLTEXT UTFAOT UTFLAMES UTFHELIX STATEHASH BOOTLOG ITEMFRONT EVGUARD PACERFLT FLOWHITCH POSTKICK
-            SMALLTEXTRO AOTLATE UTSFX UTLAVA UTOLDREG CHEAPLEVERS ASGBORDER AOTLHELP AOTLGEN UTLHELP)
+            SMALLTEXTRO AOTLATE UTSFX UTLAVA UTOLDREG CHEAPLEVERS ASGBORDER AOTLHELP AOTLGEN UTLHELP KGSY KGFC)
     string(TOLOWER "${pad}" pad_lower)
     string(FIND "${CTRPORT_LATE_LD_TEXT}" "/* ${pad}_TEXT_PHASE */ 0" pad_at)
     if(pad_at LESS 0)
@@ -1077,7 +1160,13 @@ if(CTRPORT_FLOWSTREAM_DIAG)
     string(REPLACE "__late_text_limit = ALIGN(__late_text_start, 0x1000) +" "__late_text_limit = ALIGN(__late_text_start, 0x1000) + 0x1000 +"
            CTRPORT_LATE_LD_TEXT "${CTRPORT_LATE_LD_TEXT}")
 endif()
-# Screenshot (shots) builds on Old 3DS, both games (           , legalui round 21, 2026-10-26): one more 4 KiB page of
+# The Titan CPU recorder (change titancpu, titandiag builds only): two more 4 KiB pages of late code for its own. Never a
+# release; .rodata, .data and .bss move by two pages in those builds alone.
+if(CTRPORT_TITANDIAG)
+    string(REPLACE "__late_text_limit = ALIGN(__late_text_start, 0x1000) +" "__late_text_limit = ALIGN(__late_text_start, 0x1000) + 0x2000 +"
+           CTRPORT_LATE_LD_TEXT "${CTRPORT_LATE_LD_TEXT}")
+endif()
+# Screenshot (shots) builds on Old 3DS, both games (review decision, legalui round 21, 2026-10-26): one more 4 KiB page of
 # late code. Shots builds keep test code release builds leave out, and cand20 left UNDERTALE Old 2,984 B and DELTARUNE
 # Old 1,807 B there, less than the Legal and Credits pages' 3.5 KB. Lab and test builds only: release builds, their
 # layout and heap are unchanged; in shots builds .rodata, .data and .bss move by one page.
@@ -1391,6 +1480,21 @@ if(NOT (CTRPORT_GAME STREQUAL "deltarune" AND CTRPORT_TARGET STREQUAL "o3ds"))
     # stays byte-identical but for its build id, until a DELTARUNE Old late page takes it.
     target_compile_definitions(ctrport PRIVATE CTRPORT_BENCH_HELD=1)
     target_link_options(ctrport PRIVATE -Wl,--wrap=CtrPacer_getFlipTotals,--wrap=CtrPacer_logLevels)
+endif()
+
+# change flowerhw D'+E (DR New tower cuts, vine_new_retain.inc): its tower CPU profile (build.sh ... towerprof),
+# [tprof] lines with the tower draws' CPU time per frame. Test builds only.
+option(CTRPORT_FLOWERHW_TPROF "Test-only: tower draw CPU profile (flowerhw)" OFF)
+if(CTRPORT_FLOWERHW_TPROF)
+    set_property(SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/source/ctr_renderer.c"
+        APPEND PROPERTY COMPILE_DEFINITIONS CTRPORT_FLOWERHW_TPROF)
+endif()
+# Its forced branches (build.sh ... towerforce1 / towerforce2): the tower strips without coverage (1), and with every
+# cut 7d draw refused as well (2), to prove towerEmit's other branches give the same pictures (vine_new_retain.inc).
+set(CTRPORT_FLOWERHW_FORCE "0" CACHE STRING "Test-only: tower strips' forced branches, 0 off, 1 or 2 (flowerhw)")
+if(NOT CTRPORT_FLOWERHW_FORCE STREQUAL "0")
+    set_property(SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/source/ctr_renderer.c"
+        APPEND PROPERTY COMPILE_DEFINITIONS CTRPORT_FLOWERHW_FORCE=${CTRPORT_FLOWERHW_FORCE})
 endif()
 
 option(CTRPORT_PACER_CSV_DIAG "Test-only sweep CSV filesystem bypass; never a release" OFF)
@@ -1776,6 +1880,9 @@ target_link_options(ctrport PRIVATE -Wl,--wrap=CtrPackWorker_poll)
 # Step 1c (both games): with the complete marker there at the chapter's start, the background worker skips the
 # header-only checks once packed copies stop fitting (ctr_texture_pack.c's tail; nothing else wraps these two).
 target_link_options(ctrport PRIVATE -Wl,--wrap=CtrPack_isComplete,--wrap=CtrPackWorker_setKeepPacked)
+# racefix (both games): distrustPack's deletion of a damaged page file tells the background worker first (ctr_textures.c's
+# end; nothing else wraps it).
+target_link_options(ctrport PRIVATE -Wl,--wrap=CtrPack_removeFile)
 set_source_files_properties("${CMAKE_CURRENT_SOURCE_DIR}/source/z_utstall.c" PROPERTIES COMPILE_OPTIONS
     "-fno-builtin-printf;-fno-builtin-puts;-fno-builtin-putchar;-fno-builtin-fprintf;-fno-builtin-fputs;-fno-tree-switch-conversion;-fno-jump-tables")
 set_source_files_properties("${CMAKE_CURRENT_SOURCE_DIR}/source/z_phaseplan.c" PROPERTIES COMPILE_OPTIONS
@@ -2395,6 +2502,9 @@ if(NOT CTRPORT_PYTHON_EXECUTABLE)
   message(FATAL_ERROR "Diagnostic launcher requires the qualified host Python")
 endif()
 set_property(SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/source/ctr_renderer.c" APPEND PROPERTY OBJECT_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/source/vine_old_observer.inc" "${CMAKE_CURRENT_SOURCE_DIR}/source/vine_new_retain.inc" "${CMAKE_CURRENT_SOURCE_DIR}/source/drpix_replay.inc")
+# titancpu L1's late code, and the launcher's own routing tables (a changed route recompiles the renderer).
+set_property(SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/source/ctr_renderer.c" APPEND PROPERTY OBJECT_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/source/vine_titancpu.inc"
+             "${CMAKE_CURRENT_SOURCE_DIR}/../../tools/analysis/vine_old_observer_compile.py" "${CMAKE_CURRENT_SOURCE_DIR}/../../tools/analysis/vine_old_parent.py")
 set_property(TARGET ctrport PROPERTY C_COMPILER_LAUNCHER "${CTRPORT_PYTHON_EXECUTABLE};-I;${CMAKE_CURRENT_SOURCE_DIR}/../../tools/analysis/vine_old_observer_compile.py;${vine_delegate};--")
 
 # The room plan (roomplan): source/z_roomplan.c gives each room without a rooms.dtm record the plan's first tiles
@@ -2492,6 +2602,31 @@ if(CTRPORT_GAME STREQUAL "undertale" AND CTRPORT_TARGET STREQUAL "o3ds")
     set_property(SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/source/ctr_tile_reader.c" "${CMAKE_CURRENT_SOURCE_DIR}/source/z_flowstream.c"
         "${CMAKE_CURRENT_SOURCE_DIR}/source/ctr_textures.c"
         APPEND PROPERTY COMPILE_DEFINITIONS CTRPORT_FLOWSTREAM_READ)
+endif()
+# btlentry (UNDERTALE Old): source/z_btlentry.c reads a battle group's planned tiles on the reader during the encounter
+# animation, before the room change (late code only; every other build compiles it empty). It wraps flowstream's
+# once-a-frame call and its five reader hooks; the wrapped calls are in z_utstall.c and ctr_tile_reader.c.
+set_source_files_properties("${CMAKE_CURRENT_SOURCE_DIR}/source/z_btlentry.c" PROPERTIES COMPILE_OPTIONS
+    "-Os;-fno-builtin-printf;-fno-builtin-puts;-fno-builtin-putchar;-fno-builtin-fprintf;-fno-builtin-fputs;-fno-tree-switch-conversion;-fno-jump-tables")
+if(CTRPORT_GAME STREQUAL "undertale" AND CTRPORT_TARGET STREQUAL "o3ds" AND NOT CTRPORT_ROOMPLAN_RECORDER)
+    set_property(SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/source/z_btlentry.c" APPEND PROPERTY COMPILE_DEFINITIONS CTRPORT_FLOWSTREAM_READ)
+    target_link_options(ctrport PRIVATE -Wl,--wrap=CtrFlowstream_collect,--wrap=CtrFlowstream_readHeader,--wrap=CtrFlowstream_readMallinfo,--wrap=CtrFlowstream_readMalloc
+        -Wl,--wrap=CtrFlowstream_gameFile,--wrap=CtrFlowstream_openFile)
+endif()
+# LAB ONLY, never release (review decision 11-02 on btlentry's reserve): the smallest heap free per window around a battle's
+# start, after every heap allocation (newlib's allocators wrapped); with FAULT, btlentry's reads cycle through refused,
+# failed and dropped outcomes, for the fallback's identity gate.
+option(CTRPORT_BTLENTRY_DIAG "LAB ONLY btlentry heap free proof, never release" OFF)
+option(CTRPORT_BTLENTRY_FAULT "LAB ONLY btlentry read faults, never release" OFF)
+if(CTRPORT_BTLENTRY_DIAG OR CTRPORT_BTLENTRY_FAULT)
+    if(CTRPORT_RELEASE_SOURCE_URL OR CTRPORT_HEAP_PROFILE OR CTRPORT_AUDIO_METRICS)
+        message(FATAL_ERROR "btlentry's diag is lab only, and wraps newlib's allocators as the heap profiler and audiometrics do")
+    endif()
+    set_property(SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/source/z_btlentry.c" APPEND PROPERTY COMPILE_DEFINITIONS CTRPORT_BTLENTRY_DIAG)
+    if(CTRPORT_BTLENTRY_FAULT)
+        set_property(SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/source/z_btlentry.c" APPEND PROPERTY COMPILE_DEFINITIONS CTRPORT_BTLENTRY_FAULT)
+    endif()
+    target_link_options(ctrport PRIVATE -Wl,--wrap=_malloc_r,--wrap=_calloc_r,--wrap=_realloc_r,--wrap=_memalign_r)
 endif()
 if(CTRPORT_FLOWSTREAM_DIAG)
     if(CTRPORT_FRAMETRACE OR CTRPORT_ROOMPLAN_RECORDER)
@@ -2640,7 +2775,7 @@ if(CTRPORT_PROFILE AND CTRPORT_SDLAT)
         CTRPORT_SDLAT_CHAIN)
 endif()
 
-# uttc       uthunt T1; build.sh "uttc=off" / "uttc-force", test builds only): without the tile pre-filter (runner.h's
+# uttc (change uthunt T1; build.sh "uttc=off" / "uttc-force", test builds only): without the tile pre-filter (runner.h's
 # UTTC_ON), or with its fallbacks forced (runner.c's end).
 set(CTRPORT_UTTC_MODE "" CACHE STRING "uttc test mode: empty, OFF or FORCE")
 if(CTRPORT_UTTC_MODE STREQUAL "OFF")
@@ -2649,7 +2784,7 @@ elseif(CTRPORT_UTTC_MODE STREQUAL "FORCE")
     set_property(SOURCE "${ENGINE_DIR}/src/runner.c" APPEND PROPERTY COMPILE_DEFINITIONS CTRPORT_UTTC_FORCE)
 endif()
 
-# dprank       uthunt; build.sh "dprank=off" / "dprank-diag", test builds only): drawPassFind always takes the scan, or
+# dprank (change uthunt; build.sh "dprank=off" / "dprank-diag", test builds only): drawPassFind always takes the scan, or
 # also counts its rank hits and fallbacks into the log (runner.c, below drawPassFirst).
 set(CTRPORT_DPRANK_MODE "" CACHE STRING "dprank test mode: empty, OFF or DIAG")
 if(CTRPORT_DPRANK_MODE STREQUAL "OFF")
@@ -2701,6 +2836,17 @@ if(CTRPORT_FRAMETRACE)
         -Wl,--wrap=CtrWatchdog_mark,--wrap=FSUSER_OpenFile,--wrap=FSUSER_OpenFileDirectly,--wrap=FSUSER_RenameFile
         -Wl,--wrap=FSUSER_DeleteFile,--wrap=FSFILE_Read,--wrap=FSFILE_Write,--wrap=FSFILE_Flush,--wrap=FSFILE_Close
         -Wl,--wrap=CtrTextures_ensureTiles,--wrap=CtrTextures_ensureTilesBut,--wrap=CtrBench_takeFinished)
+endif()
+# The Titan CPU recorder (change titancpu; source/z_titandiag.c says how it works): the main loop's watchdog marks, the
+# bench's per-frame calls, the runner's profiler zones, its event calls into the VM and the render target calls are
+# wrapped, so every existing function keeps its code; only those call targets change. Diagnosis builds only.
+if(CTRPORT_TITANDIAG)
+    if(CTRPORT_FRAMETRACE)
+        message(FATAL_ERROR "titandiag and frametrace both wrap CtrWatchdog_mark")
+    endif()
+    set_property(SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/source/z_titandiag.c" APPEND PROPERTY COMPILE_DEFINITIONS CTRPORT_TITANDIAG)
+    set_property(SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/source/z_titandiag.c" APPEND PROPERTY COMPILE_OPTIONS "-O2;-fno-jump-tables")
+    target_link_options(ctrport PRIVATE -Wl,--wrap=CtrWatchdog_mark,--wrap=CtrBench_sessionStartedLate,--wrap=CtrBench_beginFrameTimed,--wrap=CtrBench_endFrameTimed,--wrap=Profiler_enterKind,--wrap=Profiler_exit,--wrap=VM_beginEventRun,--wrap=VM_endEventRun,--wrap=VM_runEvent,--wrap=VM_executeCode,--wrap=C3D_RenderTargetDelete,--wrap=CtrPacer_waitForSlot,--wrap=CtrPacer_levelWait)
 endif()
 # The exit trail (source/z_exittrail.c says what it marks): calls into the exit's steps are wrapped, so every existing
 # function keeps its code; only those call targets change.
@@ -2790,7 +2936,7 @@ endif()
 # build.sh turns it on for DELTARUNE New by default ("knightnew-history=off" leaves it out); the switch is accepted but
 # empty in both UNDERTALE targets and DELTARUNE Old. Cache/preload experiments stay parked (drresid owns SD stalls).
 option(CTRPORT_KNIGHTNEW_HISTORY "Trim Knight history spill padding on New DR" OFF)
-# Knight GPU A       knightgpu): with L-A on, a hot spilled surface that finds no VRAM gap of its size gets one by
+# Knight GPU A (change knightgpu): with L-A on, a hot spilled surface that finds no VRAM gap of its size gets one by
 # sliding a bank's surfaces together (ctr_renderer.c's and ctr_memory.c's ends). build.sh "knightgpu-compact=off" is
 # the control without it; "knightgpu-compact=force" the forced control (moves every few frames; tests only).
 option(CTRPORT_KNIGHTGPU_COMPACT "Compact VRAM for hot spilled surfaces on New DR" ON)
@@ -2824,17 +2970,54 @@ if(CTRPORT_KNIGHTNEW_HISTORY AND CTRPORT_GAME STREQUAL "deltarune" AND CTRPORT_T
             endif()
         endif()
     endif()
-    # Knight GPU d2       knightgpu): tiled draws make no tile quads out of view, and held additive passes are made a
+    # Knight GPU d2 (change knightgpu): tiled draws make no tile quads out of view, and held additive passes are made a
     # texture tile at a time (ctr_renderer.c's end, through e5xDrawSpriteTiled). Exact pixels.
     option(CTRPORT_KNIGHTGPU_TILED "Cull tiled draws' tile quads and batch held additive passes by tile on New DR" ON)
     if(CTRPORT_KNIGHTGPU_TILED)
         set_property(SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/source/ctr_renderer.c" APPEND PROPERTY
             COMPILE_DEFINITIONS CTRPORT_KNIGHTGPU_TILED_ON)
     endif()
+    # Knight GPU SY (change knightgpu): tiles' copies in VRAM are given up for a surface only when that leaves a block
+    # it fits (ctr_renderer.c's end, through initVramTarget's call). Exact pixels.
+    option(CTRPORT_KNIGHTGPU_SMARTYIELD "Give up tiles' VRAM copies for a surface only when that makes room on New DR" ON)
+    if(CTRPORT_KNIGHTGPU_SMARTYIELD)
+        set_property(SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/source/ctr_renderer.c" APPEND PROPERTY
+            COMPILE_DEFINITIONS CTRPORT_KGSY_ON)
+    endif()
+    # Knight GPU FC (change knightgpu): while the detail-keeping shrink's strip is neither made nor wanted (native drawing),
+    # hot tiles get VRAM copies placed best fit, leaving the room's wanted size in one piece, instead of none while its
+    # 1408 KB stays free (ctr_renderer.c's and ctr_memory.c's ends, through KnightGpu_beginFrame). Exact pixels. Needs
+    # the lending (L-A) and SY. TEST-ONLY branch knightgpu-fc75 (on stage75zk): ON here, for its console verdict;
+    # its late code fits the 0x54000 late text page that 75zk already has (freebytes 73ba6de03).
+    option(CTRPORT_KNIGHTGPU_FRAGCOPY "Copy hot tiles into VRAM gaps a room cannot use on New DR" ON)
+    if(CTRPORT_KNIGHTGPU_FRAGCOPY AND CTRPORT_KNIGHTGPU_LEND AND CTRPORT_KNIGHTGPU_SMARTYIELD)
+        foreach(part ctr_renderer ctr_memory)
+            set_property(SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/source/${part}.c" APPEND PROPERTY
+                COMPILE_DEFINITIONS CTRPORT_KGFC_ON)
+        endforeach()
+        # FC rev 2: the copies are invisible to every other VRAM request (ctr_renderer.c's end): the free-space and
+        # block queries leave them out, and vramAlloc's entries (ctr_vram_touch.c) and the block moves give them up
+        # first. Wrapped, so the callers keep their code.
+        if(CTRPORT_KNIGHTGPU_COMPACT)
+            foreach(part ctr_renderer ctr_vram_touch)
+                set_property(SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/source/${part}.c" APPEND PROPERTY
+                    COMPILE_DEFINITIONS CTRPORT_KGFC2_ON)
+            endforeach()
+            target_link_options(ctrport PRIVATE
+                -Wl,--wrap=CtrMemory_vramBlocks,--wrap=CtrMemory_vramTaken,--wrap=CtrMemory_vramFreeNow,--wrap=CtrMemory_vramMoveTo)
+            # FC's tiles go into mirrorHotTiles' list as without their copies. flowdiag, frametrace and the room plan
+            # recorder wrap these too: in those builds the list leaves FC's tiles out while they have copies.
+            if(NOT CTRPORT_FLOWSTREAM_DIAG AND NOT CTRPORT_FRAMETRACE AND NOT CTRPORT_ROOMPLAN_RECORDER)
+                set_property(SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/source/ctr_renderer.c" APPEND PROPERTY
+                    COMPILE_DEFINITIONS CTRPORT_KGFC2_HOT)
+                target_link_options(ctrport PRIVATE -Wl,--wrap=CtrTextures_ensureTiles,--wrap=CtrTextures_ensureTilesBut)
+            endif()
+        endif()
+    endif()
     set_source_files_properties("${CMAKE_CURRENT_SOURCE_DIR}/source/z_knightnew_history.c" PROPERTIES
         COMPILE_OPTIONS "-Os;-fno-tree-switch-conversion;-fno-jump-tables")
 endif()
-# Knight GPU O9       knightgpu): blend and fog calls made while a batch is open are held, and drawn only when they
+# Knight GPU O9 (change knightgpu): blend and fog calls made while a batch is open are held, and drawn only when they
 # change something (ctr_renderer.c's end). The exports other files draw with are wrapped to settle them first. The
 # condition below is the one line that picks the builds (DELTARUNE New now; UNDERTALE once freebytes frees its bytes:
 # widen it to (CTRPORT_GAME STREQUAL "undertale" OR (TILED and n3ds)); the pads already fit UNDERTALE New and Old).
@@ -2919,6 +3102,9 @@ endif()
 # fpsbox: retain the two shrinking original glyph/paint slots exactly; all
 # additions are tail inputs. The adapter only inserts unreachable zero bytes.
 get_target_property(fpsbox_delegate ctrport C_COMPILER_LAUNCHER)
+if(CTRPORT_GAME STREQUAL "deltarune")
+    target_link_options(ctrport PRIVATE -Wl,--wrap=CtrArgbind_unloadGame)
+endif()
 set_property(TARGET ctrport PROPERTY C_COMPILER_LAUNCHER
     "${CTRPORT_PYTHON_EXECUTABLE};-I;${CMAKE_CURRENT_SOURCE_DIR}/../../tools/buildcache/fpsbox_compile.py;${fpsbox_delegate};--fpsbox-compiler")
 set_property(SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/source/ctr_argui.c" APPEND PROPERTY OBJECT_DEPENDS
@@ -2946,4 +3132,40 @@ option(CTRPORT_KNSURF "Reuse a prepared surface strip batch on DELTARUNE New" ON
 if(CTRPORT_KNSURF AND CTRPORT_GAME STREQUAL "deltarune" AND CTRPORT_TARGET STREQUAL "n3ds" AND NOT CTRPORT_PROFILE)
     set_property(SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/source/ctr_renderer.c" APPEND PROPERTY
         COMPILE_DEFINITIONS CTRPORT_KNSURF)
+endif()
+
+# redpix: preserve the original packing callback's section position after its cold call is retargeted.
+if(CTRPORT_GAME STREQUAL "undertale" AND CMAKE_BUILD_TYPE STREQUAL "Release")
+    get_target_property(redpix_delegate ctrport C_COMPILER_LAUNCHER)
+    set_property(TARGET ctrport PROPERTY C_COMPILER_LAUNCHER
+        "${CTRPORT_PYTHON_EXECUTABLE};-I;${CMAKE_CURRENT_SOURCE_DIR}/../../tools/buildcache/redpix_compile.py;${redpix_delegate};--redpix-compiler")
+    set_property(SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/source/ctr_texture_pack.c" APPEND PROPERTY OBJECT_DEPENDS
+        "${CMAKE_CURRENT_SOURCE_DIR}/../../tools/buildcache/redpix_compile.py")
+endif()
+
+# dlghold: retain genuine dialogue gaps, but end replay on the first menu frame.
+set_source_files_properties("${CMAKE_CURRENT_SOURCE_DIR}/source/z_dlghold.c" PROPERTIES COMPILE_OPTIONS "-Os;-fno-merge-constants")
+if(CTRPORT_GAME STREQUAL "undertale")
+    target_link_options(ctrport PRIVATE -Wl,--wrap=CtrDialogue_holdAllowed)
+else()
+    # DELTARUNE New: Crisp art's ARM entry is fpsbox's retained one (ctr_fpsbox.c, CtrFpsbox_crispVeneer, which
+    # z_crispart.c names); dlghold adds none of its own (75zo, one shared entry).
+    target_link_options(ctrport PRIVATE -Wl,--wrap=CtrDialogue_init)
+endif()
+
+# flowerhw L2 (DELTARUNE New): the phase plan's eviction drops the wanted marks of the tiles it took (z_phaseplan.c's
+# ppEvict), so the fill doesn't load them again at once. New only: DELTARUNE Old keeps its phase plan as it is.
+# CTRPORT_FLOWERHW_PPFORCE is TEST-ONLY, never in a release: the eviction runs as if no room were left and logs L2's
+# counts, so Azahar (which never reaches phase 4) takes the path; with L2 OFF it is the control arm.
+option(CTRPORT_FLOWERHW_L2 "Drop the wanted marks of the tiles the phase plan evicts on DELTARUNE New" ON)
+option(CTRPORT_FLOWERHW_PPFORCE "TEST-ONLY: force the phase plan's eviction and log L2's counts" OFF)
+if(CTRPORT_GAME STREQUAL "deltarune" AND CTRPORT_TARGET STREQUAL "n3ds")
+    if(CTRPORT_FLOWERHW_L2)
+        set_property(SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/source/z_phaseplan.c" APPEND PROPERTY
+            COMPILE_DEFINITIONS CTRPORT_PPL2)
+    endif()
+    if(CTRPORT_FLOWERHW_PPFORCE)
+        set_property(SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/source/z_phaseplan.c" APPEND PROPERTY
+            COMPILE_DEFINITIONS CTRPORT_PPFORCE)
+    endif()
 endif()

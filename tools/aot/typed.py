@@ -57,6 +57,34 @@ G = None   # the gmlaot module (bind)
 NUMERIC_SPRITE_LOOPS = False
 
 
+# A Titan_scalarSurfacePart call's session argument until function_text knows the whole region (scalar_session).
+SESSION = "@titan_session@"
+
+
+def scalar_session(r):
+    """True when the region's only builtin calls are Titan_scalarSurfacePart draws (every builtin cache slot it calls is
+    draw_surface_part, called that way). Then nothing but numeric code and those draws runs between two of them, and
+    they share a session (titancpu lever 1: the renderer repeats the last draw's tests only when they can have changed;
+    vine_titancpu.inc's Titan_stripDraw). Any other region passes nullptr: each draw goes the renderer's whole way."""
+    return bool(r.scalar_surface) and set(r.builtins) == r.scalar_surface and set(r.builtins.values()) == {'draw_surface_part'}
+
+
+def scalar_surface(em):
+    """True when a draw_surface_part call whose 7 arguments are all numbers calls Titan_scalarSurfacePart (the
+    DELTARUNE New 3DS build's late code at the end of engine/src/vm_builtins.c) with them as reals, instead of boxing
+    them in RValues for the bound builtin: DELTARUNE (WAD17) code generated for n3ds only. That function converts and
+    draws as builtin_draw_surface_part does and returns what it returns; the region's entry checks the bound builtin is
+    that one (Titan_scalarSurfacePartIsBuiltin), as for Utold_scalarPart."""
+    return em.dw.wad == 17 and getattr(G, "TARGET", None) == "n3ds"
+
+
+def titan_loops(em):
+    """True for DELTARUNE (WAD17) code generated for n3ds (titancpu round 11): regions may also call the builtins of
+    TITAN_EFFECTS and read a[i][j] (Push.v [arraypushaf] of a cached self, other or global variable, then Break
+    pushaf) through their non-materializing fast paths. Every other build is generated as before."""
+    return em.dw.wad == 17 and getattr(G, "TARGET", None) == "n3ds"
+
+
 def bind(mod):
     global G
     G = mod
@@ -103,6 +131,33 @@ EFFECTS = {
 # The arguments a builtin of EFFECTS reads without checking argCount.
 EFFECTS_ARGS = {"make_color_hsv": 3, "draw_surface_part": 7, "draw_surface_part_ext": 11, "draw_sprite_part_ext": 12,
                 "draw_sprite_ext": 9, "gpu_set_fog": 2, "merge_color": 3}
+
+# More builtins of the EFFECTS kind, for titan_loops builds only (DELTARUNE New: the centipede head's path rebuild).
+# Each read in engine/src/vm_builtins.c as the ones above; none runs GML, reads or writes a GML variable or raises a
+# GML exception, and builtin_audit.py passes all three. Not layer_sprite_y (rev 2): it gave the layer floater loops
+# regions that saved nothing (their member reads cost the same either way), and their 17 KB pushed loops that do pay,
+# the dark controller's Draw ones among them, out of the chapter 4 module's typed budget.
+TITAN_EFFECTS = {
+    # RValue_toInt32(args[0]), dsListGet (a bounds and freed test of runner->dsListPool); RValue_makeReal of the
+    # list's length, or of 0 with no list
+    "ds_list_size": ("pure", ("dslist",), (), "R"),
+    # RValue_toInt32 of args[0] and args[1], dsListGet; RValue_makeIndependent of the item (a string is copied, an
+    # array, struct or method gains a reference), or RValue_makeUndefined with no list or out of range
+    "ds_list_find_value": ("pure", ("dslist",), (), None),
+    # REQUIRE_ARGC_AT_LEAST 4, then the path's points grow by one (builtin_path_add_point, or on DELTARUNE New
+    # VMBuiltins_titanPathAddPoint, which leaves the same path); RValue_makeUndefined
+    "path_add_point": ("effect", (), ("path",), None),
+}
+TITAN_EFFECTS_ARGS = {"ds_list_size": 1, "ds_list_find_value": 2}
+
+
+def effect_of(em, name):
+    """(EFFECTS entry or None, arguments the builtin reads without checking argCount) of a builtin in em's build."""
+    if name in EFFECTS:
+        return EFFECTS[name], EFFECTS_ARGS.get(name, 0)
+    if name in TITAN_EFFECTS and titan_loops(em):
+        return TITAN_EFFECTS[name], TITAN_EFFECTS_ARGS.get(name, 0)
+    return None, 0
 
 # Builtin array variables an inlined script may read with a constant index, on self or the builtin scope (what
 # resolveVariableRead does for them: VMBuiltins_getVariable on the current instance, none of them instance-scoped, so
@@ -224,6 +279,7 @@ class Region:
         self.fields = {}        # addr -> Instance field read there (self builtins)
         self.accesses = {}      # addr -> (operand count, cached array key or None), reads through memory
         self.sprite_getters = {}  # experimental: audited scalar getters, not aliasing memory reads
+        self.pushaf = {}        # addr -> cached slot key of a Push.v [arraypushaf] read (titan_loops builds)
         self.memory = False     # these regions read/write slots at each instruction (member aliases are visible)
         self.builtins = {}      # function index -> name
         self.scripts = {}       # function index -> (code index, name) of each script inlined (Gen.inline)
@@ -272,6 +328,21 @@ def memory_read(em, ins):
         if inst >= 0 or inst == G.BUILTIN or (v["varID"] == G.VARIABLE_BUILTIN and v["name"] in BUILTIN_READS):
             return 0, None
     return None
+
+def pushaf_read(em, ins):
+    """The cached slot key ("s", scope, varID) of a Push.v [arraypushaf], the first step of a[i][j], when a titan_loops
+    region may take it: a plain variable (no builtin, which handlePush reads another way) in a self, other or global
+    scope the code states, read through aotPushAFFast (vm_aot.h), the same test gmlaot.py's AOT_PUSHAF makes. Its
+    other cases (no such variable or instance, a sub-array still to make, an index that isn't an int32 in range)
+    hand over at the instruction, where handlePush runs as it would. Else None."""
+    if not titan_loops(em) or ins.op != G.OP_PUSH or ins.t1 != T_VAR or ins.var_type() != G.VT_PUSHAF:
+        return None
+    v = em.dw.vars[ins.var_index()]
+    scope = em.fn.stacks[ins.addr][-2][0]
+    if v["varID"] < 0 or v["instanceType"] == G.BUILTIN or scope not in G.SLOT_SCOPES or not G.SLOTS:
+        return None
+    return ("s", scope, v["varID"])
+
 
 def var_access(em, ins):
     """(read key or None, write key or None, self field or None) of an instruction; Unsupported for a variable access
@@ -461,7 +532,12 @@ def check_region(r, succs):
                 raise Unsupported("method call at %04X" % a)
             access = memory_read(em, ins)
             v = em.dw.vars[ins.var_index()] if access is not None else None
-            if (NUMERIC_SPRITE_LOOPS and em.dw.wad == 16 and access == (0, None)
+            pushaf = pushaf_read(em, ins)
+            if pushaf is not None:
+                r.pushaf[a] = pushaf
+                r.memory = True
+                rk, wk, field = pushaf, None, None
+            elif (NUMERIC_SPRITE_LOOPS and em.dw.wad == 16 and access == (0, None)
                     and ins.op in (G.OP_PUSH, G.OP_PUSHBLTN) and ins.var_type() == G.VT_NORMAL
                     and ins.inst == G.SELF and v['varID'] == G.VARIABLE_BUILTIN
                     and v['name'] in ('sprite_width', 'sprite_height')):
@@ -495,8 +571,9 @@ def check_region(r, succs):
         ins = r.fn.instrs[a]
         if ins.op == G.OP_CALL:
             nm = em.dw.funcs[ins.extra]["name"]
-            if nm in EFFECTS:
-                r.state_written |= set(EFFECTS[nm][2])
+            effect = effect_of(em, nm)[0]
+            if effect is not None:
+                r.state_written |= set(effect[2])
             elif nm == 'draw_sprite_part' and NUMERIC_SPRITE_LOOPS and em.dw.wad == 16:
                 r.state_written.add('target')
     liveness(r)
@@ -728,6 +805,17 @@ class Gen:
             return st, True
         elif a in r.accesses:
             return self.read_memory(ins, st, before), True
+        elif a in r.pushaf:
+            # aotPushAFFast over the scope and index (the scope is the constant pushaf_read checked), else hand over
+            # here with them on the stack: handlePush may insert the variable or make the sub-array.
+            i = self.vi(r.pushaf[a])
+            ix = S.pop()
+            S.pop()
+            n, m = self.tmp(), self.tmp()
+            e("RValue %s; const RValue %s = %s;" % (n, m, as_rv(ix)))
+            self.deopt(a, before, "!aotPushAFFast(&%s, p%d, &%s)" % (n, i, m))
+            S.append(Val("v", n))
+            return st, True
         elif a in r.fields:
             f = r.fields[a]
             if "instance" not in r.state_written:   # no call in the region moves the instance: read it once
@@ -874,6 +962,15 @@ class Gen:
             return st, False
         if op == G.OP_DUP:
             return self.dup(ins, st, before), True
+        if op == G.OP_BREAK and ins.inst == -2 and titan_loops(self.em) and G.ARRAY_REFS:
+            # Break pushaf: aotBreakPushAFFast, as gmlaot.py's AOT_BREAK_PUSHAF (a weak copy of the cell over the weak
+            # ref), else hand over here with the ref and the index on the stack (handleBreakPushAF).
+            ix, ref = S.pop(), S.pop()
+            n, m = self.tmp(), self.tmp()
+            e("RValue %s = %s; const RValue %s = %s;" % (n, as_rv(ref), m, as_rv(ix)))
+            self.deopt(a, before, "!aotBreakPushAFFast(&%s, &%s)" % (n, m))
+            S.append(Val("v", n))
+            return st, True
         if op == G.OP_CALL:
             return self.call(ins, st, before), True
         raise Unsupported("opcode %#x at %04X" % (op, a))
@@ -1074,8 +1171,7 @@ class Gen:
             e("const GMLReal %s = %s;" % (n, expr))
             S.append(Val("r", n, T_VAR))
             return st
-        effect = EFFECTS.get(name)
-        min_args = EFFECTS_ARGS.get(name, 0)
+        effect, min_args = effect_of(em, name)
         if name == 'draw_sprite_part' and NUMERIC_SPRITE_LOOPS and em.dw.wad == 16:
             # Public builtin audited at vm_builtins.c: it only submits a
             # renderer draw; negative subimage reads self.imageIndex. Keep
@@ -1089,6 +1185,10 @@ class Gen:
         kind, reads, writes, result = effect
         if self.inl is not None and kind != "pure":
             raise Unsupported("builtin %s in an inlined script at %04X changes state" % (name, a))
+        if self.inl is not None and result != "R":
+            # An inlined script hands over at its outermost Call with the caller's stack: a result that may own a
+            # reference (ds_list_find_value's) would be dropped there without its release.
+            raise Unsupported("builtin %s in an inlined script at %04X returns a value that may own a reference" % (name, a))
         args = [S.pop() for _ in range(argc)]
         r.builtins[idx] = name
         fv = "fb%d" % idx
@@ -1099,13 +1199,19 @@ class Gen:
         scalar_part = (NUMERIC_SPRITE_LOOPS and em.dw.wad == 16
                        and name == 'draw_sprite_part' and argc == 8
                        and all(v.num() for v in args))
+        surface_part = (not scalar_part and name == 'draw_surface_part' and argc == 7 and scalar_surface(em)
+                        and all(v.num() for v in args))
+        if surface_part:
+            r.__dict__.setdefault("scalar_surface", set()).add(idx)
+            scalar_part = True   # no RValue arguments, nothing to free
         if argc and not scalar_part:
             block.append("RValue a_[%d] = { %s };" % (argc, ", ".join(as_rv(v) for v in args)))
         block.append("ctx->ip = 0x%X;" % ((self.inl[0] if self.inl is not None else a) + 8))
         call = "%s(ctx, %s, %d)" % (fv, "a_" if argc else "nullptr", argc)
         free = ["if (a_[%d].ownsReference) RValue_free(&a_[%d]);" % (i, i) for i, v in enumerate(args) if v.k == "v" and v.t is None]
         if scalar_part:
-            call = "Utold_scalarPart(ctx, %s)" % ", ".join(as_num(v) for v in args)
+            call = "%s(ctx, %s)" % ("Titan_scalarSurfacePart" if surface_part else "Utold_scalarPart",
+                                    ", ".join(([SESSION] if surface_part else []) + [as_num(v) for v in args]))
             free = []
         n = self.tmp()
         if result == "R":
@@ -1447,9 +1553,11 @@ def inline_bindings(em, regions):
 
 
 def function_text(r, code_name):
+    r.scalar_surface = set()   # the builtin cache slots of the region's Titan_scalarSurfacePart calls (Gen.builtin)
     g = Gen(r, dict(r.states), True)
     g.run(r.states[r.lo])
-    body = g.lines
+    session = scalar_session(r)
+    body = [l.replace(SESSION, "tss_" if session else "nullptr") for l in g.lines]
     # Labels are "%04X": an address past 0xFFFF has five or more digits.
     used = set(re.findall(r"goto ([TX]_[0-9A-F]{4,});", "\n".join(body)))
     body = [l for l in body if not (re.match(r"^T_[0-9A-F]{4,}: ;$", l) and l.split(":")[0] not in used)]
@@ -1458,6 +1566,10 @@ def function_text(r, code_name):
            prototype(r) + " {",
            "#define aottag_ %s" % tag,
            "    TYPED_PREAMBLE();"]
+    if r.scalar_surface:   # (repeated for each such region of a file: identical declarations)
+        out[:0] = ["extern bool Titan_scalarSurfacePartIsBuiltin(BuiltinFunc);",
+                   "extern RValue Titan_scalarSurfacePart(VMContext*, uint32_t*, GMLReal, GMLReal, GMLReal, GMLReal, GMLReal,"
+                   " GMLReal, GMLReal);"]
     if r.scripts:
         # Check before preloading any callee reference (especially a builtin cache entry). Changed definitions can
         # include smaller VARI/FUNC tables. Once the region starts, no audited operation can rebind the context.
@@ -1483,6 +1595,9 @@ def function_text(r, code_name):
             out.append("    if (fb%d == nullptr) TYPED_FAIL();" % idx)
         if NUMERIC_SPRITE_LOOPS and r.em.dw.wad == 16 and r.builtins[idx] == 'draw_sprite_part':
             out.append("    if (!Utold_scalarPartIsBuiltin(fb%d)) TYPED_FAIL();" % idx)
+        if idx in r.scalar_surface:   # a memory region's missing slot hands over at the call (fb == nullptr)
+            out.append("    if (%sTitan_scalarSurfacePartIsBuiltin(fb%d)) TYPED_FAIL();"
+                       % ("fb%d != nullptr && !" % idx if r.memory else "!", idx))
     for idx in sorted(r.scripts):   # where aotCallScript would call the script inlined: see Gen.inline
         if not r.memory:
             out.append("    if (%s) TYPED_FAIL();   /* %s */"
@@ -1511,6 +1626,8 @@ def function_text(r, code_name):
         out.append("    RValue ms_%d = { 0 };" % i)
     for m in range(g.memos):
         out.append("    bool mz%d = false; GMLReal mr%d = 0;" % (m, m))
+    if session:
+        out.append("    uint32_t tss_[16] = { 0 };   /* the draws' session (scalar_session; vine_titancpu.inc's TC_SESSION_WORDS) */")
     out.append("    TYPED_EVENT(aottag_, 0);")
     out.extend(body)
     for t in r.exits:
@@ -1521,7 +1638,10 @@ def function_text(r, code_name):
         out.append("    TYPED_EVENT(aottag_, 3);")
         out.append("    return 0x%Xu;" % ((t << 1) | 1))
     out += ["#undef aottag_", "}"]
-    return "\n".join(out)
+    text = "\n".join(out)
+    if SESSION in text:
+        raise AssertionError("a session argument outside the region's body")
+    return text
 
 
 def key_name(r, k):

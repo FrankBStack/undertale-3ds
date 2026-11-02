@@ -292,12 +292,12 @@ static void moveBytecodeToCache(DataWin* dataWin, const char* dataWinPath) {
     }
 }
 
-// The consoles draw into the bottom framebuffer with the CPU; nothing else
-// touches that screen, so write it back for the LCD once per frame.
+// The consoles draw into the bottom framebuffer with the CPU; nothing else touches that screen, so write it back
+// for the LCD once per frame (z_pacerflush.c: the top screen's instead while they are there, the game below).
 static void flushBottomScreen(void) {
-    u16 w, h;
+    u16 w, h; Result CtrScreens_flushConsoleScreen(const void* bottom, u32 bytes); // z_pacerflush.c
     u8* fb = gfxGetFramebuffer(GFX_BOTTOM, GFX_LEFT, &w, &h);
-    GSPGPU_FlushDataCache(fb, (u32) w * h * 2);
+    CtrScreens_flushConsoleScreen(fb, (u32) w * h * 2);
 }
 
 // Dialogue on the bottom screen (ctr_renderer.c) draws over the consoles'
@@ -1777,7 +1777,7 @@ static const char* const relprepMainLegacy[]
 #define SCREENS_LATE __attribute__((noinline, section(".text.late.screens")))
 extern bool CtrScreens_consolesOnTop; // ctr_screens.c
 void CtrScreens_moveConsoles(bool top);
-void CtrScreens_flushConsoles(void);
+void CtrScreens_flushConsoles(void); Result CtrScreens_noteConsoles(const void* fb, u32 bytes); // z_pacerflush.c
 
 // Moves the stats and log consoles to the screen without the game, that screen blank, RGB565 and single buffered
 // (the renderer's move): 50 columns on the top screen, 40 on the bottom. The menu's console stays on the bottom
@@ -1808,12 +1808,12 @@ SCREENS_LATE CTR_COLD_OS void CtrScreens_moveConsoles(bool top) {
     CtrScreens_consolesOnTop = top;
 }
 
-// The consoles draw into their framebuffer with the CPU: on the top screen, write it back for the LCD once per frame
-// (flushBottomScreen does the bottom screen's).
+// The consoles draw into their framebuffer with the CPU: on the top screen, flushBottomScreen writes it back for the
+// LCD at the frame's end while they show; here, each frame's start, z_pacerflush.c only notes where they are.
 SCREENS_LATE void CtrScreens_flushConsoles(void) {
     extern PrintConsole screensStats __asm__("statsConsole");
     if (CtrScreens_consolesOnTop && screensStats.frameBuffer != nullptr) {
-        GSPGPU_FlushDataCache(screensStats.frameBuffer, (u32) GSP_SCREEN_WIDTH * GSP_SCREEN_HEIGHT_TOP * 2u);
+        CtrScreens_noteConsoles(screensStats.frameBuffer, (u32) GSP_SCREEN_WIDTH * GSP_SCREEN_HEIGHT_TOP * 2u);
     }
 }
 

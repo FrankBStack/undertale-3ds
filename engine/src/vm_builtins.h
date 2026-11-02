@@ -297,12 +297,13 @@ void Colflip14_registerAll(VMContext* ctx);
 // z_utflames_waver.c, which calls Btnprompt_registerAll first), then the waving rows (UtKill_registerAll,
 // z_utkill_waver.c, which calls UtFlames_registerAll first), then collision_circle's no-hit answer
 // (UtFlames_registerCircle, z_utflames.c, which calls UtKill_registerAll first), then string_char_at's ASCII walk
-// (Utgap_registerAll, z_utflames.c's end, which calls UtFlames_registerCircle first). A macro: VM_create keeps its lines.
+// (Utgap_registerAll, z_utflames.c's end, which calls UtFlames_registerCircle first), then GMS 1.4's no-op
+// sprite_collision_mask (Hitbox_registerAll, collision_gm14.c, which calls Utgap_registerAll first). A macro.
 #if defined(ENABLE_WAD16)
 void UtFlames_registerAll(VMContext* ctx);
 void UtKill_registerAll(VMContext* ctx);
-void UtFlames_registerCircle(VMContext* ctx); void Utgap_registerAll(VMContext* ctx);
-#define COLFLIP_REGISTER_ALL(ctx) Utgap_registerAll(ctx)
+void UtFlames_registerCircle(VMContext* ctx); void Utgap_registerAll(VMContext* ctx); void Hitbox_registerAll(VMContext* ctx);
+#define COLFLIP_REGISTER_ALL(ctx) Hitbox_registerAll(ctx)
 #else
 #define COLFLIP_REGISTER_ALL(ctx) Colflip14_registerAll(ctx)
 #endif
@@ -317,6 +318,18 @@ RValue VMBuiltins_lateGlobalExists(VMContext* ctx, RValue* args, int32_t argCoun
 void Btnprompt_registerAll(VMContext* ctx);
 // The 3DS button for Z, X and C (0 keeps the key's letter), and the title's prompt (nullptr keeps 1.08's).
 void Btnprompt_setLabels(const char letters[3], const char* title);
+#endif
+
+// game_restart's pending room code: the PC runner's restart (runner.c's end, restartexact). vm.h's restart code
+// is the bench's fresh start.
+#define RESTART_EXACT (-201)
+// path_add_point's builtin: DELTARUNE New 3DS registers VMBuiltins_titanPathAddPoint (late code, titancpu L4; the end of
+// vm_builtins.c), everything else builtin_path_add_point.
+#if defined(__3DS__) && defined(ENABLE_WAD17) && defined(CTRPORT_TARGET_N3DS)
+RValue VMBuiltins_titanPathAddPoint(VMContext* ctx, RValue* args, int32_t argCount);
+#define VMBUILTINS_PATH_ADD_POINT VMBuiltins_titanPathAddPoint
+#else
+#define VMBUILTINS_PATH_ADD_POINT builtin_path_add_point
 #endif
 
 #endif /* _BS_VM_BUILTINS_H_ */

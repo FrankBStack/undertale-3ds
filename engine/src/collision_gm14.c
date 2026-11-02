@@ -235,3 +235,99 @@ __attribute__((used, aligned(4), section(".rodata.late.colflipgap"))) static con
 };
 __attribute__((used, aligned(8), section(".bss.late.colflipgap"))) static unsigned char colflipGapBss[0x1818];
 #endif
+
+// hitbox (change hitbox, 2026-11-01): a non-precise sprite's stored collision mask, read where data_win.c's parseSPRT
+// used to skip it. UNDERTALE.exe's pair scan (0x48afc0) unpacks every sprite's stored masks (0x48ae20), precise or
+// not, and its unit, scaled and rotated paths all test a non-precise partner's mask too, so a spinning knife hits with
+// its blade box, not its whole 110x42 picture (tools/pcref/trace/hitbox_ut.txt). In UNDERTALE each of the 1328
+// non-precise sprites stores one mask. A filled rectangle (1,296 of them, 3 empty) keeps no bytes: masks stays nullptr
+// and maskOffset and maskSize hold the rectangle, which Colflip14_shape reads as all set. The last 29 keep their bits,
+// cropped to the set pixels' box (38,126 B). Only the GMS 1.4 scan reads a non-precise sprite's mask (the point,
+// rectangle and line tests read a precise one's only, as UNDERTALE.exe does), so other games (bytecode 17:
+// DELTARUNE), other mask counts and a failed allocation skip it as before.
+#include "binary_reader.h"
+#define HITBOX_LATE __attribute__((noinline, optimize("Os"), section(".hitbox_late")))
+#define HITBOX_ROW 256
+
+HITBOX_LATE void DataWin_sep0Masks(BinaryReader* reader, DataWin* dw, Sprite* spr) {
+    uint32_t stride = (spr->maskWidth + 7) / 8, height = spr->maskHeight;
+    size_t start = BinaryReader_getPosition(reader);
+    size_t total = (size_t) stride * height * spr->maskCount;
+    spr->masks = nullptr;
+#if defined(ENABLE_WAD16)
+    if (16 >= dw->gen8.wadVersion && spr->maskCount == 1 && HITBOX_ROW >= stride && spr->maskOffsetX == 0 && spr->maskOffsetY == 0) {
+        uint8_t row[HITBOX_ROW];
+        uint32_t width = spr->maskWidth, n = 0, l = UINT32_MAX, r = 0, t = UINT32_MAX, b = 0;
+        uint8_t lastBits = (uint8_t) (0xFF00u >> (((width - 1) & 7) + 1));
+        for (uint32_t y = 0; height > y; y++) {
+            BinaryReader_readBytes(reader, row, stride);
+            row[stride - 1] &= lastBits;
+            for (uint32_t k = 0; stride > k; k++) {
+                uint32_t v = row[k];
+                if (v == 0) continue;
+                uint32_t x0 = k * 8 + (uint32_t) __builtin_clz(v << 24), x1 = k * 8 + 7 - (uint32_t) __builtin_ctz(v);
+                if (l > x0) l = x0;
+                if (x1 > r) r = x1;
+                if (t > y) t = y;
+                b = y;
+                for (; v != 0; v &= v - 1) n++;   // no __builtin_popcount: libgcc's would land in the main text
+            }
+        }
+        if (n == 0) {
+            spr->maskWidth = spr->maskHeight = 0;
+        } else {
+            uint32_t w = r - l + 1, h = b - t + 1;
+            if (n != w * h) {
+                uint32_t outStride = (w + 7) / 8;
+                uint8_t** masks = (uint8_t**) malloc(sizeof(uint8_t*));
+                uint8_t* bits = (uint8_t*) calloc((size_t) outStride * h, 1);
+                if (masks == nullptr || bits == nullptr) {
+                    free(masks);
+                    free(bits);
+                    return;
+                }
+                for (uint32_t y = 0; h > y; y++) {
+                    BinaryReader_seek(reader, start + (size_t) (t + y) * stride);
+                    BinaryReader_readBytes(reader, row, stride);
+                    for (uint32_t x = 0; w > x; x++) {
+                        if (row[(l + x) >> 3] & (0x80 >> ((l + x) & 7))) bits[y * outStride + (x >> 3)] |= (uint8_t) (0x80 >> (x & 7));
+                    }
+                }
+                masks[0] = bits;
+                spr->masks = masks;
+                BinaryReader_seek(reader, start + total);
+            }
+            spr->maskOffsetX = (int32_t) l;
+            spr->maskOffsetY = (int32_t) t;
+            spr->maskWidth = w;
+            spr->maskHeight = h;
+        }
+        return;
+    }
+#else
+    (void) dw;
+#endif
+    BinaryReader_skip(reader, total);
+}
+
+// hitbox: sprite_collision_mask in GMS 1.4. UNDERTALE.exe's (0x5185c0) sets the sprite's precise flag and has 0x494190
+// rebuild its masks and margins, which returns at once for a sprite of the game's texture pages (+0x54 set, +0x36
+// clear), so the margins and stored masks stay as data.win has them. UNDERTALE's one call, in the Create of Omega
+// Flowey's controller, is on his nuke's sprite (rectangle kind): on PC its instances keep bbox_left = x + 22 and
+// bbox_top = y + 20, where vm_builtins.c's version moved them to x + 13 and y + 44 (and the nuke left the room a frame
+// early). The precise flag is not kept: the nuke's stored mask fills its margins and the nuke never turns or scales,
+// so precise or not, every test gives the same pixels.
+static const char hitboxNameSpriteCollisionMask[] __attribute__((section(".rodata.hitbox_in_text"))) = "sprite_collision_mask";
+
+static HITBOX_LATE RValue builtin_sprite_collision_mask_gm14(VMContext* ctx, RValue* args, int32_t argCount) {
+    (void) ctx;
+    (void) args;
+    (void) argCount;
+    return RValue_makeUndefined();
+}
+
+// VM_create calls this through COLFLIP_REGISTER_ALL (vm_builtins.h): the chain before it, then the replacement.
+HITBOX_LATE void Hitbox_registerAll(VMContext* ctx) {
+    Utgap_registerAll(ctx);
+    if (Colflip_gm14) colflip14Replace(ctx, hitboxNameSpriteCollisionMask, builtin_sprite_collision_mask_gm14);
+}

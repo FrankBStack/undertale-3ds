@@ -2,6 +2,7 @@
 platform/3ds/source/z_utsfx.c).
 
     py -3 -I tools/roomplan/build_sfxplan.py --out <file.dtp> [--data <game folder>] [--records <dir>] [--plan-records <dir>]
+        [--streams]
 
 Finds the game's data.win (--data, $CTRPORT_UNDERTALE_DATA, or the Steam library, as tools/aot/prepare.py does), picks
 the committed sound record (tools/roomplan/records/sounds/*.json, made by sound_records.py) made on that exact file
@@ -25,6 +26,12 @@ build_plan.py's, which lists the code each group ran), the constant each of its 
 HURT_VARS variable. Those come after the group's recorded sounds and before KILL_SOUNDS, on the worker; a group the
 sound record has no scene for gets a scene of them.
 
+Stream scenes (change omegaflowey, --streams: UNDERTALE Old builds): the sound record's "streams" list (stream_records.py,
+from our playthrough logs) names, per room, the big compressed sounds that room decoded into the sound cache. Each
+room gets a scene of them with sub STREAM_SUB (entries u16 sound, u16 0), which the Old runtime reads at the room
+change to have them stream for the room (z_utsfx.c's usPreloadOld) instead of taking a linear cache copy. Scene
+lookups for a battle group never match that sub, so other runtimes skip the scene.
+
 Exit status: 0 written, 3 no game data or no record for it (the build goes on without a plan), 2 an error.
 """
 import argparse
@@ -41,6 +48,7 @@ sys.path.insert(0, os.path.join(HERE, '..', 'aot'))
 MAGIC = 0x50535444            # "DTSP" (UTSFX_MAGIC)
 VERSION = 2
 NO_SUB = 0xFFFF
+STREAM_SUB = 0xFFFE              # UTSFX_STREAM_SUB (z_utsfx.c): the room's sounds that stream
 SECTION_MIN = 512 * 1024      # AUDO_SECTION_MIN_BYTES: from this size a sound streams from its section of data.win
 ENTRY_MAX = 2 * 1024 * 1024   # SFX_CACHE_MAX_ENTRY_BYTES
 SCENE_BYTES = 2 * 1024 * 1024  # copies planned per scene at most (the cache holds 6 MiB; Old linear memory is tight)
@@ -242,9 +250,9 @@ def with_battle_sounds(record_scenes, sounds, hurt=None):
     return out
 
 
-def build(info, sounds, record, hurt=None):
+def build(info, sounds, record, hurt=None, streams=False):
     """The plan's bytes. info: dwinfo.DataWinInfo; sounds: read_sounds(); record: a sound record for this data.win;
-    hurt: hurt_sounds() or None."""
+    hurt: hurt_sounds() or None; streams: add the record's stream scenes (UNDERTALE Old)."""
     scenes = []
     for s in with_battle_sounds(record['scenes'], sounds, hurt):
         room, sub = s['room'], s['sub']
@@ -263,6 +271,10 @@ def build(info, sounds, record, hurt=None):
                 first += 1
         if entries:
             scenes.append((room, NO_SUB if sub < 0 else sub, entries, first))
+    for st in (record.get('streams', []) if streams else []):
+        ks = [k for k in st['sounds'] if 0 <= k < len(sounds)]
+        if ks and 0 <= st['room'] < info.room_count:
+            scenes.append((st['room'], STREAM_SUB, [(k, 0) for k in ks], 0))
     scenes.sort(key=lambda t: (t[0], t[1]))
     body = bytearray()
     for room, sub, entries, first in scenes:
@@ -304,7 +316,7 @@ def find_plan_record(plan_records, sha):
     return None
 
 
-def write_plan(path, records, out, plan_records=None):
+def write_plan(path, records, out, plan_records=None, streams=False):
     """0 written, 3 no record for this data.win, 2 a record that doesn't fit."""
     import dwinfo
     info = dwinfo.DataWinInfo(path)
@@ -319,7 +331,7 @@ def write_plan(path, records, out, plan_records=None):
     plan_record = find_plan_record(plan_records, info.sha256)
     hurt = hurt_sounds(path, info, plan_record) if plan_record is not None else {}
     print('Sound plan: hurt sounds for %d battle groups (%d sounds)' % (len(hurt), sum(len(v) for v in hurt.values())))
-    data = build(info, sounds, record, hurt)
+    data = build(info, sounds, record, hurt, streams)
     os.makedirs(os.path.dirname(os.path.abspath(out)), exist_ok=True)
     tmp = out + '.tmp'
     with open(tmp, 'wb') as f:
@@ -338,6 +350,7 @@ def main(argv=None):
     ap.add_argument('--records', default=os.path.join(HERE, 'records', 'sounds'))
     ap.add_argument('--plan-records', default=os.path.join(HERE, 'records'), help="the room plan's records (hurt sounds)")
     ap.add_argument('--out', required=True)
+    ap.add_argument('--streams', action='store_true', help="add the record's stream scenes (UNDERTALE Old builds)")
     a = ap.parse_args(argv)
     if a.data_win is not None:
         path = a.data_win
@@ -351,7 +364,7 @@ def main(argv=None):
         print('Sound plan: no undertale data.win found')
         return 3
     try:
-        return write_plan(path, a.records, a.out, a.plan_records)
+        return write_plan(path, a.records, a.out, a.plan_records, a.streams)
     except (ValueError, KeyError, struct.error) as e:
         print('Sound plan: %s' % e, file=sys.stderr)
         return 2

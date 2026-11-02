@@ -54,3 +54,34 @@ FPSBOX_CODE void CtrFpsbox_restoreMenu(uint16_t* shown, const uint16_t* page, bo
         else memcpy(shown + offset, page + offset, 36u * sizeof(*shown));
     }
 }
+
+// The old restore slot stays intact. Its caller now leaves live pixels alone;
+// the digit painter composites the menu backdrop and glyph in a single pass.
+__attribute__((noinline, noipa, optimize("Os"), section(".text.fpsbox75zm_late")))
+void CtrFpsbox_menuNoErase(uint16_t* shown, const uint16_t* page, bool top) {
+    (void) shown; (void) page; (void) top;
+}
+
+#if defined(__3DS__) && defined(ENABLE_WAD17) && defined(CTRPORT_TARGET_N3DS)
+// Retain DR New's existing ARM-to-Thumb veneer before the appended counter.
+// caDraw still branches to the exact old address. 3dsxtool also relocates the
+// word at veneer +8 by name, even for an explicit stub: give that slot a real,
+// unused ABS32 pointer, never an instruction or unrelocated glyph constant.
+__asm__(".pushsection .text.fpsbox75zm_veneer,\"ax\",%progbits\n"
+        ".arm\n.balign 8\n"
+        ".type ____wrap_Crispart_drawTexture_from_arm,%function\n"
+        "____wrap_Crispart_drawTexture_from_arm:\n"
+        ".global CtrFpsbox_crispVeneer\n"
+        ".type CtrFpsbox_crispVeneer,%function\n"
+        "CtrFpsbox_crispVeneer:\n"
+        "ldr pc,[pc,#-4]\n"
+        ".word __wrap_Crispart_drawTexture\n"
+        ".size ____wrap_Crispart_drawTexture_from_arm,8\n"
+        ".size CtrFpsbox_crispVeneer,8\n"
+        ".global CtrFpsbox_veneerReloc\n"
+        ".type CtrFpsbox_veneerReloc,%object\n"
+        "CtrFpsbox_veneerReloc:\n"
+        ".word CtrFpsbox_crispVeneer\n"
+        ".size CtrFpsbox_veneerReloc,4\n"
+        ".popsection\n");
+#endif

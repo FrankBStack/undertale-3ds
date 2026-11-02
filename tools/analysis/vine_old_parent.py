@@ -13,9 +13,12 @@ INTERNAL = ('flushBatch', 'applyTexEnv', 'queueTextureCopy', 'clearBoundTarget',
             'ctrDrawSpritePartColor', 'ctrDrawSpriteTiled', 'ctrDrawSpritePos')
 EXTERNAL = ('C3D_SetViewport', 'C3D_SetScissor', 'C3D_FrameDrawOn', 'C3D_FrameBufClear')
 ENTRIES = INTERNAL + EXTERNAL
-# Calls routed inside one function only: (function, callee, target, calls expected there,
-# optional branch mnemonic). Existing entries qualify calls; drpix qualifies one tail branch.
+# Calls routed inside one function only: (function, callee, target, calls expected there), then optionally a
+# branch mnemonic (a string, 'bl' by default; drpix qualifies one tail branch) and a tuple of which of those
+# calls (0 = the first in the assembly) are routed (default all); the others are left as they are.
 SCOPED = ()
+# Entries routed somewhere other than Vine_wrap_<name>.
+TARGETS = {}
 
 
 def route(text):
@@ -26,7 +29,7 @@ def route(text):
         if name in INTERNAL:
             assert len(re.findall(r'(?m)^'+name+r':$', text)) == 1, name
             assert not re.search(r'(?m)^'+name+r'\.(?:constprop|isra|part)\.', text), name
-        target = 'Vine_wrap_'+name
+        target = TARGETS.get(name, 'Vine_wrap_'+name)
         pattern = r'(?m)^([ \t]+b(?:l)?'+extract.CONDITION+r'[ \t]+)'+name+r'(\(PLT\))?([ \t]*(?:@[^\n]*)?)$'
         text, branches = re.subn(pattern, lambda m: m[1]+target+(m[2] or '')+m[3], text)
         pattern = r'(?m)^([ \t]+\.word[ \t]+)'+name+r'([ \t]*)$'
@@ -35,16 +38,25 @@ def route(text):
         counts[name] = dict(branches=branches, pointers=pointers)
     for entry in SCOPED:
         scope, name, target, expected = entry[:4]
-        branch = entry[4] if len(entry) == 5 else 'bl'
+        extra = entry[4:]
+        assert len(extra) <= 2, entry
+        branch = next((e for e in extra if isinstance(e, str)), 'bl')
+        only = next((e for e in extra if not isinstance(e, str)), None)
         assert branch in ('b', 'bl'), entry
         found = list(re.finditer(r'(?ms)^'+re.escape(scope)+r':\r?\n.*?^\s*\.size\s+'+re.escape(scope)+r',\s*\.-'+re.escape(scope)+r'\s*$', text))
         assert len(found) == 1, ('Scope', scope)
         body = found[0][0]
         pattern = r'(?m)^([ \t]+'+branch+extract.CONDITION+r'[ \t]+)'+name+r'(\(PLT\))?([ \t]*(?:@[^\n]*)?)$'
-        routed, branches = re.subn(pattern, lambda m: m[1]+target+(m[2] or '')+m[3], body)
-        assert branches == expected, ('Scoped calls', scope, name, branches)
+        calls = list(re.finditer(pattern, body))
+        assert len(calls) == expected, ('Scoped calls', scope, name, len(calls))
+        picked = set(only) if only is not None else set(range(expected))
+        assert picked <= set(range(expected)), ('Scoped picks', scope, name, sorted(picked))
+        routed = body
+        for i in sorted(picked, reverse=True):
+            m = calls[i]
+            routed = routed[:m.start()]+m[1]+target+(m[2] or '')+m[3]+routed[m.end():]
         text = text[:found[0].start()]+routed+text[found[0].end():]
-        counts[scope+':'+name] = dict(branches=branches, pointers=0)
+        counts[scope+':'+name] = dict(branches=len(picked), pointers=0)
     return text, counts
 
 

@@ -26,7 +26,7 @@ elif "$cc" "${extra[@]}" -Werror -ftrivial-auto-var-init=zero -enable-trivial-au
         -x c -c /dev/null -o "$objdir/zero-probe.o" >/dev/null 2>&1; then
     autozero=(-ftrivial-auto-var-init=zero -enable-trivial-auto-var-init-zero-knowing-it-will-be-removed-from-clang)
 fi
-base=(-std=gnu2x -O2 "${autozero[@]}" -ffile-prefix-map="$root"=. -DCTRPORT_GAME_DIR='"."' -DENABLE_WAD16 -DENABLE_WAD17
+base=(-std=gnu2x -O2 "${autozero[@]}" -ffile-prefix-map="$root"=. -DCTRPORT_GAME_DIR='"."' -DENABLE_WAD16 -DENABLE_WAD17 -DCTRPORT_TEXPREP_REDPIX
       -I"$here/shim" -I"$here" -I"$src" -I"$eng/src" -I"$eng/src/image"
       -isystem "$eng/vendor/stb/ds" -isystem "$eng/vendor/stb/image" -isystem "$eng/vendor/bzip2")
 common=("${extra[@]}" "${base[@]}")
@@ -37,6 +37,7 @@ if [ -n "$exe" ]; then
 fi
 # Ours and the console's sources: warnings on, as in the console build.
 ours=("$here/texprep.c" "$here/host_platform.c"
+      "$src/z_redpix.c"
       "$src/ctr_png.c" "$src/ctr_inflate.c" "$src/ctr_qoi.c" "$src/ctr_bz2.c" "$src/ctr_lz.c" "$src/ctr_cache_publish.c"
       "$eng/src/image/image_decoder.c" "$eng/src/gettime.c" "$eng/src/log.c")
 # Vendored libraries, as the console builds them.

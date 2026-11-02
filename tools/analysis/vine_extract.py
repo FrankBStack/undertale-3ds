@@ -21,8 +21,14 @@ CONDITION = r'(?:eq|ne|cs|cc|mi|pl|vs|vc|hi|ls|ge|lt|gt|le|al)?'
 LATE = re.compile(r'^\.(?:text|rodata|data|bss)\.late\.perfflowery$')
 LATE_LANES = {'perfflowery': re.compile(r'^\.(?:text|rodata|data|bss)\.late\.perfflowery$|^\.text\.drpix_late$'),
               # DELTARUNE New's tower face retention (vine_new_retain.inc), its own late sections, and climbnoise's
-              # Azahar-only free of the tower textures there (cnTowerFree, its own line in late_reserve.ld).
-              'flowergpu': re.compile(r'^\.(?:text|rodata|data|bss)\.late\.flowergpu$|^\.text\.climbnoise_late$')}
+              # Azahar-only free of the tower textures there (cnTowerFree, its own line in late_reserve.ld), change flowerhw's
+              # tower cuts 6 and 7, its test words and tshare (the shared depth texture's wait for VRAM; all on its own
+              # lines, last in late_reserve.ld), and titancpu's lazy surface hand-off splits (vine_titancpu.inc) and its
+              # lever 1 (the typed regions' draw_surface_part repeats), on their own lines too.
+              'flowergpu': re.compile(r'^\.(?:text|rodata|data|bss)\.late\.flowergpu$|^\.text\.climbnoise_late$'
+                                      r'|^\.text\.flowerhw_late$|^\.rodata\.flowerhw_late$|^\.bss\.flowerhw_late$'
+                                      r'|^\.text_flowerhw_tail$|^\.(?:text|rodata|bss)\.tshare_late$'
+                                      r'|^\.(?:text|bss)\.titancpu_late$|^\.text\.titancpu_tail$')}
 sha = lambda text: hashlib.sha256(text.encode()).hexdigest()
 
 

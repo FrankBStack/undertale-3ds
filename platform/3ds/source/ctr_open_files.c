@@ -20,9 +20,10 @@
 // files) come on top of what the caches keep, so this leaves them six.
 #define DEFAULT_LIMIT 12
 // An open that failed waits this long at most for other threads' caches to
-// close their files, trying again each time one does.
-#define SHED_WAIT_NS (150ll * 1000000ll)
-#define SHED_STEP_NS (2ll * 1000000ll)
+// close their files, trying again each time one does, and no longer once
+// every cache asked has.
+#define SHED_WAIT_MS 150
+#define SHED_STEP_MS 2
 #define HANDLES_BELIEVABLE 12
 #define HANDLE_PROBE_MAX 4096
 
@@ -39,7 +40,20 @@ typedef struct {
     Thread thread; // the thread that closes its files (nullptr: the main thread)
     bool used;
     bool pending; // asked to shed at its thread's next CtrOpenFiles_poll
+    // One more as its thread takes a request to shed (under lock) and one
+    // more as it has closed its files, so odd while it sheds (change racefix;
+    // in what was padding, so Keeper keeps its 20 bytes).
+    uint8_t seq;
 } Keeper;
+
+// What a request to shed waits for (change racefix): need[i], the seq keeper i
+// reaches once it has finished a shed it took after the request. The table's
+// address comes along so that the late check below doesn't name `keepers`
+// (naming it there reorders this file's statics).
+typedef struct {
+    const Keeper* keepers;
+    uint8_t need[KEEPERS_MAX];
+} ShedRequest;
 
 static LightLock lock;
 static OpenEntry entries[TRACKED_MAX];
@@ -49,10 +63,20 @@ static int failuresLogged;
 static int limit = DEFAULT_LIMIT;
 static int fakeLimit; // open_files_fake_max: refuse opens past this many, for testing (0: off)
 static Keeper keepers[KEEPERS_MAX];
-static volatile uint32_t sheds; // bumped each time a cache closes its files
+static volatile uint32_t sheds; // sheds finished, all caches; unread since change racefix (Keeper.seq), kept so the statics keep their places
 static devoptab_t tracked;
 static const devoptab_t* real;
 static __thread int quietDepth; // inside CtrOpenFiles_beginCacheOpen
+
+// change racefix (late text): those keepers in `asked` that have finished the shed req->need names for them (seq
+// wraps at 256; a request lives 150 ms at most).
+__attribute__((noinline, optimize("Os"), section(".text.racefix_late"))) static unsigned racefixShed(const ShedRequest* req, unsigned asked) {
+    unsigned shed = 0;
+    for (int i = 0; KEEPERS_MAX > i; i++) {
+        if (0 <= (int8_t) (__atomic_load_n(&req->keepers[i].seq, __ATOMIC_ACQUIRE) - req->need[i])) shed |= 1u << i;
+    }
+    return shed & asked;
+}
 
 // Under lock.
 static void add(const void* key, bool folder, const char* path) {
@@ -119,48 +143,59 @@ static void noteFailure(const char* what, const char* path, int err) {
 // Runs the calling thread's caches that were asked to shed. Never under lock.
 static int shedOwn(void) {
     Thread self = threadGetCurrent();
-    int shed = 0;
     for (int i = 0; KEEPERS_MAX > i; i++) {
         LightLock_Lock(&lock);
         Keeper k = keepers[i];
         bool run = k.used && k.pending && k.thread == self;
-        if (run) keepers[i].pending = false;
+        if (run) {
+            keepers[i].pending = false;
+            keepers[i].seq++;
+        }
         LightLock_Unlock(&lock);
         if (!run) continue;
         k.shed(k.owner);
-        shed++;
+        __atomic_store_n(&keepers[i].seq, (uint8_t) (keepers[i].seq + 1), __ATOMIC_RELEASE); // its thread's own byte
+        sheds++;
     }
-    if (0 < shed) __atomic_add_fetch(&sheds, 1, __ATOMIC_RELEASE);
-    return shed;
+    return 0; // unused; void would change how the compiler lays out this file's statics
 }
 
 // Asks every cache to close its kept-open files. Those of the calling thread
 // close them now unless it is opening a cache file itself (its caller may
-// hold one); the others at their thread's next poll. Returns whether another
-// thread's cache was asked.
-static bool askToShed(bool own) {
+// hold one); the others at their thread's next poll. Returns which caches
+// were asked (bit i: keeper i), and for each one in req->need[i] the value
+// keepers[i].seq reaches once that cache has finished a shed it took after
+// this request (those of this thread before this returns).
+__attribute__((noinline)) static unsigned askToShed(bool own, ShedRequest* req) {
+    // The function keeps its former 244 bytes, so that nothing after it
+    // moves: subsection 1 follows the body and its literal pool, zero-filled.
+#if defined(__3DS__) && defined(NDEBUG) // the Release layout only
+    __asm__(".pushsection .text.askToShed, 1\n.org 244\n.popsection");
+#endif
     Thread self = threadGetCurrent();
-    bool others = false;
-    void (*wakes[KEEPERS_MAX])(void*);
-    void* owners[KEEPERS_MAX];
-    int wakeCount = 0;
+    unsigned asked = 0;
+    req->keepers = keepers;
     LightLock_Lock(&lock);
     for (int i = 0; KEEPERS_MAX > i; i++) {
         Keeper* k = &keepers[i];
         if (!k->used) continue;
         if (k->thread == self && !own) continue;
         k->pending = true;
+        // A shed running now (odd) may have started too early to see this
+        // request: then the one after it.
+        uint8_t seq = k->seq;
+        req->need[i] = seq + 2 + (seq & 1);
+        asked |= 1u << i;
         if (k->thread == self) continue;
-        others = true;
-        if (k->wake != nullptr) {
-            wakes[wakeCount] = k->wake;
-            owners[wakeCount++] = k->owner;
-        }
+        // Woken under the lock: a keeper's thread removes it (under the lock)
+        // before its owner is freed, so the owner is alive here. After the
+        // unlock a stopping tile reader could already be freed
+        // (CtrTileReader_stop). A wake only signals an event.
+        if (k->wake != nullptr) k->wake(k->owner);
     }
     LightLock_Unlock(&lock);
-    for (int i = 0; wakeCount > i; i++) wakes[i](owners[i]);
     if (own) shedOwn();
-    return others;
+    return asked;
 }
 
 // Whether the open_files_fake_max test setting refuses another open, as the
@@ -174,11 +209,11 @@ static bool fakeFull(struct _reent* r) {
     return full;
 }
 
-static int attemptOpen(struct _reent* r, void* fileStruct, const char* path, int flags, int mode) {
+__attribute__((noinline)) static int attemptOpen(struct _reent* r, void* fileStruct, const char* path, int flags, int mode) {
     return fakeFull(r) ? -1 : real->open_r(r, fileStruct, path, flags, mode);
 }
 
-static DIR_ITER* attemptDirOpen(struct _reent* r, DIR_ITER* dirState, const char* path) {
+__attribute__((noinline)) static DIR_ITER* attemptDirOpen(struct _reent* r, DIR_ITER* dirState, const char* path) {
     return fakeFull(r) ? nullptr : real->diropen_r(r, dirState, path);
 }
 
@@ -190,30 +225,42 @@ static int openCount(void) {
 }
 
 // Opens through `attempt` and, should that fail with the card's files
-// crowded, has the caches close theirs and tries again.
+// crowded, has the caches close theirs and tries again each time another of
+// them has (this thread's at once). Once every cache it asked has finished
+// a shed it took after this request, it stops: nothing else it
+// waits for frees an open (it used to sleep out the rest of SHED_WAIT_MS,
+// twice for cacheFile, whose own caches it doesn't ask). A shed that answered
+// another request doesn't count (c26rev r93 F1: counting every shed let a
+// second shed of one cache stand in for another cache still to close).
 #define RETRY_OPEN(ok, attempt)                                                                   \
     do {                                                                                          \
         if (ok || isMissing(r->_errno)) break;                                                    \
         int failedErrno = r->_errno;                                                              \
         int crowd = openCount();                                                                  \
         bool own = 0 == quietDepth;                                                               \
-        uint32_t seen = __atomic_load_n(&sheds, __ATOMIC_ACQUIRE);                                \
-        bool others = askToShed(own);                                                             \
-        if (own) attempt;                                                                         \
-        int64_t waited = 0;                                                                       \
-        while (!(ok) && others && SHED_WAIT_NS > waited) {                                         \
-            svcSleepThread(SHED_STEP_NS);                                                         \
-            waited += SHED_STEP_NS;                                                               \
-            uint32_t now = __atomic_load_n(&sheds, __ATOMIC_ACQUIRE);                             \
-            if (now == seen) continue;                                                            \
-            seen = now;                                                                           \
+        ShedRequest req;                                                                          \
+        unsigned asked = askToShed(own, &req);                                                    \
+        unsigned shed = 0; /* those asked that have shed for this request */                      \
+        int waited = 0; /* ms */                                                                  \
+        while (!(ok) && asked != shed && SHED_WAIT_MS > waited) {                                 \
+            unsigned now = racefixShed(&req, asked);                                              \
+            if (now == shed) {                                                                    \
+                svcSleepThread(SHED_STEP_MS * 1000000ll);                                         \
+                waited += SHED_STEP_MS;                                                           \
+                continue;                                                                         \
+            }                                                                                     \
+            shed = now;                                                                           \
             attempt;                                                                              \
         }                                                                                         \
-        if (ok) logInfo("Files: opened %s once kept-open files were closed (%d were open, errno "  \
-                        "%d; %.0f ms)\n", path, crowd, failedErrno, (double) waited / 1e6);       \
+        if (ok) logInfo("Files: opened %s once kept-open files were closed (%d were open, errno " \
+                        "%d; %.0f ms)\n", path, crowd, failedErrno, (double) waited);             \
     } while (0)
 
 static int trackedOpen(struct _reent* r, void* fileStruct, const char* path, int flags, int mode) {
+    // Keeps its former 560 bytes (as askToShed).
+#if defined(__3DS__) && defined(NDEBUG) // the Release layout only
+    __asm__(".pushsection .text.trackedOpen, 1\n.org 560\n.popsection");
+#endif
     int fd = attemptOpen(r, fileStruct, path, flags, mode);
     RETRY_OPEN(0 <= fd, fd = attemptOpen(r, fileStruct, path, flags, mode));
     if (0 > fd) {
@@ -239,6 +286,10 @@ static int trackedClose(struct _reent* r, void* fileStruct) {
 }
 
 static DIR_ITER* trackedDirOpen(struct _reent* r, DIR_ITER* dirState, const char* path) {
+    // Keeps its former 576 bytes (as askToShed).
+#if defined(__3DS__) && defined(NDEBUG) // the Release layout only
+    __asm__(".pushsection .text.trackedDirOpen, 1\n.org 576\n.popsection");
+#endif
     DIR_ITER* dir = attemptDirOpen(r, dirState, path);
     RETRY_OPEN(dir != nullptr, dir = attemptDirOpen(r, dirState, path));
     if (dir == nullptr) {
@@ -295,12 +346,21 @@ bool CtrOpenFiles_mayKeep(void) {
 }
 
 int CtrOpenFiles_addKeeper(void (*shed)(void* owner), void (*wake)(void* owner), void* owner) {
+    // Keeps its former 156 bytes (as askToShed): written whole now, seq too,
+    // which came out shorter.
+#if defined(__3DS__) && defined(NDEBUG) // the Release layout only
+    __asm__(".pushsection .text.CtrOpenFiles_addKeeper, 1\n.org 156\n.popsection");
+#endif
     if (real == nullptr) return -1;
     LightLock_Lock(&lock);
     int id = -1;
     for (int i = 0; KEEPERS_MAX > i && 0 > id; i++) {
         if (keepers[i].used) continue;
-        keepers[i] = (Keeper) { shed, wake, owner, threadGetCurrent(), true, false };
+        // seq starts again at 0. A request still waiting on the keeper that
+        // last had this slot (removed within its 150 ms) then waits it out,
+        // as it would for a removed keeper anyway, or stops one wait early
+        // if its need was past 128.
+        keepers[i] = (Keeper) { .shed = shed, .wake = wake, .owner = owner, .thread = threadGetCurrent(), .used = true };
         id = i;
     }
     LightLock_Unlock(&lock);
@@ -377,3 +437,4 @@ void CtrOpenFiles_log(const char* where, bool list) {
     }
     if (0 < u) logInfo("Files:   and %d more not listed\n", u);
 }
+

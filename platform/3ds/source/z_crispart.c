@@ -90,6 +90,12 @@ bool Crispart_isCrisp(Renderer* renderer);
 uint32_t Crispart_smart(Renderer* renderer, uint32_t state);
 void Crispart_drawTexture(Renderer* renderer, C3D_Tex* tex, const CaFrame* frame,
                          float x, float y, uint32_t color, float alpha);
+#if defined(__3DS__) && defined(ENABLE_WAD17) && defined(CTRPORT_TARGET_N3DS)
+// Name the retained ARM entry so ld does not append a new interworking stub.
+extern __typeof__(Crispart_drawTexture) CtrFpsbox_crispVeneer;
+#define Crispart_drawTexture CtrFpsbox_crispVeneer
+#endif
+#line 93
 
 static const char caIni[] CA_CONST = CTRPORT_GAME_DIR "/settings.ini";
 static const char caKey[] CA_CONST = " crisp_art = %d";

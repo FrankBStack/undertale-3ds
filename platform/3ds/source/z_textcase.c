@@ -1,4 +1,4 @@
-// textcase       codeclose, lever 1; UNDERTALE Old 3DS only): the dialogue script's switch jumps straight to its case.
+// textcase (change codeclose, lever 1; UNDERTALE Old 3DS only): the dialogue script's switch jumps straight to its case.
 //
 // Why: every text box runs UNDERTALE's dialogue script (146 KB of bytecode, interpreted on the Old 3DS) to fill in
 // its lines, often several times in the frame it opens. The script is one switch on a self variable, compiled as a

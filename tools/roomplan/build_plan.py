@@ -20,7 +20,12 @@ first-battle preload as coverage grows);
 its groups are scenes of their own (their code entries; the runtime picks the group at the room change). Each group's
 code also lists its objects' other events and the code SHARED_GROUPS groups ran (battle_code). UNDERTALE's scenes then
 list the code their objects can create in play (codeclose.py), and rooms without a record get a code-only scene when
-that adds any. The same inputs always give the same bytes.
+that adds any. A room-level record scene's `keep_open_tiles` (UNDERTALE) becomes one more scene of the room, sub
+KEEP_SUB, those tiles at LATER and no code: no loader takes it (each picks the room's scene or its battle group's, and
+global.battlegroup is never KEEP_SUB), but the Old models' texture-file close after a room load (ctr_textures.c,
+CtrTextures_roomLoadedOld) scans every scene of the room, so a cache file whose page has one of those tiles missing
+stays open through the room (a room whose preload feeds the next room's restarts). The same inputs always give the
+same bytes.
 
 Exit status: 0 written, 3 no game data or no record for it (the build goes on without a plan), 2 an error.
 """
@@ -41,6 +46,7 @@ MAGIC = 0x50525444
 VERSION = 1
 BUILDER = b'roomplan 1'
 NO_SUB = 0xFFFF
+KEEP_SUB = 0xFFFE           # keep_open_tiles' scene: no loader takes it (module docstring)
 TILES_MAX = 512            # ROOM_TILES_MAX (ctr_textures.c)
 LATE = 0x80000000
 RECORD_FRAMES = 45         # ROOM_RECORD_FRAMES: rooms.dtm keeps the first 45 frames; the runtime seeds those
@@ -186,6 +192,18 @@ def battle_code(info, subs):
     return out
 
 
+def keep_tiles(info, scene):
+    """A room-level scene's keep_open_tiles as [(LATER, page, tile)], sorted (module docstring); [] without any."""
+    out = set()
+    for page, tile in scene.get('keep_open_tiles', ()):
+        if (type(page) is not int or type(tile) is not int or
+                not 0 <= page < len(info.pages) or info.pages[page] is None or
+                not 0 <= tile < info.pages[page].tiles_x * info.pages[page].tiles_y or tile > 255):
+            raise ValueError('invalid keep-open tile %r' % ((page, tile),))
+        out.add((LATER, page, tile))
+    return sorted(out)
+
+
 def encode_scene(info, room, sub, tiles, code, cap=CAP_BYTES):
     """tiles: [(dframe, page, tile)] in order. Late: first drawn after the scene's first drawn frame."""
     tiles, total = capped(info, tiles, cap)
@@ -238,6 +256,9 @@ def build(info, record, closure=None, code_closure=None):
             # The whole set reads the record's code (code_create_sprite): the in-play extras go to the code list only.
             code = s['code'] + ([] if subs else in_play(code_closure, room, s['code'], s['code']))
             scenes.append(encode_scene(info, room, NO_SUB, tiles + whole_set(info, closure, room, s, tiles), code, cap))
+            keep = keep_tiles(info, s)
+            if keep:
+                scenes.append(encode_scene(info, room, KEEP_SUB, keep, []))
         elif subs:
             # New outlier fights must not shrink an established first-battle preload.
             frame_groups = record.get('battle_frame_groups', {}).get(str(room))

@@ -630,8 +630,9 @@ static VR_CODE void vdFrame(CtrRenderer* r) {
  * Three of the tower's layers in each room (cut 0, so not cut 3's shared layers) are 360x360 surfaces in 512x512 RGBA8
  * FCRAM textures, about 4.3 ms of the GPU's frame in the climb. Each repeats every 180 columns, so its columns 0-255
  * hold every texel its strips sample, exactly as for cut 3's shared texture: a strip at or past column 180 samples the
- * copy 180 columns to the left (vdRemap). A plain layer drawn unchanged 4 frames running gets a 256x512 RGBA8 copy of
- * its columns 0-255 (368 KB), when VRAM keeps PC_MARGIN free beyond it.
+ * copy 180 columns to the left (vdRemap; since cut 7d fhwU, filled as the strips are written). A plain layer drawn
+ * unchanged 4 frames running gets a 256x512 RGBA8 copy of its columns 0-255 (368 KB), when VRAM keeps PC_MARGIN free
+ * beyond it.
  *
  * How it stays exact.
  *   - The copy is the layer's own texels: built on the CPU into linear memory a few tile rows a frame, each read after
@@ -958,67 +959,23 @@ static VR_CODE bool vrTowerDraw(CtrRenderer* r, int32_t surfaceId, CtrSurface* s
     return drawn;
 }
 
-// Whether the pending batch is a shared layer's strips that the shared texture can draw: quads of its texture alone,
-// drawn by flushBatch's plain path with its cut stages, nearest filtering and the normal blend.
-static VR_CODE bool vdBatchOk(CtrRenderer* r) {
-    uint32_t count = r->vertexCount - r->batchStart;
+// Whether the renderer's state lets the shared texture draw a shared layer's strips: drawn by flushBatch's plain path
+// with its cut stages, nearest filtering and the normal blend (the batch itself: vdBatchOk).
+static VR_CODE bool vdStateOk(CtrRenderer* r) {
     bool linear = r->filterOverride != 0 ? r->filterOverride == FILTER_LINEAR : r->base.texFilter;
     const BlendFactors* f = &r->base.blendFactors;
-    return vd.drawTex != nullptr && (vd.drawTex != &vd.tex || vd.state == VD_READY) && r->batchTex == vd.layerTex && count != 0 && (count & 3u) == 0 && r->batchQuads && r->batchTexCount == 1 &&
-           r->batchTexB == nullptr && r->addHold.mode == ADD_HOLD_OFF && r->shrink.batchMode == 0 && r->layer.mode == 0 && !r->shoujoBands &&
-           !r->colorMask && !r->palSurfPass && r->crtPass == 0 && !linear && r->towerStrips && !r->plainTexEnv && r->opAlphaCut == 0 &&
-           (r->shaderFx == SHADER_FX_TOWER || r->shaderFx == SHADER_FX_NONE) && r->blendEnable && !r->blendOverridden &&
-           r->blendMode == bm_normal && f->src == bm_src_alpha && f->dst == bm_inv_src_alpha && f->dstAlpha == bm_inv_src_alpha;
+    return vd.drawTex != nullptr && (vd.drawTex != &vd.tex || vd.state == VD_READY) && r->batchQuads && r->addHold.mode == ADD_HOLD_OFF &&
+           r->shrink.batchMode == 0 && r->layer.mode == 0 && !r->shoujoBands && !r->colorMask && !r->palSurfPass && r->crtPass == 0 &&
+           !linear && r->towerStrips && !r->plainTexEnv && r->opAlphaCut == 0 && (r->shaderFx == SHADER_FX_TOWER || r->shaderFx == SHADER_FX_NONE) &&
+           r->blendEnable && !r->blendOverridden && r->blendMode == bm_normal && f->src == bm_src_alpha && f->dst == bm_inv_src_alpha &&
+           f->dstAlpha == bm_inv_src_alpha;
 }
 
-// Moves every quad's u onto the shared texture, or none if a quad can't be. One pass (cut 5a): each quad is checked
-// and moved while its lines are in the cache, its old u kept aside; a quad that can't be moved puts the earlier ones
-// back from there. A second pass read the whole batch again (~650 KB a frame in the climb). Batches of more quads
-// than are kept aside are left as they are. The lines of the quad 4 ahead are asked for first (PLD, within the batch):
-// 42 us a call down to 32-36 in the climb, 32 to 22 in the flower (New 3DS, flowergpu4 rm2 rows).
-#define VD_SAVE_QUADS 2048
-static float vdSave[2 * VD_SAVE_QUADS] VR_BSS;
-static VR_CODE bool vdRemap(CtrRenderer* r) {
-    CtrVertex* v = &r->vertices[r->batchStart];
+// Whether the pending batch is a shared layer's strips that the shared texture can draw: quads of its texture alone,
+// and vdStateOk.
+static VR_CODE bool vdBatchOk(CtrRenderer* r) {
     uint32_t count = r->vertexCount - r->batchStart;
-    if (count > 4u * VD_SAVE_QUADS) return false;
-    float width = (float) vd.layerTex->width;
-    for (uint32_t i = 0; count > i; i += 4) {
-        if (count > i + 16u) {
-            const char* ahead = (const char*) &v[i + 16];
-            __builtin_prefetch(ahead);
-            __builtin_prefetch(ahead + 32);
-            __builtin_prefetch(ahead + 64);
-        }
-        // towerQuad's corners: u0, u1, u1, u0.
-        float u0 = v[i].u, u1 = v[i + 1].u;
-        float a = u0 * width, b = u1 * width;
-        float lo = a < b ? a : b, hi = a < b ? b : a;
-        // Shift 0 when the quad ends by column 256; a start left of column 0 (a strip at the cylinder's edge) samples
-        // column 0 on both textures (clamp to edge, and vdCheck has their columns 0 equal). Shift 180 when it starts at
-        // 180 or beyond and ends by 436.
-        if (v[i + 3].u != u0 || v[i + 2].u != u1 || !(lo == lo) ||
-            !((float) VD_COLS >= hi || (lo >= (float) VD_SHIFT && (float) (VD_SHIFT + VD_COLS) >= hi))) {
-            for (uint32_t k = 0; i > k; k += 4) {
-                v[k].u = vdSave[k / 2u];
-                v[k + 3].u = vdSave[k / 2u];
-                v[k + 1].u = vdSave[k / 2u + 1u];
-                v[k + 2].u = vdSave[k / 2u + 1u];
-            }
-            return false;
-        }
-        vdSave[i / 2u] = u0;
-        vdSave[i / 2u + 1u] = u1;
-        float shift = lo >= (float) VD_SHIFT ? (float) VD_SHIFT : 0.0f;
-        float ua = (a - shift) * (1.0f / (float) VD_COLS), ub = (b - shift) * (1.0f / (float) VD_COLS);
-        v[i].u = ua;
-        v[i + 3].u = ua;
-        v[i + 1].u = ub;
-        v[i + 2].u = ub;
-    }
-    // Rewritten after flushVertexCache wrote them back (a split while they were made): written back again.
-    if (r->vertexFlushed > r->batchStart) r->vertexFlushed = r->batchStart;
-    return true;
+    return r->batchTex == vd.layerTex && count != 0 && (count & 3u) == 0 && r->batchTexCount == 1 && r->batchTexB == nullptr && vdStateOk(r);
 }
 #else
 #define VD_HOUSEKEEP(r) ((void) 0)
@@ -1054,12 +1011,114 @@ static bool vrBandLogged VR_BSS, vrRestLogged VR_BSS;
 static const char vrFmtBand[] VR_RO = "Renderer: drew tower face %d rows %d-%d first, the rows its draw shows (logged once)\n";
 static const char vrFmtRest[] VR_RO = "Renderer: drew the other rows of tower face %d when it was used otherwise (logged once)\n";
 
+#if defined(CTRPORT_FLOWERHW_TPROF)
+/* change flowerhw's tower CPU profile (build.sh ... towerprof; test builds only, never a release). Per frame: the tower
+ * draws (drawTowerStrips through vrTowerDraw, every one: at once, deferred and drawn later, band rows and the rest),
+ * the time in them, in their first flushBatch (the batch before) and their second (the strips, with the shared-texture
+ * remap), the strip quads handed to the GPU, and flushLazy's whole time (it holds the draws it replays). Every 150
+ * frames with a tower draw, the means per frame and the slowest frame's tower time go to the log as one [tprof] line. */
+#define TP_WINDOW 150u
+static struct {
+    uint32_t frame, frames, flushIdx, depth;
+    uint32_t fDraws, fQuads, wDraws, wQuads, fClipQ, wClipQ;
+    // Cut 7d: spans cut (ClipQ), draws written for the shared texture (ClipPx), batches it could have drawn that weren't
+    // (OutPx), early draws before a ring wrap (Room). Cut 6: its segments' pixels (6Px).
+    float fClipPx, wClipPx, wOutPx, w6Px, wRoom;
+    // Why Fhw_emitBegin left a draw of the shared texture's layer to flushBatch (FHW_NO's codes), and the last strip
+    // that didn't fit a window: its columns, its index and the draw's strip count.
+    float why[8], badLo, badHi, badI, badN;
+    uint64_t fTower, fF0, fF1, fLazy, wTower, wF0, wF1, wLazy, wMax, wMaxF1;
+} tp __attribute__((section(".bss.flowerhw_late")));
+static const char tpFmt[] __attribute__((aligned(4), section(".rodata.flowerhw_late"))) =
+    "[tprof] %u frames: tower draws %.1f/f, %.2f ms/f (slowest %.2f), flush before %.2f, strips flush %.2f (slowest %.2f), "
+    "quads %.0f/f, flushLazy %.2f ms/f (holds its draws); cut 7d cut %.0f spans/f, %.0f draws/f written for the shared "
+    "texture (missed %.0f), early %.0f; cut 6 %.0f px/f\n";
+static const char tpFmtWhy[] __attribute__((aligned(4), section(".rodata.flowerhw_late"))) =
+    "[tprof] cut 7d refused per frame: flushes %.2f, auto %.2f, spill %.2f, pal %.2f, target %.2f, state %.2f, count "
+    "%.2f, strips %.2f; last strip outside the windows: columns %.1f-%.1f, strip %.0f of %.0f\n";
+#define TP_MS(t) ((double) (t) * 1000.0 / (double) SYSCLOCK_ARM11)
+#ifdef CTRPORT_FHW_EMIT
+// drawTowerStrips' phases (FHW_PH in ctr_renderer.c), then its columns and strips.
+uint64_t Fhw_tpPh[24] __attribute__((section(".bss.flowerhw_late")));
+static const char tpFmtE[] __attribute__((aligned(4), section(".rodata.flowerhw_late"))) =
+    "[tprof] emit per frame: segments %.1f, covered quads %.0f, flat quads %.0f, whole strips %.0f, coverage columns "
+    "%.0f; reserves %.1f taking %.2f ms, runs left out %.0f, clips %.0f: wholly above %.0f, wholly below %.0f, across cut %.0f, left %.0f; "
+    "timer pairs adding %.2f ms\n";
+static const char tpFmtPh[] __attribute__((aligned(4), section(".rodata.flowerhw_late"))) =
+    "[tprof] drawTowerStrips ms/f: entry+placement %.2f, segments %.2f, texture+coverage %.2f, columns %.2f, strip "
+    "list %.2f, flush before+setup %.2f, emit %.2f, strips flush+after %.2f; columns %.0f/f, strips %.0f/f\n";
+#endif
+static __attribute__((noinline, section(".text.flowerhw_late"))) void tpFrame(CtrRenderer* r) {
+    if (tp.frame == r->frame) return;
+    if (tp.fDraws != 0) {
+        tp.wDraws += tp.fDraws;
+        tp.wQuads += tp.fQuads;
+        tp.wClipQ += tp.fClipQ;
+        tp.wClipPx += tp.fClipPx;
+        tp.wTower += tp.fTower;
+        tp.wF0 += tp.fF0;
+        tp.wF1 += tp.fF1;
+        tp.wLazy += tp.fLazy;
+        if (tp.fTower > tp.wMax) tp.wMax = tp.fTower;
+        if (tp.fF1 > tp.wMaxF1) tp.wMaxF1 = tp.fF1;
+        if (++tp.frames == TP_WINDOW) {
+            double n = (double) tp.frames;
+            logInfo(tpFmt, (unsigned) tp.frames, (double) tp.wDraws / n, TP_MS(tp.wTower) / n, TP_MS(tp.wMax), TP_MS(tp.wF0) / n,
+                    TP_MS(tp.wF1) / n, TP_MS(tp.wMaxF1), (double) tp.wQuads / n, TP_MS(tp.wLazy) / n,
+                    (double) tp.wClipQ / n, (double) tp.wClipPx / n, (double) tp.wOutPx / n, (double) tp.wRoom / n, (double) tp.w6Px / n);
+            logInfo(tpFmtWhy, (double) tp.why[0] / n, (double) tp.why[1] / n, (double) tp.why[6] / n, (double) tp.why[7] / n,
+                    (double) tp.why[2] / n, (double) tp.why[3] / n, (double) tp.why[4] / n, (double) tp.why[5] / n,
+                    (double) tp.badLo, (double) tp.badHi, (double) tp.badI, (double) tp.badN);
+#ifdef CTRPORT_FHW_EMIT
+            logInfo(tpFmtPh, TP_MS(Fhw_tpPh[0]) / n, TP_MS(Fhw_tpPh[1]) / n, TP_MS(Fhw_tpPh[2]) / n, TP_MS(Fhw_tpPh[3]) / n,
+                    TP_MS(Fhw_tpPh[4]) / n, TP_MS(Fhw_tpPh[5]) / n, TP_MS(Fhw_tpPh[6]) / n, TP_MS(Fhw_tpPh[7]) / n,
+                    (double) Fhw_tpPh[8] / n, (double) Fhw_tpPh[9] / n);
+            logInfo(tpFmtE, (double) Fhw_tpPh[19] / n, (double) Fhw_tpPh[16] / n, (double) Fhw_tpPh[17] / n, (double) Fhw_tpPh[18] / n,
+                    (double) Fhw_tpPh[10] / n, (double) Fhw_tpPh[14] / n, TP_MS(Fhw_tpPh[15]) / n, (double) Fhw_tpPh[12] / n,
+                    (double) Fhw_tpPh[11] / n,
+                    (double) Fhw_tpPh[20] / n, (double) Fhw_tpPh[21] / n, (double) Fhw_tpPh[22] / n, (double) Fhw_tpPh[23] / n,
+                    TP_MS(Fhw_tpPh[13]) / n);
+            memset(Fhw_tpPh, 0, sizeof(Fhw_tpPh));
+#endif
+            uint32_t frame = tp.frame;
+            memset(&tp, 0, sizeof(tp));
+            tp.frame = frame;
+        }
+    }
+    tp.frame = r->frame;
+    tp.fDraws = tp.fQuads = tp.fClipQ = 0;
+    tp.fClipPx = 0.0f;
+    tp.fTower = tp.fF0 = tp.fF1 = tp.fLazy = 0;
+}
+static VR_CODE bool vrTowerDraw(CtrRenderer* r, int32_t surfaceId, CtrSurface* s, int32_t srcLeft, int32_t srcTop, int32_t srcWidth,
+                                int32_t srcHeight, const float* px, const float* py, const CtrColor* cs, const TowerUniforms* uni);
+static __attribute__((noinline, section(".text.flowerhw_late"))) bool tpTowerDraw(CtrRenderer* r, int32_t surfaceId, CtrSurface* s,
+                                                                                   int32_t srcLeft, int32_t srcTop, int32_t srcWidth,
+                                                                                   int32_t srcHeight, const float* px, const float* py,
+                                                                                   const CtrColor* cs, const TowerUniforms* uni) {
+    tpFrame(r);
+    uint32_t idx = tp.flushIdx;
+    tp.flushIdx = 0;
+    tp.depth++;
+    uint64_t t0 = svcGetSystemTick();
+    bool drawn = vrTowerDraw(r, surfaceId, s, srcLeft, srcTop, srcWidth, srcHeight, px, py, cs, uni);
+    if (tp.depth == 1) tp.fTower += svcGetSystemTick() - t0;
+    tp.depth--;
+    tp.flushIdx = idx;
+    tp.fDraws++;
+    return drawn;
+}
+#define VR_TOWER_DRAW tpTowerDraw
+#else
+#define VR_TOWER_DRAW vrTowerDraw
+#endif
+
 // The tower draw, scissored to the band while one is drawn on this face. A draw drawTowerStrips declines falls back
 // to flushLazy's drawSurfaceQuad, which must keep to the band too: the band scissor is left on for it.
 static VR_CODE bool vrBandDraw(CtrRenderer* r, int32_t surfaceId, CtrSurface* s, int32_t srcLeft, int32_t srcTop, int32_t srcWidth,
                                int32_t srcHeight, const float* px, const float* py, const CtrColor* cs, const TowerUniforms* uni) {
     CtrSurface* face = vrBandFace != 0 && r->boundSurface == vrBandFace - 1 ? vrSurface(r, r->boundSurface) : nullptr;
-    if (face == nullptr) return vrTowerDraw(r, surfaceId, s, srcLeft, srcTop, srcWidth, srcHeight, px, py, cs, uni);
+    if (face == nullptr) return VR_TOWER_DRAW(r, surfaceId, s, srcLeft, srcTop, srcWidth, srcHeight, px, py, cs, uni);
     CtrLazyDraw saved;
     memset(&saved, 0, sizeof(saved));
     vrLazyCapture(r, &saved);
@@ -1075,7 +1134,7 @@ static VR_CODE bool vrBandDraw(CtrRenderer* r, int32_t surfaceId, CtrSurface* s,
     band.scissorEnabled = true;
     band.scissor = (CtrRect) { x0, y0, x1 - x0, y1 - y0 };
     VR_CALL(restoreState)(r, &band);
-    bool drawn = vrTowerDraw(r, surfaceId, s, srcLeft, srcTop, srcWidth, srcHeight, px, py, cs, uni);
+    bool drawn = VR_TOWER_DRAW(r, surfaceId, s, srcLeft, srcTop, srcWidth, srcHeight, px, py, cs, uni);
     if (drawn) VR_CALL(restoreState)(r, &saved.target);
     return drawn;
 }
@@ -1439,10 +1498,205 @@ VR_CODE bool Vine_wrap_drawTowerStrips(CtrRenderer* r, int32_t surfaceId, CtrSur
 }
 
 // drawTowerStrips' own flushBatch calls (cut 3, routed by tools/analysis/vine_old_parent.py): the second draws its
-// strips, from the shared depth texture when vdBatchOk and vdRemap allow; any other is flushBatch as it was.
+// strips, from the shared depth texture when Fhw_emitBegin wrote them for it (cut 7d); any other is flushBatch as it was.
+/* Cut 7d (flowerhw): the strips are written for the shared texture, and cut to the scissor's rows, as they are written.
+ *
+ * Before (cuts 5a and 7): each strips batch was read again at its flush, every quad's u moved onto the shared
+ * texture's columns (vdRemap) and, with cut 7, the quad cut to the scissor's rows: ~650 KB a frame, 1.0-1.7 ms on the
+ * New 3DS. Now drawTowerStrips asks Fhw_emitBegin before writing them (ctr_renderer.c, CTRPORT_FHW_EMIT): if the
+ * batch will be drawn from the shared texture, towerEmit writes u there at once (from fhwU, which Fhw_emitBegin fills
+ * with vdRemap's arithmetic, per strip) and cuts each segment or coverage run of a flat strip with Fhw_clipSpan; the
+ * strips' flush then draws the batch from the shared texture without a pass over it. The answer is known before the
+ * first quad is written:
+ *   - vdStateOk (the renderer's state) holds to the flush: nothing in between changes it;
+ *   - every strip's columns fit one of the shared texture's two windows (vdRemap's test, per strip instead of per
+ *     quad): a strip that doesn't leaves the whole draw to the layer's texture, as vdRemap gave up on a whole batch;
+ *   - nothing in reserveBatch draws the batch part way (a held additive pass, a recording or deferred draws on the
+ *     target, a spill load, automatic quads), except the vertex ring's wrap: before a reserve that would wrap it,
+ *     Fhw_emitRoom draws the batch so far from the shared texture, as the flush would.
+ * Cut 7's rule is unchanged (2 rows outside the scissor kept; a flat quad across its edge cut there, v at 2 or 1
+ * pixels per texel row and every pixel centre at least 0.1 texel from a texel's edge), applied to a segment's or a
+ * coverage run's span: the y and v its quads' corners get. Shaded strips stay whole. */
+#ifdef CTRPORT_FHW_EMIT
+static struct {
+    bool pending;    // the strips being written go to the shared texture
+    bool loggedLost;
+    uint16_t out;    // unused since lever B (towerEmitCovered counts them); kept so the late .bss is unmoved
+} fhw __attribute__((section(".bss.flowerhw_late")));
+// Each strip's u0 and u1 on the shared texture, for the draw being written (towerEmit reads them; at most
+// TOWER_MAX_COLUMNS strips, as drawTowerStrips' column list).
+static float fhwU[2 * TOWER_MAX_COLUMNS] __attribute__((section(".bss.flowerhw_late")));
+static const char fhwFmtLost[] __attribute__((aligned(4), section(".rodata.flowerhw_late"))) =
+    "Renderer: tower strips written for the shared texture drawn without it (logged once)\n";
+
+__attribute__((noinline, used, optimize("Os"), section(".text.flowerhw_late"))) bool Fhw_emitBegin(CtrRenderer* r, FhwEmit* e,
+                                                                                                   const TowerDraw* d,
+                                                                                                   const TowerStrip* strips, int32_t n) {
+    fhw.pending = false;
+#if defined(CTRPORT_FLOWERHW_FORCE) && CTRPORT_FLOWERHW_FORCE == 2
+    // Test word towerforce2: every draw refused, written as without cut 7d (towerEmit's other branches).
+    return false;
+#endif
+#ifndef CTRPORT_FLOWERGPU_VRAMPROBE
+#if defined(CTRPORT_FLOWERHW_TPROF)
+#define FHW_NO(k)                                                   \
+    do {                                                            \
+        if (vd.active && d->tex == vd.layerTex) tp.why[k] += 1.0f; \
+        return false;                                               \
+    } while (0)
+#else
+#define FHW_NO(k) return false
+#endif
+    // The order of the single test these replace, so the release's code stays as it was.
+    if (!vd.active) return false;
+    if (vd.flushes != 1) FHW_NO(0);
+    if (d->tex != vd.layerTex) return false;
+    if (r->batchQuadsAuto) FHW_NO(1);
+    if (r->spillLoadPending) FHW_NO(6);
+    if (r->palNextB != nullptr) FHW_NO(7);
+    if (0 <= r->boundSurface && (r->surfaces[r->boundSurface].skipRec != nullptr || r->surfaces[r->boundSurface].lazy != nullptr))
+        FHW_NO(2);
+    if (!vdStateOk(r)) FHW_NO(3);
+    if (n > TOWER_MAX_COLUMNS) FHW_NO(4);
+    float width = (float) d->tex->width, invW = 1.0f / width;
+    for (int32_t i = 0; n > i; i++) {
+        // vdRemap's arithmetic on the u towerEmit would write: the strip's columns, then u on the shared texture.
+        float a = strips[i].srcA * invW * width, b = strips[i].srcB * invW * width;
+        float lo = a < b ? a : b, hi = a < b ? b : a;
+        if (!(lo == lo) || !(256.0f >= hi || (lo >= 180.0f && 436.0f >= hi))) {
+#if defined(CTRPORT_FLOWERHW_TPROF)
+            tp.badLo = lo;
+            tp.badHi = hi;
+            tp.badI = (float) i;
+            tp.badN = (float) n;
+#endif
+            FHW_NO(5);
+        }
+        float shift = lo >= 180.0f ? 180.0f : 0.0f;
+        fhwU[2 * i] = (a - shift) * (1.0f / 256.0f);
+        fhwU[2 * i + 1] = (b - shift) * (1.0f / 256.0f);
+    }
+    e->u = fhwU;
+    e->top = -1.0e30f;
+    e->bottom = 1.0e30f;
+    if (r->scissorEnabled && !r->depth.active && d->segCount != 0) {
+        float x = d->x0, y = d->seg[0].y0, ax, ay, bx, by, cx, cy;
+        VR_CALL(worldToPixel)(r, x, y, &ax, &ay);
+        VR_CALL(worldToPixel)(r, x + 1.0f, y, &bx, &by);
+        VR_CALL(worldToPixel)(r, x, y + 1.0f, &cx, &cy);
+        float ky = cy - ay;
+        if (fabsf(by - ay) <= 1.0e-4f && fabsf(cx - ax) <= 1.0e-4f && ky >= 0.25f && 4.0f >= ky) {
+            float s0 = (float) r->scissor.y, s1 = (float) (r->scissor.y + r->scissor.h);
+            e->top = y + (s0 - 2.0f - ay) / ky;
+            e->bottom = y + (s1 + 2.0f - ay) / ky;
+            e->ky = ky;
+            e->ay = ay;
+            e->y0 = y;
+            e->s0 = s0;
+            e->h = (float) d->tex->height;
+        }
+    }
+#undef FHW_NO
+    fhw.pending = true;
+#if defined(CTRPORT_FLOWERHW_TPROF)
+    tp.wClipPx += 1.0f;
+#endif
+    return true;
+#else
+    (void) r, (void) e, (void) d, (void) strips, (void) n;
+    return false;
+#endif
+}
+
+// A flat strip's span s = { ya, yb, va, vb } (world rows down, v at each) reaching outside the clip's rows: cut as cut 7
+// cut a quad. True if it changed.
+__attribute__((noinline, used, optimize("Os"), section(".text.flowerhw_late"))) bool Fhw_clipSpan(const FhwEmit* c, float* s) {
+    float ya = s[0], yb = s[1], va = s[2];
+#if defined(CTRPORT_FLOWERHW_TPROF)
+#define FHW_LEFT(v)          \
+    do {                     \
+        Fhw_tpPh[23]++;      \
+        return v;            \
+    } while (0)
+#else
+#define FHW_LEFT(v) return v
+#endif
+    if (!(yb > ya)) FHW_LEFT(false);
+    float dv = (s[3] - va) / (yb - ya), two = 2.0f / c->ky;
+    float na, nb;
+    if (c->top >= yb) {
+        na = yb - two > ya ? yb - two : ya;
+        nb = yb;
+#if defined(CTRPORT_FLOWERHW_TPROF)
+        Fhw_tpPh[20]++;
+#endif
+    } else if (ya >= c->bottom) {
+        na = ya;
+        nb = ya + two < yb ? ya + two : yb;
+#if defined(CTRPORT_FLOWERHW_TPROF)
+        Fhw_tpPh[21]++;
+#endif
+    } else {
+        // Texel rows per pixel, and the row at the first pixel centre inside the scissor.
+        float k = dv * c->h / c->ky;
+        if (!(fabsf(k - 0.5f) <= 1.0e-4f || fabsf(k - 1.0f) <= 1.0e-4f)) FHW_LEFT(false);
+        float row = (va + (c->y0 + (c->s0 + 0.5f - c->ay) / c->ky - ya) * dv) * c->h;
+        float f0 = row - floorf(row), f1 = row + 0.5f - floorf(row + 0.5f);
+        if (!(f0 >= 0.1f && 0.9f >= f0 && f1 >= 0.1f && 0.9f >= f1)) FHW_LEFT(false);
+        na = ya > c->top ? ya : c->top;
+        nb = c->bottom > yb ? yb : c->bottom;
+#if defined(CTRPORT_FLOWERHW_TPROF)
+        Fhw_tpPh[22]++;
+#endif
+    }
+    if (na == ya && nb == yb) FHW_LEFT(false);
+#undef FHW_LEFT
+    s[0] = na;
+    s[1] = nb;
+    s[2] = va + (na - ya) * dv;
+    s[3] = va + (nb - ya) * dv;
+#if defined(CTRPORT_FLOWERHW_TPROF)
+    tp.fClipQ++;
+#endif
+    return true;
+}
+
+static VR_CODE void fhwDrawShared(CtrRenderer* r);
+
+// The vertex ring is about to wrap: the strips so far are drawn now, from the shared texture.
+__attribute__((noinline, used, optimize("Os"), section(".text.flowerhw_late"))) void Fhw_emitRoom(CtrRenderer* r) {
+    if (r->vertexCount == r->batchStart) return;
+#if defined(CTRPORT_FLOWERHW_TPROF)
+    tp.wRoom += 1.0f;
+#endif
+    fhwDrawShared(r);
+}
+#endif
+
+#if defined(CTRPORT_FLOWERHW_TPROF)
+#define Vine_tower_flushBatch vrTowerFlush // timed by the wrapper after it
+#endif
 VR_CODE void Vine_tower_flushBatch(CtrRenderer* r) {
 #ifndef CTRPORT_FLOWERGPU_VRAMPROBE
-    if (vd.active && vd.flushes++ == 1 && vdBatchOk(r) && vdRemap(r)) {
+    if (vd.active && vd.flushes++ == 1) {
+        bool written = fhw.pending;
+        fhw.pending = false;
+        if (written) {
+            fhwDrawShared(r);
+            return;
+        }
+#if defined(CTRPORT_FLOWERHW_TPROF)
+        if (vdBatchOk(r)) tp.wOutPx += 1.0f;
+#endif
+    }
+#endif
+    VR_CALL(flushBatch)(r); // flowerhw writes SC_FLUSH(r), its scistest word's macro; this is its release expansion
+}
+
+// The pending strips, their u on the shared texture's columns (cut 7d), drawn from it (or from the plain copy).
+static VR_CODE void fhwDrawShared(CtrRenderer* r) {
+#ifndef CTRPORT_FLOWERGPU_VRAMPROBE
+    if (vdBatchOk(r)) {
         C3D_Tex* layer = r->batchTex;
         C3D_Tex* to = vd.drawTex;
         to->param = layer->param;
@@ -1468,9 +1722,58 @@ VR_CODE void Vine_tower_flushBatch(CtrRenderer* r) {
         }
         return;
     }
+    // Never (Fhw_emitBegin saw to it): drawn as written, and logged.
+    if (!fhw.loggedLost) {
+        fhw.loggedLost = true;
+        logInfo(fhwFmtLost);
+    }
 #endif
     VR_CALL(flushBatch)(r);
 }
+
+/* Cut 6 (flowerhw): a tower segment wholly outside the scissor's rows is not emitted.
+ *
+ * drawTowerStrips cuts a layer's quad into segments, one per wrap of its rows, and leaves out a segment that
+ * quadOutsideView finds off the view. Its one call of quadOutsideView (routed here by tools/analysis/
+ * vine_old_observer_compile.py, scoped to drawTowerStrips; reached only under a game projection, as before) also
+ * leaves out a segment whose rows on the target all lie 2 pixels or more outside the scissor: the band's rows on a
+ * tower face (cut 2) or the rows above and below it. The segment is upright (drawTowerStrips declines any other draw),
+ * so its rows are those of its top and bottom edges whatever its columns; worldToPixel and the scissor are both in
+ * the target's pixels (as replayScissor compares them). The scissor would drop every fragment of such a segment, and
+ * each pixel's value depends only on the fragments that reach it, so the face's pixels are unchanged; the CPU no
+ * longer writes the segment's strips and the GPU no longer rasterizes them. A draw in 3D (depth) is left alone. */
+extern bool vrOutsideViewPart(CtrRenderer* r, const float* px, const float* py) __asm__("quadOutsideView.part.0");
+__attribute__((noinline, used, optimize("Os"), section(".text.flowerhw_late"))) bool Vine_tower_outsideView(CtrRenderer* r, const float* px,
+                                                                                                            const float* py) {
+    if (r->scissorEnabled && !r->depth.active) {
+        float xa, ya, xb, yb;
+        VR_CALL(worldToPixel)(r, px[0], py[0], &xa, &ya);
+        VR_CALL(worldToPixel)(r, px[2], py[2], &xb, &yb);
+        float lo = ya < yb ? ya : yb, hi = ya < yb ? yb : ya;
+        if ((float) r->scissor.y - 2.0f >= hi || lo >= (float) (r->scissor.y + r->scissor.h) + 2.0f) {
+#if defined(CTRPORT_FLOWERHW_TPROF)
+            if (tp.depth == 1 && !vrOutsideViewPart(r, px, py)) tp.w6Px += (hi - lo) * fabsf(xb - xa);
+#endif
+            return true;
+        }
+    }
+    return vrOutsideViewPart(r, px, py);
+}
+
+
+#if defined(CTRPORT_FLOWERHW_TPROF)
+#undef Vine_tower_flushBatch
+VR_CODE void Vine_tower_flushBatch(CtrRenderer* r) {
+    uint32_t k = tp.flushIdx++, n = r->vertexCount - r->batchStart;
+    uint64_t t0 = svcGetSystemTick();
+    vrTowerFlush(r);
+    uint64_t t = svcGetSystemTick() - t0;
+    if (tp.depth != 1) return;
+    if (k == 0) tp.fF0 += t;
+    else tp.fF1 += t, tp.fQuads += n / 4u;
+}
+#define Vine_wrap_flushLazy vrFlushLazy // timed by the wrapper after it
+#endif
 
 VR_CODE void Vine_wrap_flushLazy(CtrRenderer* r, int32_t faceId) {
     if (r->inFrame) {
@@ -1497,6 +1800,16 @@ VR_CODE void Vine_wrap_flushLazy(CtrRenderer* r, int32_t faceId) {
     }
     VR_CALL(flushLazy)(r, faceId);
 }
+#if defined(CTRPORT_FLOWERHW_TPROF)
+#undef Vine_wrap_flushLazy
+VR_CODE void Vine_wrap_flushLazy(CtrRenderer* r, int32_t faceId) {
+    tpFrame(r);
+    uint64_t t0 = svcGetSystemTick();
+    bool outer = tp.depth == 0;
+    vrFlushLazy(r, faceId);
+    if (outer) tp.fLazy += svcGetSystemTick() - t0;
+}
+#endif
 
 /* Cut 5b: the vertex ring wraps without waiting for the GPU when nothing it takes can still be read.
  *
@@ -2061,3 +2374,111 @@ static VR_CODE void dqInstall(CtrRenderer* r) {
     rr->vtable = &dq.outer;
     logInfo(dqFmtOn, (int) lo, (int) hi, (int) shader);
 }
+
+#ifndef CTRPORT_FLOWERGPU_VRAMPROBE
+/* tshare (flowerhw, 2026-11-01): cut 3's shared depth texture comes first and waits for VRAM.
+ *
+ * Whether the 20 depth layers got their one VRAM texture was a race with the room's VRAM layout. Step 0 wanted
+ * MIRROR_RESERVE (512 KB) free beyond the texture's 368 KB; when that was short it gave up, dropped the noted layers
+ * and waited 4, 8, 16 ... s. Meanwhile the plain copies (cut 4b), which want only 256 KB beyond theirs, took the VRAM
+ * that would have held it. Console rows (n3ds, knightgpu fc3, 11-01): ch5_climb got it at 4.3 s on stage75zk and never
+ * with FC's layout (GPU 26.6 vs 39.6 ms a frame); ch5_flower never on 75zk (229, 541, 413 KB free at the tries) but at
+ * 13.6 s on 75zh and FC (GPU 35.4 vs 22.7 ms); ch5_flowcut at 40.7 s, ch5_flowerbg at 67 s. It stands in for twenty
+ * 736 KB layers sampled from FCRAM, so nothing else in these rooms buys as much GPU time per KB of VRAM.
+ *
+ * Now step 0 waits instead: the build stays at step 0 (VD_BUILD, so pcFrame starts no plain copy, as it never did
+ * while cut 3 builds), gives back the plain copies holding VRAM (freed 3 frames on, as pcRelease always frees, and
+ * made again once the share is up), and takes the texture at the first frame its 368 KB fit in one piece. The texture
+ * is allocated by CtrMemory_vramAllocNow, which never waits for the GPU when VRAM is in pieces (vramAlloc's wrapper
+ * waits for the whole GPU whenever an allocation fails with frees held), and is set up as initSurfaceTex sets up a
+ * texture of fewer stored rows than its height. In Azahar it goes to linear memory as before (climbnoise). Steps 1 on
+ * are cut 3's own, so what is drawn is what cut 3 always drew: only when it starts changes. */
+#define TS_CODE __attribute__((noinline, used, optimize("Os", "inline-functions", "no-tree-switch-conversion"), section(".text.tshare_late")))
+#define TS_RO   __attribute__((section(".rodata.tshare_late")))
+#define TS_BSS  __attribute__((section(".bss.tshare_late")))
+
+typedef struct {
+    uint32_t since;        // the frame step 0 began waiting, + 1 (0: not waiting)
+    uint32_t waited;       // the frames the last step 0 waited
+    uint32_t made, drops;
+    uint8_t logs;
+    bool ready;            // the share was up at the end of the last tsFrame
+} TsState;
+static TsState ts TS_BSS;
+static const char tsFmtWait[] TS_RO = "Renderer: tower depth share waits for %u KB of VRAM in one piece (%u KB free, %d plain copies given back)\n";
+static const char tsFmtMade[] TS_RO = "Renderer: tower depth share up (step 0 waited %u frames for VRAM; %u KB free after; up %u times, dropped %u)\n";
+static const char tsFmtDrop[] TS_RO = "Renderer: tower depth share dropped (up %u times; a layer changed or tower draws stopped)\n";
+
+// Step 0 of cut 3's build: the texture and the stage, or another frame's wait.
+static TS_CODE void tsStep0(CtrRenderer* r) {
+    CtrSurface* s0 = vrSurface(r, vd.layer[0].id);
+    if (s0 == nullptr) {
+        VR_CALL(vdFail)(r, vdWhyGone);
+        return;
+    }
+    uint32_t rows = s0->tex.size / (512u * 4u), bytes = rows * VD_COLS * 4u;
+    bool emulator = CtrVramTouch_emulator();
+    void* data = nullptr;
+    if (CtrMemory_vramFreeNow() >= bytes) data = emulator ? linearAlloc(bytes) : CtrMemory_vramAllocNow(bytes);
+    if (data == nullptr) {
+        int32_t given = 0;
+        for (int32_t i = 0; PC_MAX > i; i++) {
+            if (pc.e[i].tex.data == nullptr && pc.e[i].stage == nullptr) continue;
+            pcRelease(r, i);
+            given++;
+        }
+        if (ts.since == 0 || given != 0) {
+            if (ts.since == 0) ts.since = r->frame + 1u;
+            if (16 > ts.logs) {
+                ts.logs++;
+                logInfo(tsFmtWait, (unsigned) (bytes / 1024u), (unsigned) (CtrMemory_vramFreeNow() / 1024u), (int) given);
+            }
+        }
+        return;
+    }
+    vd.size = s0->tex.size;
+    memset(&vd.tex, 0, sizeof(vd.tex));
+    vd.tex.data = data;
+    vd.tex.fmt = GPU_RGBA8;
+    vd.tex.size = bytes;
+    vd.tex.width = VD_COLS;
+    vd.tex.height = 512;
+    vd.tex.param = GPU_TEXTURE_MODE(GPU_TEX_2D);
+    C3D_TexSetWrap(&vd.tex, GPU_CLAMP_TO_EDGE, GPU_CLAMP_TO_EDGE);
+    vd.stage = (uint32_t*) linearAlloc(bytes);
+    if (vd.stage == nullptr) {
+        VR_CALL(vdFail)(r, vdWhyMem);
+        return;
+    }
+    memset(vd.stage, 0, bytes);
+    vd.step = 1;
+    ts.waited = ts.since != 0 ? r->frame + 1u - ts.since : 0u;
+    ts.since = 0;
+}
+
+// The first tower draw of a frame: cut 3's step 0 here, everything else in vdFrame. vrTowerDraw still calls vdFrame
+// in C; the compile launcher (tools/analysis/vine_old_observer_compile.py, route_tshare) sends that one bl here in the
+// assembly. Calling tsFrame in C, or calling flowergpu functions directly from here, changes the call graph and with it
+// the order GCC gives the flowergpu functions, which moves them (check_layout). So everything below goes by VR_CALL.
+static TS_CODE void tsFrame(CtrRenderer* r) {
+    if (ts.ready && vd.state != VD_READY) {
+        ts.drops++;
+        if (16 > ts.logs) {
+            ts.logs++;
+            logInfo(tsFmtDrop, (unsigned) ts.made);
+        }
+    }
+    if (vd.state == VD_BUILD && vd.step == 0) tsStep0(r);
+    else VR_CALL(vdFrame)(r);
+    if (vd.state != VD_BUILD) ts.since = 0;
+    bool ready = vd.state == VD_READY;
+    if (ready && !ts.ready) {
+        ts.made++;
+        if (16 > ts.logs) {
+            ts.logs++;
+            logInfo(tsFmtMade, (unsigned) ts.waited, (unsigned) (CtrMemory_vramFreeNow() / 1024u), (unsigned) ts.made, (unsigned) ts.drops);
+        }
+    }
+    ts.ready = ready;
+}
+#endif

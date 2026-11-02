@@ -130,8 +130,16 @@ OPT_STR(omLblGame, "Game screen");
 OPT_STR(omLblDialogue, "Dialogue box");
 OPT_STR(lblStats, "Stats and log");
 OPT_STR(omLblFps, "FPS counter");
+#if CTR_PACK_EXACT_AVAILABLE
 OPT_STR(omLblSmoothing, "Smoothing");
 OPT_STR(omLblExact, "Exact colours");
+#else
+// GCC emits this pool in first-use order. Keep the removed label's 16 B as
+// the preceding string's zero tail, with the original symbol sizes/addresses.
+static const char omLblSmoothing[28] __asm__("oldexactSmoothSlot") OPT_RO = "Smoothing";
+__asm__(".local omLblSmoothing\n.set omLblSmoothing,oldexactSmoothSlot\n.type omLblSmoothing,%object\n.size omLblSmoothing,12\n"
+        ".local omLblExact\n.set omLblExact,oldexactSmoothSlot+12\n.type omLblExact,%object\n.size omLblExact,16");
+#endif
 OPT_STR(omLblControls, "Controls");
 OPT_STR(lblDebug, "Debug");
 OPT_STR(omLblPerf, "Performance test");
@@ -159,13 +167,21 @@ OPT_STR(omValBConfirms, "< B confirms >");
 OPT_STR(omValCustom, "< Custom >");
 OPT_STR(valDlgTop, "< Default (top) >");
 OPT_STR(valDlgBot, "< Bottom screen >");
+#if CTR_PACK_EXACT_AVAILABLE
 OPT_STR(valOpen, ">");
+#else
+static const char valOpen[20] __asm__("oldexactOpenSlot") OPT_RO = ">";
+__asm__(".local valOpen\n.set valOpen,oldexactOpenSlot\n.type valOpen,%object\n.size valOpen,4\n"
+        ".local omDisNew3ds\n.set omDisNew3ds,oldexactOpenSlot+4\n.type omDisNew3ds,%object\n.size omDisNew3ds,16");
+#endif
 OPT_STR(valLogOpen, "Log on  >");
 OPT_STR(valOffOpen, "Off  >");
 OPT_STR(valTopOpen, "Top  >");
 OPT_STR(valBotOpen, "Bottom  >");
 OPT_STR(omDisNeedsTop, "Needs the game on top.");
+#if CTR_PACK_EXACT_AVAILABLE
 OPT_STR(omDisNew3ds, "New 3DS only.");
+#endif
 OPT_STR(omHlpGameTop, "Play on the top screen.");
 OPT_STR(omHlpGameBot, "Play on the bottom screen.");
 OPT_STR(omHlpDlgTop, "Dialogue stays in the game.");
@@ -177,7 +193,9 @@ OPT_STR(omHlpOtherLog, "Frame rate and log on the other screen.");
 OPT_STR(omHlpSmoothSmart, "Sharp art, smooth text.");
 #endif
 OPT_STR(omHlpSmoothOff, "No smoothing.");
+#if CTR_PACK_EXACT_AVAILABLE
 OPT_STR(omHlpExactOn, "Truer colours, slower. Applies on restart.");
+#endif
 OPT_STR(hlpFps, "Frame rate overlay. A for its options.");
 OPT_STR(omHlpControls, "A to change buttons.");
 OPT_STR(hlpDebug, "Tools for testing.");
@@ -254,7 +272,11 @@ enum { OPT_PAGE_MAIN, OPT_PAGE_FPS, OPT_PAGE_DEBUG, OPT_PAGE_SMOOTH, OPT_PAGES }
 #else
 enum { OPT_PAGE_MAIN, OPT_PAGE_FPS, OPT_PAGE_DEBUG, OPT_PAGES };
 #endif
-enum { OPT_MAIN_GAME, OPT_MAIN_DIALOGUE, OPT_MAIN_SMOOTHING, OPT_MAIN_EXACT, OPT_MAIN_FPS,
+enum { OPT_MAIN_GAME, OPT_MAIN_DIALOGUE, OPT_MAIN_SMOOTHING,
+#if CTR_PACK_EXACT_AVAILABLE
+       OPT_MAIN_EXACT,
+#endif
+       OPT_MAIN_FPS,
        OPT_MAIN_CONTROLS, OPT_MAIN_DEBUG, OPT_MAIN_LEGAL, OPT_MAIN_CREDITS, OPT_MAIN_RESUME, OPT_MAIN_QUIT,
        OPT_MAIN_COUNT };
 enum { OPT_FPS_ON, OPT_FPS_SCREEN, OPT_FPS_SIZE, OPT_FPS_BACK, OPT_FPS_COUNT };
@@ -270,15 +292,21 @@ enum { OPT_SMOOTH_TEXT, OPT_SMOOTH_BONES, OPT_SMOOTH_NUMBERS, OPT_SMOOTH_SOUL, O
 // and 2 px clear, so no row's ink touches the next's), blocks 6 px further; the main page's Back to the game and Quit
 // game sit at the bottom, Quit's lowest ink 6 px above the help line (y 214) as the first row's top is 6 px below the
 // frame. Debug: Stats and log (a setting), Performance test (a tool), Back.
+// Keep the data slot's width on Old; the unused final column is never drawn.
+#if CTR_PACK_EXACT_AVAILABLE
+#define OPT_MAIN_Y { 8, 22, 42, 56, 70, 90, 110, 124, 138, 182, 196 }
+#else
+#define OPT_MAIN_Y { 8, 22, 42, 56, 76, 96, 110, 124, 182, 196 }
+#endif
 #ifdef ENABLE_WAD16
-static const uint8_t optY[OPT_PAGES][OPT_MAIN_COUNT] OPT_RO = {
-    { 8, 22, 42, 56, 70, 90, 110, 124, 138, 182, 196 }, { 8, 28, 42, 62 }, { 8, 28, 48 }, { 8, 22, 36, 50, 70 } };
+static const uint8_t optY[OPT_PAGES][11] OPT_RO = {
+    OPT_MAIN_Y, { 8, 28, 42, 62 }, { 8, 28, 48 }, { 8, 22, 36, 50, 70 } };
 static const uint8_t optCounts[OPT_PAGES] OPT_RO = { OPT_MAIN_COUNT, OPT_FPS_COUNT, OPT_DEBUG_COUNT, OPT_SMOOTH_COUNT };
 // The main page's row each page goes back to.
 static const uint8_t optParent[OPT_PAGES] OPT_RO = { 0, OPT_MAIN_FPS, OPT_MAIN_DEBUG, OPT_MAIN_SMOOTHING };
 #else
-static const uint8_t optY[OPT_PAGES][OPT_MAIN_COUNT] OPT_RO = {
-    { 8, 22, 42, 56, 70, 90, 110, 124, 138, 182, 196 }, { 8, 28, 42, 62 }, { 8, 28, 48 } };
+static const uint8_t optY[OPT_PAGES][11] OPT_RO = {
+    OPT_MAIN_Y, { 8, 28, 42, 62 }, { 8, 28, 48 } };
 static const uint8_t optCounts[OPT_PAGES] OPT_RO = { OPT_MAIN_COUNT, OPT_FPS_COUNT, OPT_DEBUG_COUNT };
 // The main page's row each page goes back to.
 static const uint8_t optParent[OPT_PAGES] OPT_RO = { 0, OPT_MAIN_FPS, OPT_MAIN_DEBUG };
@@ -608,6 +636,10 @@ typedef struct {
 } OptRow;
 
 OPT_STATIC void optRowMain(const CtrMenu* menu, uint32_t i, OptRow* r) {
+#if defined(__3DS__) && !CTR_PACK_EXACT_AVAILABLE
+    // Retain this cold menu function's footprint: removing the row saves 40 B.
+    __asm__ volatile(".rept 10\n nop\n .endr");
+#endif
     const CtrDisplaySettings* s = &menu->settings;
     bool top = CtrScreens_game == 0;
     if (i == OPT_MAIN_GAME) {
@@ -631,11 +663,13 @@ OPT_STATIC void optRowMain(const CtrMenu* menu, uint32_t i, OptRow* r) {
         r->value = off ? omValOff : omValSmart;
         r->help = off ? omHlpSmoothOff : omHlpSmoothSmart;
 #endif
+#if CTR_PACK_EXACT_AVAILABLE
     } else if (i == OPT_MAIN_EXACT) {
         r->label = omLblExact;
         r->dis = !CTR_PACK_EXACT_AVAILABLE;
         r->value = r->dis ? omDisNew3ds : (s->exactColours ? omValOn : omValOff);
         r->help = r->dis ? omDisNew3ds : (s->exactColours ? omHlpExactOn : omStrEmpty);
+#endif
     } else if (i == OPT_MAIN_FPS) {
         r->label = omLblFps;
         r->value = gFpsScreen == 0 ? valOffOpen : (gFpsScreen == 1 ? valTopOpen : valBotOpen);
@@ -846,7 +880,7 @@ OPT_STATIC void optFlush(CtrMenu* menu) {
     CtrLog_endConsole();
     opt.dirty = false;
 }
-static void fpsboxMenuFlush(CtrMenu* menu);
+static void fpsboxMenuFlush(CtrMenu* menu); void CtrFpsbox_menuNoErase(uint16_t*, const uint16_t*, bool);
 // ===[ The menu ]===
 
 // The menu's sounds: the game's own cursor sound (argui's sndMove) for the open and each move, its choice sound
@@ -960,6 +994,14 @@ OPT_STATIC void optSound(bool selectSound) {
 
 // A page's row chosen or changed (dir -1, 1, or 0 for A).
 OPT_STATIC CtrMenuAction optActivate(CtrMenu* menu, uint32_t i, int32_t dir) {
+#if defined(__3DS__) && !CTR_PACK_EXACT_AVAILABLE
+    // Retain the original slot so no later function changes its cache phase.
+#ifdef ENABLE_WAD16
+    __asm__ volatile(".rept 5\n nop\n .endr");
+#else
+    __asm__ volatile(".rept 2\n nop\n .endr");
+#endif
+#endif
     CtrDisplaySettings* s = &menu->settings;
     if (opt.page == OPT_PAGE_FPS) {
         bool on = gFpsScreen != 0;
@@ -1040,8 +1082,12 @@ OPT_STATIC CtrMenuAction optActivate(CtrMenu* menu, uint32_t i, int32_t dir) {
         s->dialogueBottom = !s->dialogueBottom;
     } else if (i == OPT_MAIN_SMOOTHING) s->smoothing = s->smoothing == SMOOTHING_OFF ? SMOOTHING_SMART : SMOOTHING_OFF;
     else {
+#if CTR_PACK_EXACT_AVAILABLE
         if (!CTR_PACK_EXACT_AVAILABLE) return MENU_ACTION_NONE;
         s->exactColours = !s->exactColours;
+#else
+        return MENU_ACTION_NONE;
+#endif
     }
     menu->edited = true;
     return MENU_ACTION_CHANGED;
@@ -1067,7 +1113,7 @@ OPT_STATIC CtrMenuAction optKeys(CtrMenu* menu, u32 down) {
         opt.cur[OPT_PAGE_MAIN] = optParent[page];
         return MENU_ACTION_NONE;
     }
-    // Up and down pass over grey rows (the main page's say why in their value: "New 3DS only.", "Needs the game on top.").
+    // Up and down pass over grey rows (Dialogue box says "Needs the game on top.").
     for (uint32_t n = 0; count > n; n++) {
         if (folded & KEY_DUP) i = i == 0 ? count - 1u : i - 1u;
         if (folded & KEY_DDOWN) i = i + 1u == count ? 0u : i + 1u;
@@ -1345,7 +1391,7 @@ __attribute__((noinline, noipa, optimize("Os"), section(".text.fpsbox_late")))
 static void fpsboxMenuFlush(CtrMenu* menu) {
     optFlush(menu);
     if (menu->open && opt.placed)
-        CtrFpsbox_restoreMenu(opt.shownBase, opt.spareBase, opt.scr == GFX_TOP);
+        CtrFpsbox_menuNoErase(opt.shownBase, opt.spareBase, opt.scr == GFX_TOP);
 }
 
 // Keep the flush addition outside ctr_argui.c: a same-TU callee makes GCC
@@ -1356,4 +1402,85 @@ __attribute__((noinline, noipa, optimize("Os"), section(".text.fpsbox_late")))
 void fpsboxFlushConsoles(void) {
     __real_CtrScreens_flushConsoles();
     if (gFpsScreen != 0) CtrFpsbox_update(g.fpsBuf);
+}
+
+// A counter is composed to its final pixels before writing the live buffer.
+// No black intermediate frame and no full-screen clear over bottom dialogue.
+// All new input sections follow every stage75zm input, including its statics.
+#define FPS75_CODE __attribute__((noinline, noipa, optimize("Os"), section(".text.fpsbox75zm_late")))
+static uint8_t fps75Rect[2][4] __attribute__((aligned(4), section(".bss.fpsbox75zm_late")));
+// A separate tail table avoids changing GCC's anchor choices for the menu's
+// existing constant pool when this sampler adds two more Morton references.
+static const uint8_t fps75Morton[8] __attribute__((section(".rodata.fpsbox75zm_late"))) = {0,1,4,5,16,17,20,21};
+
+// The overlay font, sampled exactly as arguiSampleGlyph does. Kept separate
+// from optTexel so its existing theme-only constprop body stays byte-exact.
+FPS75_CODE static bool fps75Texel(uint8_t ch, int32_t x, int32_t y) {
+    const DataWin* dw = g.texCache->dataWin;
+    int32_t fid = g.assetIds[2];
+    const FontGlyph* gl = fid >= 0 ? dw->font.fonts[fid].glyphLUT[ch] : nullptr;
+    if (gl == nullptr)
+        return (uint32_t) (x | y) < 8u && (consoleGetDefault()->font.gfx[ch * 8u + (uint32_t) y] & (0x80u >> x)) != 0;
+    uint32_t lx = (uint32_t) (x - gl->offset), ly = (uint32_t) y;
+    if (lx >= gl->sourceWidth || ly >= gl->sourceHeight) return false;
+    const TexturePageItem* item = &dw->tpag.items[dw->font.fonts[fid].tpagIndex];
+    CtrPage* page = CtrTextures_acquire(g.texCache, (uint32_t) item->texturePageId);
+    uint32_t px = item->sourceX + gl->sourceX + lx, py = item->sourceY + gl->sourceY + ly;
+    int32_t tx = (int32_t) (px >> 8), ty = (int32_t) (py >> 8);
+    const CtrTile* tile = &page->tiles[ty * page->tilesX + tx];
+    if (!tile->valid) CtrTextures_ensureTiles(g.texCache, page, tx, ty, tx, ty);
+    uint32_t idx = ((py & 0xF8u) << 8) | ((px & 0xF8u) << 3) |
+                   fps75Morton[px & 7u] | ((uint32_t) fps75Morton[py & 7u] << 1);
+    return (((const uint16_t*) tile->tex.data)[idx << (tile->tex.fmt == GPU_RGBA8)] & 1u) != 0;
+}
+
+FPS75_CODE static void fps75Pixel(uint32_t index, uint16_t colour) {
+    if (g.rgb565) ((uint16_t*) g.fb)[index] = colour;
+    else {
+        uint8_t* p = (uint8_t*) g.fb + index * 3u;
+        p[0] = p[1] = p[2] = (uint8_t) colour;
+    }
+}
+
+FPS75_CODE void CtrFpsbox_drawDigits(int32_t x, int32_t y, const char* text, uint32_t colour) {
+    // Preserve the sampler's two-digit display, including 00 through 09.
+    uint16_t rows[12] = {0};
+    int32_t l = 11, t = 12, r = -1, b = -1;
+    for (uint32_t i = 0; text[i] != '\0'; i++) {
+        for (int32_t gy = 0; gy < 12; gy++) for (int32_t gx = 0; gx < 6; gx++) {
+            if (!fps75Texel((uint8_t) text[i], gx, gy)) continue;
+            int32_t xx = gx + (int32_t) i * 5;
+            rows[gy] |= (uint16_t) (1u << xx);
+            if (xx < l) l = xx;
+            if (xx > r) r = xx;
+            if (gy < t) t = gy;
+            if (gy > b) b = gy;
+        }
+    }
+    if (r < l) return;
+    uint32_t left = (uint32_t) (x + l * g.sx), right = (uint32_t) (x + (r + 1) * g.sx);
+    uint32_t top = (uint32_t) (y + t * g.sy), bottom = (uint32_t) (y + (b + 1) * g.sy);
+    uint32_t screen = CtrScreens_game ^ g.rgb565;
+    uint8_t* old = fps75Rect[screen];
+    const uint16_t* backdrop = g.rgb565 && opt.menu != nullptr && opt.menu->open &&
+                               opt.placed && opt.scr == GFX_BOTTOM ? opt.spareBase : nullptr;
+    if (g.rgb565) {
+        // Only pixels outside the new bounds can belong to an old digit.
+        // Never blank a current stroke before replacing it with its final value.
+        for (uint32_t xx = old[0]; xx < old[2]; xx++) for (uint32_t yy = old[1]; yy < old[3]; yy++) {
+            if (xx >= left && xx < right && yy >= top && yy < bottom) continue;
+            uint32_t at = xx * 240u + 239u - yy;
+            fps75Pixel(at, backdrop != nullptr ? backdrop[at] : 0u);
+        }
+        old[0] = (uint8_t) left; old[1] = (uint8_t) top;
+        old[2] = (uint8_t) right; old[3] = (uint8_t) bottom;
+    } else old[2] = old[3] = 0;
+    for (int32_t gy = t; gy <= b; gy++) for (int32_t gx = l; gx <= r; gx++) {
+        bool on = (rows[gy] & (1u << gx)) != 0;
+        for (uint32_t dx = 0; dx < g.sx; dx++) for (uint32_t dy = 0; dy < g.sy; dy++) {
+            uint32_t at = (uint32_t) (x + gx * g.sx) * 240u + dx * 240u + 239u -
+                          (uint32_t) (y + gy * g.sy) - dy;
+            fps75Pixel(at, on ? (uint16_t) colour : backdrop != nullptr ? backdrop[at] : 0u);
+        }
+    }
 }

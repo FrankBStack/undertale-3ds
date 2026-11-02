@@ -1208,7 +1208,7 @@ void Asgprobe_phase(const char* name);
 #define RUNNER_PHASE_PROBE(name) ((void) 0)
 #endif
 
-// uttc       uthunt T1, lead GO 2026-10-31; UNDERTALE 3DS only): drawRoom's and utkDrawRoom's tile runs go through
+// uttc (change uthunt T1, lead GO 2026-10-31; UNDERTALE 3DS only): drawRoom's and utkDrawRoom's tile runs go through
 // the tile pre-filter (runner.c's end), which draws exactly what drawLegacyTileRun draws and falls back to it. Other
 // builds (DELTARUNE, tracing, the AOT stress test) keep the call to drawLegacyTileRun, byte for byte.
 #if defined(ENABLE_WAD16) && defined(__3DS__) && !defined(ENABLE_VM_TRACING) && !defined(CTRPORT_AOT_STRESS) && \
@@ -1221,7 +1221,7 @@ void Asgprobe_phase(const char* name);
 #define UTTC_DECL
 #endif
 
-// dprank       uthunt, lead GO 2026-10-31): runner.c's drawPassFirst asks drawPassFind (runner.c's end) for the draw
+// dprank (change uthunt, lead GO 2026-10-31): runner.c's drawPassFirst asks drawPassFind (runner.c's end) for the draw
 // pass's one responder entry, read at the instance's recorded draw rank before any scan. On the 3DS drawPassFind is
 // late code after every hot late function (late_reserve.ld's .text.late.dprank), and DPRANK_PAD keeps drawPassFirst
 // at its old size (164 B on every 3DS release target, nm -S), so nothing that existed moves. CTRPORT_DPRANK_OFF
