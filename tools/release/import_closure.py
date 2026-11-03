@@ -145,7 +145,8 @@ def relevant(path, game):
     if path.startswith(('tools/roomplan/records/', 'tools/roomplan/phases/', 'tools/roomplan/tracks/',
                         'tools/aot/selection/')):
         other = 'deltarune' if game == 'undertale' else 'undertale'
-        return not pp.basename(path).startswith((other + '-', other + '.')) and pp.basename(path) != 'typed-' + other + '.txt'
+        return (not pp.basename(path).startswith((other + '-', other + '.', 'typed-priority-' + other + '-')) and
+                pp.basename(path) != 'typed-' + other + '.txt')
     return True
 
 

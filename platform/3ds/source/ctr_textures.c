@@ -3477,6 +3477,14 @@ __attribute__((noinline, section(".text.btlentry_late"))) bool CtrTextures_btlen
     }
     return btlentryInstallTile(cache, page, &page->tiles[t], CtrTileReader_tileData(page->read, t)) == LOAD_OK;
 }
+
+// btlentry round 4: a resident tile evicted as the cache's own eviction does (evictTile; the caller picks only tiles
+// last drawn before the encounter and idle longer than CTR_THRASH_FRAMES, never one of the battle's set), by its
+// assembler name.
+__attribute__((noinline, section(".text.btlentry_late"))) void CtrTextures_btlentryEvict(CtrTextureCache* cache, CtrPage* page, CtrTile* tile) {
+    extern void btlentryEvictTile(CtrTextureCache*, CtrPage*, CtrTile*) __asm__("evictTile");
+    btlentryEvictTile(cache, page, tile);
+}
 #endif
 
 #if defined(ENABLE_WAD16) && defined(CTRPORT_TARGET_O3DS)

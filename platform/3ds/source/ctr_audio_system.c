@@ -1154,7 +1154,7 @@ static void loaderThreadMain(void* arg) {
     CtrWatchdog_nameThread("audio loader");
     while (!ca->loaderQuit) {
         CtrWatchdog_note("waiting for work");
-        LightEvent_Wait(&ca->loadEvent);
+        CTR_LOADER_WAIT(&ca->loadEvent);
         CtrWatchdog_note("taking a job");
         for (;;) {
             if (ca->loaderQuit) break;
@@ -1196,8 +1196,8 @@ static void loaderThreadMain(void* arg) {
             CtrWatchdog_note("reading a sound");
             u64 start = svcGetSystemTick();
             if (openPath != req->path) {
-                if (fd >= 0) close(fd);
-                fd = open(req->path, O_RDONLY);
+                if (fd >= 0) CTR_LOADER_CLOSE(fd);
+                fd = CTR_LOADER_OPEN(req->path, O_RDONLY);
                 openPath = fd >= 0 ? req->path : NULL;
             }
             uint32_t size = 0;
@@ -5243,10 +5243,10 @@ __attribute__((noinline, optimize("Os"), section(".text.flowend_late"))) int32_t
             u64 start = svcGetSystemTick();
             uint32_t total = req->size + req->header, size = req->size;
             uint8_t* data = (uint8_t*) malloc(total + 1);
-            int fd = open(req->path, O_RDONLY);
+            int fd = CTR_LOADER_OPEN_ONCE(req->path, O_RDONLY);
             off_t at = (off_t) (req->offset - req->header);
             bool ok = data != NULL && fd >= 0 && lseek(fd, at, SEEK_SET) == at && read(fd, data, total) == (ssize_t) total;
-            if (fd >= 0) close(fd);
+            if (fd >= 0) CTR_LOADER_CLOSE_ONCE(fd);
             if (ok && req->header > 0) {
                 uint32_t exact;
                 memcpy(&exact, data, sizeof(exact));

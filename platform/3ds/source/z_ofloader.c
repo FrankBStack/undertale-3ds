@@ -1,0 +1,156 @@
+// ofloader (omegaflowey, GO 11-02; UNDERTALE only): the audio loader thread keeps the few files it reads
+// sounds from (data.win, adpcm-sfx.dtsp) open, instead of closing one and opening the other each time a request's
+// file differs from the last. On the SD card an open is a lookup in the game folder's directory, and the console's FS
+// serves it ahead of a read the game thread issued at the same moment: on the o2DS (11-01 on) each such reopen of
+// adpcm-sfx.dtsp took 64 ms and held the game thread's read for as long (docs/3ds-hardware.md, "o2DS card, 11-01").
+// ctr_audio_system.c's loader (loaderThreadMain) and flowend's decode-time reads (__wrap_CtrDecoder_read) call these
+// in place of open and close (ctr_audio_system.h's CTR_LOADER_* names), so their code keeps its size and only the
+// call targets change. Everything here runs on the loader thread.
+//
+// The files are a kept-open cache (ctr_open_files.h): it keeps a file only while CtrOpenFiles_mayKeep, and an open
+// elsewhere that finds the card's files crowded has it close them (the shed runs on this thread: at its next open, or
+// once its wait for work returns, which the shed's wake signals). The file the loader holds between requests
+// (loaderThreadMain's own fd, the newest it opened) stays open through a shed, as it did before this cache: closing
+// it would leave the loader reading a closed descriptor. Reads go through each caller's lseek and read, as before,
+// so every sound's bytes are the same.
+#include <3ds.h>
+#include <fcntl.h>
+#include <stddef.h>
+#include <string.h>
+#include <unistd.h>
+
+#include "ctr_audio_system.h"
+#include "ctr_open_files.h"
+#include "log.h"
+
+#if defined(ENABLE_WAD16) && defined(__3DS__)
+#define OL_CODE __attribute__((noinline, section(".omegaflowey_ofloader")))
+#define OL_RO __attribute__((aligned(4), section(".omegaflowey_ofloader_ro")))
+// Zero-initialised, outside .bss.* so the main .bss line leaves it to late_reserve.ld's (flags spelled out, as
+// bubbleclip's: '@' starts the assembler's comment, ending GCC's own).
+#define OL_BSS __attribute__((section(".bss_omegaflowey_ofloader,\"aw\",%nobits @")))
+#define OL_FILES 3
+#define OL_PATH 192 // a longer path is opened and closed as before
+
+typedef struct {
+    int fd; // -1: free
+    uint32_t used; // the request count when last returned (the oldest is replaced first)
+    char path[OL_PATH];
+} OlFile;
+static struct {
+    OlFile files[OL_FILES];
+    LightEvent* event; // the loader's wait-for-work event while it waits on it (the shed's wake), else NULL
+    int keeper;        // CtrOpenFiles keeper id + 1 (0: not registered)
+    int held;          // the fd loaderThreadMain holds (never shed), or -1
+    uint32_t requests, opens, sheds, hits; // hits: requests served by a kept file (each an open saved)
+    bool ready;
+} ol OL_BSS;
+
+static const char olLogOpen[] OL_RO = "[ofloader] keeps %s open (%lu opens, %lu requests, %lu sheds)\n";
+static const char olLogShed[] OL_RO = "[ofloader] shed: closed %d kept-open files (%lu sheds)\n";
+static const char olLogHits[] OL_RO = "[ofloader] %lu opens saved: %lu requests, %lu kept opens, %lu sheds\n";
+
+static OL_CODE void olShed(void* owner) {
+    (void) owner;
+    int closed = 0;
+    for (int i = 0; OL_FILES > i; i++) {
+        OlFile* f = &ol.files[i];
+        if (0 > f->fd || f->fd == ol.held) continue;
+        close(f->fd);
+        f->fd = -1;
+        closed++;
+    }
+    ol.sheds++;
+    logInfo(olLogShed, closed, (unsigned long) ol.sheds);
+}
+
+// Called under the open-files lock by the thread that asks for the shed.
+static OL_CODE void olWake(void* owner) {
+    (void) owner;
+    LightEvent* event = __atomic_load_n(&ol.event, __ATOMIC_SEQ_CST);
+    if (event != NULL) LightEvent_Signal(event);
+}
+
+static OL_CODE void olInit(void) {
+    ol.ready = true;
+    ol.held = -1;
+    for (int i = 0; OL_FILES > i; i++) ol.files[i].fd = -1;
+}
+
+// The file's descriptor: kept open from an earlier request, or opened now (and kept while the card has room).
+static OL_CODE int olOpen(const char* path, int flags, bool hold) {
+    if (!ol.ready) olInit();
+    if (ol.keeper == 0) ol.keeper = CtrOpenFiles_addKeeper(olShed, olWake, NULL) + 1;
+    CtrOpenFiles_poll(); // a shed asked for since the last request (no kept file is in use here)
+    ol.requests++;
+    size_t n = path != NULL ? strlen(path) : OL_PATH;
+    OlFile* slot = NULL;
+    for (int i = 0; OL_PATH > n && OL_FILES > i; i++) {
+        OlFile* f = &ol.files[i];
+        if (0 <= f->fd && strcmp(f->path, path) == 0) {
+            f->used = ol.requests;
+            if (hold) ol.held = f->fd;
+            ol.hits++;
+            if ((ol.hits & (ol.hits - 1)) == 0) // the proof count, at 1, 2, 4, 8, ... opens saved
+                logInfo(olLogHits, (unsigned long) ol.hits, (unsigned long) ol.requests, (unsigned long) ol.opens,
+                        (unsigned long) ol.sheds);
+            return f->fd;
+        }
+        if (0 > f->fd) {
+            if (slot == NULL || 0 <= slot->fd) slot = f;
+        } else if (f->fd != ol.held && (slot == NULL || (0 <= slot->fd && slot->used > f->used))) {
+            slot = f;
+        }
+    }
+    int fd = open(path, flags);
+    if (hold) ol.held = fd;
+    if (0 > fd || slot == NULL || OL_PATH <= n || ol.keeper == 0 || !CtrOpenFiles_mayKeep()) return fd;
+    if (0 <= slot->fd) close(slot->fd); // the oldest kept file the loader doesn't hold
+    slot->fd = fd;
+    slot->used = ol.requests;
+    memcpy(slot->path, path, n + 1);
+    ol.opens++;
+    logInfo(olLogOpen, path, (unsigned long) ol.opens, (unsigned long) ol.requests, (unsigned long) ol.sheds);
+    return fd;
+}
+
+static OL_CODE bool olKept(int fd) {
+    for (int i = 0; 0 <= fd && OL_FILES > i; i++)
+        if (ol.files[i].fd == fd) return true;
+    return false;
+}
+
+// loaderThreadMain's open: the file it then holds until its next.
+OL_CODE int CtrOfLoader_open(const char* path, int flags) {
+    return olOpen(path, flags, true);
+}
+
+// flowend's decode-time read: opened, read and closed within one request.
+OL_CODE int CtrOfLoader_openOnce(const char* path, int flags) {
+    return olOpen(path, flags, false);
+}
+
+// loaderThreadMain's close of the file it held: a kept file stays open.
+OL_CODE int CtrOfLoader_close(int fd) {
+    if (fd == ol.held) ol.held = -1;
+    return olKept(fd) ? 0 : close(fd);
+}
+
+// flowend's close: a kept file stays open, and one the loader holds (the same file, one descriptor) stays held.
+OL_CODE int CtrOfLoader_closeOnce(int fd) {
+    return olKept(fd) ? 0 : close(fd);
+}
+
+// loaderThreadMain's wait for work. A shed asked for while it waits signals this event (olWake), and it sheds once the
+// wait returns; one asked for just before is done before it waits. The wake signals the event only while the loader
+// waits on it: after the loader's last wait (as it stops) nothing signals an event that may be gone. The loader's
+// last close, of the file it held, stays newlib's (so this file's other functions keep their order); the other kept
+// files close as the process ends, and their keeper never sheds again, its thread gone.
+OL_CODE void CtrOfLoader_wait(LightEvent* event) {
+    __atomic_store_n(&ol.event, event, __ATOMIC_SEQ_CST);
+    CtrOpenFiles_poll();
+    LightEvent_Wait(event);
+    __atomic_store_n(&ol.event, NULL, __ATOMIC_SEQ_CST);
+    CtrOpenFiles_poll();
+}
+#endif

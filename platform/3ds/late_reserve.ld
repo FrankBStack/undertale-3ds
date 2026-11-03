@@ -1290,6 +1290,19 @@ SECTIONS
        so z_phaseplan.o's catch-all above leaves it here; last, so no earlier late function moves. In 75zo Crisp art's
        ARM entry is fpsbox's retained one (above), not an ld veneer after the last input, so nothing else moves. */
     *(.text_flowerhw_l2)
+    /* omegaflowey bubbleread (last, after flowerhw L2, merge order; UNDERTALE only, empty elsewhere): the font-verdict
+       chain's link that reads bubbleclip's bubble table in the room change (z_smalltext.c's end). Named outside .text.*
+       so z_smalltext.o's line above leaves it here; last, so no earlier late function moves. */
+    *(.omegaflowey_bubbleread)
+    /* omegaflowey ofloader (last, after bubbleread, merge order; UNDERTALE only, empty elsewhere): the audio loader's
+       kept-open files (z_ofloader.c), then its log lines. Named outside .text.* and .rodata.*: no catch-all takes them. */
+    *(.omegaflowey_ofloader)
+    *(.omegaflowey_ofloader_ro)
+    /* ctrlui (last, after omegaflowey ofloader, merge order; both games): the options menu's Controls page
+       (ctr_ctrlui.c), then its constants. Named outside .text.late.* so no catch-all above takes them; last, so no
+       earlier late code moves. */
+    *(.text.ctrlui_late)
+    *(.rodata.ctrlui_in_text)
   }
   __late_text_end = ABSOLUTE(.);
   /* 192 KiB (grown in whole 4 KiB pages from 16 KiB, each time late code outgrew it): screens' options page took
@@ -2053,6 +2066,11 @@ SECTIONS
     /* knightgpu FC rev 2 (after tshare, so every late static before keeps its address, c26rev r103 F1; DELTARUNE New
        only): its list of copies, the block buffer and the hot-list buffers (ctr_renderer.c's end). */
     *(.bss.knightgpu_fc2_late)
+    /* omegaflowey ofloader (last, after knightgpu FC rev 2, merge order; UNDERTALE only): the audio loader's kept-open
+       files and their paths (z_ofloader.c). Named outside .bss.* so the main .bss line leaves it here. */
+    *(.bss_omegaflowey_ofloader)
+    /* ctrlui (last, after omegaflowey ofloader, merge order; both games): the Controls page's cursor (ctr_ctrlui.c). */
+    *(.bss.ctrlui_late)
     /* 3dsxtool refuses a segment whose size isn't a multiple of 4 ("The segments is not word-aligned!"), and this
        block ends the RW segment: late statics of odd sizes (bools) would end it off a word. */
     . = ALIGN(4);

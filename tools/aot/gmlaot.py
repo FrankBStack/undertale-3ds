@@ -24,7 +24,8 @@ usage:
                    what binds to what, stays the same
   --typed-priority FILE  with --typed all: the order the module linker keeps typed regions in, by what each saves
                    (tools/aot/typed_priority.py). A chapter's section applies only when its data.win's SHA-256 is the
-                   one the section names; listed regions come first in list order, the rest follow as before
+                   one typed_priority.MADE_FROM records for it; listed regions come first in list order, the rest
+                   follow as before
   --data DIR       with --selection: the game folder, holding data.win (UNDERTALE: the list's folder is "root") or
                    chapterN_windows/data.win (DELTARUNE)
   --game DATA.WIN  starts the options for one data.win (one per DELTARUNE chapter); entries with the same name in

@@ -62,7 +62,7 @@ static const char syLogNone[] SY_CONST = "Symmetric halving: no usable %s; items
 
 bool CtrPack_romfsName(char* name, size_t size);
 void CTR_FONTVERDICTS_SYMVERDICT(Renderer* renderer);
-void CTR_FONTVERDICTS_AFTER_SYMVERDICT(Renderer* renderer); // itemverdict's link (z_itemverdict.c)
+void CTR_FONTVERDICTS_AFTER_SYMVERDICT(Renderer* renderer); // the next link: bubbleread (z_smalltext.c) in UNDERTALE, itemverdict (z_itemverdict.c) in DELTARUNE
 
 // The table of the last data.win tried (CtrPackKey): its bits, or none (failed: not tried again for that data.win).
 static struct {

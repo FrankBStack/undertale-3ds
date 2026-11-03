@@ -268,6 +268,7 @@ platform/3ds/source/ctr_chapters.c
 platform/3ds/source/ctr_chapters.h
 platform/3ds/source/ctr_cmdlabel.c
 platform/3ds/source/ctr_coverage.c
+platform/3ds/source/ctr_ctrlui.c
 platform/3ds/source/ctr_data_version.c
 platform/3ds/source/z_builderx_receipt.c
 docs/release/builder-version-receipts.md
@@ -986,3 +987,6 @@ tools/release/test_export_scrub.py
 tools/aot/typed_priority.py
 platform/3ds/source/vine_titancpu.inc
 platform/3ds/source/z_titandiag.c
+
+# omegaflowey ofloader (UNDERTALE): the audio loader's kept-open files (empty in DELTARUNE builds)
+platform/3ds/source/z_ofloader.c

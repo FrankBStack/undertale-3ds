@@ -1687,6 +1687,10 @@ target_link_options(ctrport PRIVATE -Wl,--wrap=hidKeysUp)
 target_link_options(ctrport PRIVATE -Wl,--wrap=CtrLab_booted,--wrap=CtrLog_setConsoleEnabled,--wrap=CtrScreens_moveConsoles)
 set_source_files_properties("${CMAKE_CURRENT_SOURCE_DIR}/source/ctr_optmenu.c" PROPERTIES COMPILE_OPTIONS
     "-Os;-fno-builtin-printf;-fno-builtin-puts;-fno-builtin-putchar;-fno-builtin-fprintf;-fno-builtin-fputs;-fno-tree-switch-conversion;-fno-jump-tables")
+# The options menu's Controls page (change ctrlui, 11-02), all late code in source/ctr_ctrlui.c: optmenu's Controls row
+# and its keys for a page not its own call it (two call changes in ctr_optmenu.c, slots kept). Compiled like optmenu.
+set_source_files_properties("${CMAKE_CURRENT_SOURCE_DIR}/source/ctr_ctrlui.c" PROPERTIES COMPILE_OPTIONS
+    "-Os;-fno-builtin-printf;-fno-builtin-puts;-fno-builtin-putchar;-fno-builtin-fprintf;-fno-builtin-fputs;-fno-tree-switch-conversion;-fno-jump-tables")
 # The player's L+SELECT screenshot (off in release builds, kept for debug and development). Its wrap,
 # late code in source/ctr_screens.c, does nothing unless CTRPORT_PLAYER_SHOTS (build.sh ... shots). There it also
 # wraps hidScanInput to hold the capture back while D-pad Down could be part of Rosalina's L+Down+SELECT.
@@ -2605,13 +2609,14 @@ if(CTRPORT_GAME STREQUAL "undertale" AND CTRPORT_TARGET STREQUAL "o3ds")
 endif()
 # btlentry (UNDERTALE Old): source/z_btlentry.c reads a battle group's planned tiles on the reader during the encounter
 # animation, before the room change (late code only; every other build compiles it empty). It wraps flowstream's
-# once-a-frame call and its five reader hooks; the wrapped calls are in z_utstall.c and ctr_tile_reader.c.
+# once-a-frame call and its five reader hooks; the wrapped calls are in z_utstall.c and ctr_tile_reader.c. Round 5 reads
+# the battle's code too, and wraps main.c's DataWin_moveBytecodeToFile call for the bytecode file's path.
 set_source_files_properties("${CMAKE_CURRENT_SOURCE_DIR}/source/z_btlentry.c" PROPERTIES COMPILE_OPTIONS
     "-Os;-fno-builtin-printf;-fno-builtin-puts;-fno-builtin-putchar;-fno-builtin-fprintf;-fno-builtin-fputs;-fno-tree-switch-conversion;-fno-jump-tables")
 if(CTRPORT_GAME STREQUAL "undertale" AND CTRPORT_TARGET STREQUAL "o3ds" AND NOT CTRPORT_ROOMPLAN_RECORDER)
     set_property(SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/source/z_btlentry.c" APPEND PROPERTY COMPILE_DEFINITIONS CTRPORT_FLOWSTREAM_READ)
     target_link_options(ctrport PRIVATE -Wl,--wrap=CtrFlowstream_collect,--wrap=CtrFlowstream_readHeader,--wrap=CtrFlowstream_readMallinfo,--wrap=CtrFlowstream_readMalloc
-        -Wl,--wrap=CtrFlowstream_gameFile,--wrap=CtrFlowstream_openFile)
+        -Wl,--wrap=CtrFlowstream_gameFile,--wrap=CtrFlowstream_openFile,--wrap=DataWin_moveBytecodeToFile)
 endif()
 # LAB ONLY, never release (review decision 11-02 on btlentry's reserve): the smallest heap free per window around a battle's
 # start, after every heap allocation (newlib's allocators wrapped); with FAULT, btlentry's reads cycle through refused,

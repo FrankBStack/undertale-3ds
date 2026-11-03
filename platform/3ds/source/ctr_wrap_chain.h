@@ -185,7 +185,7 @@ void CTR_WATCHDOGSTOP_ARGCRASH(void);
 #define CTR_DISPLAYCAPS_AFTER_PIXFIX CTR_DISPLAYCAPS_ITEMVERDICT
 #define CTR_DISPLAYCAPS_AFTER_ITEMVERDICT __real_CtrRenderer_getDisplayCaps
 
-// CtrRenderer_loadFontVerdicts (UNDERTALE): smalltext -> symverdict -> itemverdict -> real. DELTARUNE: crispart ->
+// CtrRenderer_loadFontVerdicts (UNDERTALE): smalltext -> symverdict -> bubbleread -> itemverdict -> real. DELTARUNE: crispart ->
 // itemverdict -> real on Old 3DS, smalltext -> crispart -> symverdict -> itemverdict -> real on New 3DS. Each link
 // calls the next one first.
 //   smalltext (z_smalltext.c; DELTARUNE New through z_smalltext_dr.c): puts its outer vtable in front of the
@@ -194,12 +194,15 @@ void CTR_WATCHDOGSTOP_ARGCRASH(void);
 //   symverdict (z_symverdict.c): marks the items the build found symmetric halving would draw plain. Its sections are
 //   named after CTR_SYMVERDICT_NAME (DELTARUNE New: symverdict_dr, linked last; z_symverdict_dr.c).
 //   itemverdict (z_itemverdict.c, both games): reads Smart smoothing's item verdict table for this data.win.
+//   bubbleread (z_smalltext.c's end, UNDERTALE): reads bubbleclip's bubble table in the room change, not in Draw.
 #if !defined(ENABLE_WAD17)
 #define CTR_SYMVERDICT_NAME "symverdict"
 #define CTR_FONTVERDICTS_SMALLTEXT __wrap_CtrRenderer_loadFontVerdicts
 #define CTR_FONTVERDICTS_SYMVERDICT CtrRenderer_chainFontVerdictsSymverdict
 #define CTR_FONTVERDICTS_AFTER_SMALLTEXT CTR_FONTVERDICTS_SYMVERDICT
-#define CTR_FONTVERDICTS_AFTER_SYMVERDICT CTR_FONTVERDICTS_ITEMVERDICT
+#define CTR_FONTVERDICTS_AFTER_SYMVERDICT CTR_FONTVERDICTS_BUBBLEREAD
+#define CTR_FONTVERDICTS_BUBBLEREAD CtrRenderer_chainFontVerdictsBubbleread
+#define CTR_FONTVERDICTS_AFTER_BUBBLEREAD CTR_FONTVERDICTS_ITEMVERDICT
 #else
 #if defined(CTRPORT_TARGET_N3DS)
 #define CTR_FONTVERDICTS_SMALLTEXT __wrap_CtrRenderer_loadFontVerdicts

@@ -257,6 +257,12 @@ static PILLAR_LATE void fountainMeshRegion(CtrRenderer* r, CtrPage* page, float 
     float edges[FOUNTAIN_CUTS_MAX];
     for (int32_t j = 0; ny > j; j++) edges[j] = (1.0f + sinf(time + yc[j] * FOUNTAIN_WAVE_FREQUENCY)) * FOUNTAIN_EDGE;
     flushBatch(r);
+#if defined(CTRPORT_TARGET_N3DS)
+    // titancpu: equal corner colours lerp to themselves (a + 0 * t), so the corners take colors[0] as quadPoint would.
+    // New 3DS only: on the Old 3DS this late body's growth would move every later late function's cache set.
+    bool flat = memcmp(&colors[0], &colors[1], sizeof(CtrColor)) == 0 && memcmp(&colors[0], &colors[2], sizeof(CtrColor)) == 0 &&
+                memcmp(&colors[0], &colors[3], sizeof(CtrColor)) == 0;
+#endif
     // A convex quad's cells have disjoint coverage. Walk down each column so
     // sample-wrap transforms stay together instead of flushing per column per
     // row. Preserve row order for folded/nonconvex draw_sprite_pos quads.
@@ -305,7 +311,13 @@ static PILLAR_LATE void fountainMeshRegion(CtrRenderer* r, CtrPage* page, float 
                 CtrFountainPoint p = poly[q];
                 float x, y;
                 CtrColor c;
+#if defined(CTRPORT_TARGET_N3DS)
+                float s = (p.u - u0) / (u1 - u0), t = (p.v - v0) / (v1 - v0);
+                if (flat) quadPosition(px, py, s, t, &x, &y), c = colors[0];
+                else quadPoint(px, py, colors, s, t, &x, &y, &c);
+#else
                 quadPoint(px, py, colors, (p.u - u0) / (u1 - u0), (p.v - v0) / (v1 - v0), &x, &y, &c);
+#endif
                 c.a = unitToByte(1.0f - fabsf(p.u - 0.5f) * 0.75f);
                 float u = (origin[0] + (p.u + shiftX[0]) * span[0]) / (float) page->tileW - (float) tileX[0];
                 float v = (origin[1] + (p.v + shiftY[0]) * span[1]) / (float) page->tileH - (float) tileY[0];
@@ -320,7 +332,14 @@ static PILLAR_LATE void fountainMeshRegion(CtrRenderer* r, CtrPage* page, float 
     }
     flushBatch(r);
     r->palNextB = nullptr;
+#if defined(CTRPORT_TARGET_N3DS)
+    // titancpu (c26rev r102): F1 grows this body by 424 B. These 24 B (a branch over 20 B of zeros, once per call)
+    // make the late text after it move by 448 B, a multiple of 32, so every later late function keeps its 32 B
+    // cache-line phase. (A separate pad function lands where GCC emits it, not right after this body.)
+    __asm__ volatile("b 1f\n\t.space 20\n1:");
+#endif
 }
+#line 324
 
 
 // Existing bodies retain their sections. Only call targets redirect to these

@@ -490,6 +490,7 @@ class PipelinePlatformTests(unittest.TestCase):
                 "platform/3ds/labhost/bench.py", "platform/3ds/bench/undertale.txt",
                 "platform/3ds/bench/coverage_undertale.txt", "platform/3ds/profiles/private.txt",
                 "tools/aot/census.py", "tools/aot/selection/deltarune.txt",
+                "tools/aot/selection/typed-priority-deltarune-n3ds.txt",
                 "tools/analysis/crispart_pack.py", "tools/analysis/unrelated.py")
         with tempfile.TemporaryDirectory() as tmp:
             source, dest = Path(tmp) / "source", Path(tmp) / "dest"

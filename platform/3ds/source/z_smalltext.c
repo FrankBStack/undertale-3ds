@@ -2133,3 +2133,23 @@ static __attribute__((noinline, section(".text.late.asrtext"))) int32_t asrPcDy(
     return dy - 2 * ((int32_t) f->rowShift[stGridPixel(y + oy) & 1] - (int32_t) f->rowShift[stGridPixel(py + oy) & 1]);
 }
 #endif
+
+#if defined(ENABLE_WAD16) && !defined(ST_DR_UNIT)
+// bubbleread (omegaflowey, GO 11-02): the bubble table is read at the room change, hidden in the load, not at
+// its first lookup in a writer's Draw, where on the Old 3DS that RomFS read queued behind the audio loader's SD job
+// (73-99 ms at the Asgore battle's fade-in, docs/3ds-hardware.md). A link of CtrRenderer_loadFontVerdicts
+// (ctr_wrap_chain.h): the next link first, then bcEdges through its assembler name, which adds no call-graph edge, so
+// no function of this file moves. Before its lookup bcEdges reads only runner->dataWin, Runner's first field, so the
+// renderer's dataWin field stands in for the runner; sprite -1 matches no row. After the first room the table is in
+// (or known missing) and the call only walks the table. Named outside .text.* so z_smalltext.o's line in
+// late_reserve.ld leaves it to its own line, last.
+_Static_assert(offsetof(Runner, dataWin) == 0, "bubbleread passes the renderer's dataWin field as the runner");
+const uint8_t* bcEdgesAsm(Runner* runner, int32_t sprite, uint32_t* rows) __asm__("bcEdges");
+void CTR_FONTVERDICTS_AFTER_BUBBLEREAD(Renderer* renderer);
+__attribute__((noinline, section(".omegaflowey_bubbleread"))) void CTR_FONTVERDICTS_BUBBLEREAD(Renderer* renderer) {
+    CTR_FONTVERDICTS_AFTER_BUBBLEREAD(renderer);
+    if (renderer == nullptr || renderer->dataWin == nullptr) return;
+    uint32_t rows;
+    bcEdgesAsm((Runner*) &renderer->dataWin, -1, &rows);
+}
+#endif

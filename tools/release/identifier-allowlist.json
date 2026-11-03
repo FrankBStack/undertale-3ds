@@ -258,7 +258,7 @@
     {
       "member": "platform/3ds/source/z_btlentry.c",
       "class": "engine-lookups",
-      "sha256": "0ecf96a2a57976fa2cda446655123cab9721acf5d323f055bb0e31003a816a7d",
+      "sha256": "a83443545aea45cd5db148e2e2c4d1346c7de315f32f8ee4ac679e141d0adc3a",
       "justification": "Two object names tell that a battle is starting, so its planned tiles can be read before the room change (textures only).",
       "evidence_sha256": [
         "5c59e02ae037273a498c0832254458ab17d155089c991c7087533c66935a8350"
@@ -339,7 +339,7 @@
     {
       "member": "platform/3ds/source/ctr_pillar_exact.inc",
       "class": "engine-lookups",
-      "sha256": "4c36c78118797c2275eeb77516818ec51a4737ce10039e0c12f245d3a43aa957",
+      "sha256": "656ad8ab6feca630e537552dcad2aada0d5958759d1ac286993f08e77ba8e476",
       "justification": "A shader lookup selects the fountain renderer compatibility path.",
       "evidence_sha256": [
         "0d0c75bc5d42acc44093cde0a8004cc401ab4f53c21697a997d01d6694d45649"
@@ -420,7 +420,7 @@
     {
       "member": "platform/3ds/source/ctr_textures.c",
       "class": "engine-symbols",
-      "sha256": "da87a7ff027a3ea6d5ee5bc0be19a3651758b68ef37caa7b93a0707c018e96c2",
+      "sha256": "554d6f6e5c1712408c94f0a28ba1768b3f68787659e2a658a1d693e385429c49",
       "justification": "Reviewed parser limits, format fields, settings or upstream APIs; prefix overlap is not a game asset.",
       "evidence_sha256": [
         "fa3195d59833c0bb17ff059283d9ea5552a7023e68e0cb575a13476296cd56a0"
@@ -569,7 +569,7 @@
     {
       "member": "tools/roomplan/records/undertale-steam-1.08.json",
       "class": "roomplan-record",
-      "sha256": "020bd98f0d496a610d7ee47a4e1b09587aa3d1430fcc2288fc4460b4482597e6",
+      "sha256": "99d291e49a37b96350b959bcb446bca1496d04568a1b275e07780044efc74557",
       "justification": "Owner-approved hash-gated indices and source rectangles recorded during our own playthroughs.",
       "evidence_sha256": [
         "dcf99176f5beeab6da7c76142996000867d039c9fffd11c97f64eb2640957c09",
@@ -597,7 +597,7 @@
     {
       "member": "tools/roomplan/tracks/deltarune.json",
       "class": "roomplan-record",
-      "sha256": "6e274118c6b7e8a6edefbe6c77cf545924ee2a6ba9d251a2057c643d9cbed2d2",
+      "sha256": "6f86d7b1e179d6772596b854da6c58b3eaf086ee1b9a8b605a388439cf4795b0",
       "justification": "Track record (drresid): per-room texture page item numbers and frames for exact data.win files (SHA-256), as the room plan records; indices only, from our New 3DS recorder runs; no game body, names or assets.",
       "evidence_sha256": [
         "1d8d0ed9be5dc9dfe3a4ff9735374a6070a724066b99f0626be8eca272139403",
@@ -717,7 +717,7 @@
     {
       "member": "platform/3ds/source/z_smalltext.c",
       "class": "engine-lookups",
-      "sha256": "d8cc4004b6f5d9f8059373eba8756bd35c5f619bd921465e4fd078db836eef08",
+      "sha256": "cd3c34d02eba932926b48f8aa9f4a95f05d28c7d70e3e463ae8b62b419fd4803",
       "justification": "The KR label's sprite name finds the frame that Crisp text draws sharp (UNDERTALE only; part of the Smoothing menu's choices). Speech bubbles (bubbleclip; integrate21, approved by the lead 2026-10-27): the text writer object and the four bubble border objects find the writer and the bubble edges so Crisp text stays inside the bubble.",
       "evidence_sha256": [
         "db903e39c5e3b4b4503b85492d4397b9c79fb2534f86197307ffd9a0e012f190"
@@ -769,7 +769,7 @@
     {
       "member": "tools/roomplan/records/undertale-gog-1.08.json",
       "class": "roomplan-record",
-      "sha256": "11ef0ade88effedc35aa165ae750a7a7a195b4f4d7aa4dbdd47ca22436c8b2a2",
+      "sha256": "3100187c98734d273efc9f57eb64969c3072a2e20ff873fedef5066e9b604615",
       "justification": "Lead-approved GOG hash-gated record, reprojecting our recorded playthrough indices through equal metadata and RGBA.",
       "evidence_sha256": [
         "ea1289ef94f5f714e142d7cb8c4e851dc4326e625c48c21bb9639130497f6b5e",
@@ -809,7 +809,7 @@
     {
       "member": "tools/aot/gmlaot.py",
       "class": "engine-lookups",
-      "sha256": "c19c0dfe8622e1a60d2a68df94624d5529deb927ea3186478482f7807fde5ca3",
+      "sha256": "aeeeb409712b0e00fba3b05c72c0d07a73b76930ea9c883b33252bd6c7d25181",
       "justification": "One lava script lookup selects an audited generic sprite-part builtin redirect. No game body, game instruction sequences or generated code from them, resource IDs, assets or text are embedded: the native bodies (UTF_NATIVE) and the text front (GETTEXT_FAST) are matched by SHA-256 or FNV digests computed from the player's data.win at build time; the only instruction words left are the VM's generic opcode encodings the compiler decodes.",
       "evidence_sha256": [
         "ec6d5c493df4c8b53e57dd4a2ce27ce563d52ee9ccf95083c9135cec002574aa"
@@ -996,6 +996,21 @@
       "class": "dialogue-objects",
       "sha256": "3563a5be2ae78a59597531d167ee1595310be446026da24e732d5c4acc065faf",
       "justification": "Names-only menu object lookups end dialogue replay when a game menu takes over; no game code or assets."
+    },
+    {
+      "member": "tools/aot/selection/typed-priority-deltarune-n3ds.txt",
+      "class": "aot-selection",
+      "sha256": "7d6d5e78ae4f7fcb91afa522579716a5ed08a0f91cc07ccb37af91444345910d",
+      "justification": "Names-only typed-region priority keys (code entry names and region starts) for compiling the player's own chapter 3 code; the data-version gate lives in typed_priority.py (lead 2026-11-02, titancpu unit 3 option 2)."
+    },
+    {
+      "member": "tools/aot/typed_priority.py",
+      "class": "gating-hashes",
+      "sha256": "ddb077450297f3dd79bfb75c7a8e42cc8aba0c54c6bbeb1ce23c1ec82f9b970c",
+      "justification": "Lead 2026-11-02 (titancpu unit 3 option 2): the typed priority list applies only to the chapter data.win it was measured on (whole-file SHA-256), else rank order; no game content.",
+      "evidence_sha256": [
+        "1d8d0ed9be5dc9dfe3a4ff9735374a6070a724066b99f0626be8eca272139403"
+      ]
     }
   ],
   "review": "Lead 2026-10-22, export audit 6b4eb48c"

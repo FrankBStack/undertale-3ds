@@ -150,8 +150,10 @@ def source_wanted(relative, game=None):
         return parts[2] in ("base64", "bzip2", "md5", "miniz", "sha1", "stb")
     if parts[:2] == ["tools", "aot"]:
         if parts[2] == "selection":
-            return game is None or not (parts[-1].startswith("deltarune" if game == "undertale" else "undertale") or
-                                        parts[-1] == "typed-" + ("deltarune" if game == "undertale" else "undertale") + ".txt")
+            # The other game's lists: <game>*, typed-<game>.txt and typed-priority-<game>-<target>.txt.
+            other = "deltarune" if game == "undertale" else "undertale"
+            return game is None or not (parts[-1].startswith((other, "typed-priority-" + other + "-")) or
+                                        parts[-1] == "typed-" + other + ".txt")
         # loadscreen_art.py: the loading screen art (build.sh runs it for both games). escape.py: gmlaot.py's
         # escape elision (G9), imported for WAD 17 only but part of gmlaot.py's import closure. stpack.py and
         # stglyphs.py: the Crisp text glyph packs (build.sh makes them for UNDERTALE and DELTARUNE New by default);

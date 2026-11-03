@@ -880,7 +880,7 @@ OPT_STATIC void optFlush(CtrMenu* menu) {
     CtrLog_endConsole();
     opt.dirty = false;
 }
-static void fpsboxMenuFlush(CtrMenu* menu); void CtrFpsbox_menuNoErase(uint16_t*, const uint16_t*, bool);
+static void fpsboxMenuFlush(CtrMenu* menu); void CtrFpsbox_menuNoErase(uint16_t*, const uint16_t*, bool); CtrMenuAction CtrCtrlui_main(CtrMenu* menu, int32_t dir); CtrMenuAction CtrCtrlui_update(CtrMenu* menu, u32 down);
 // ===[ The menu ]===
 
 // The menu's sounds: the game's own cursor sound (argui's sndMove) for the open and each move, its choice sound
@@ -994,13 +994,13 @@ OPT_STATIC void optSound(bool selectSound) {
 
 // A page's row chosen or changed (dir -1, 1, or 0 for A).
 OPT_STATIC CtrMenuAction optActivate(CtrMenu* menu, uint32_t i, int32_t dir) {
-#if defined(__3DS__) && !CTR_PACK_EXACT_AVAILABLE
-    // Retain the original slot so no later function changes its cache phase.
-#ifdef ENABLE_WAD16
-    __asm__ volatile(".rept 5\n nop\n .endr");
-#else
-    __asm__ volatile(".rept 2\n nop\n .endr");
-#endif
+#if defined(__3DS__) && !CTR_PACK_EXACT_AVAILABLE && defined(ENABLE_WAD16)
+    // Retain the original slot so no later function changes its cache phase (each count +4: ctrlui's Controls row).
+    __asm__ volatile(".rept 9\n nop\n .endr");
+#elif defined(__3DS__) && !CTR_PACK_EXACT_AVAILABLE
+    __asm__ volatile(".rept 6\n nop\n .endr");
+#elif defined(__3DS__)
+    __asm__ volatile(".rept 4\n nop\n .endr");
 #endif
     CtrDisplaySettings* s = &menu->settings;
     if (opt.page == OPT_PAGE_FPS) {
@@ -1063,10 +1063,10 @@ OPT_STATIC CtrMenuAction optActivate(CtrMenu* menu, uint32_t i, int32_t dir) {
         return MENU_ACTION_NONE;
     }
     if (i == OPT_MAIN_CONTROLS) {
-        if (dir != 0) return MENU_ACTION_NONE;
-        menu->cursor = OPT_SCREENS_CONTROLS;
-        CtrMenu_update(menu, KEY_A); // the screens' menu opens main's Controls page from its Controls row
-        return MENU_ACTION_NONE;
+        // A opens the Controls page (ctr_ctrlui.c); left or right switch Default and B confirms, as its Layout row
+        // does. (Before: A opened ctr_menu.c's console page through the screens' menu, and left or right did nothing.)
+        // The page then has the menu's keys while menu->page is MENU_PAGE_CONTROLS (optKeys, below).
+        return CtrCtrlui_main(menu, dir);
     }
     if (i == OPT_MAIN_LEGAL || i == OPT_MAIN_CREDITS) {
         if (dir == 0) CtrLegalui_open(menu, i == OPT_MAIN_CREDITS);
@@ -1103,7 +1103,7 @@ OPT_STATIC CtrMenuAction optKeys(CtrMenu* menu, u32 down) {
     }
     if (menu->page != MENU_PAGE_OPTIONS) {
         menu->cursor = OPT_SCREENS_CONTROLS;
-        return CtrMenu_update(menu, down); // main's Controls page, through the screens' menu (SELECT: back to the game)
+        return CtrCtrlui_update(menu, down); // the Controls page (ctr_ctrlui.c; SELECT: back to the game)
     }
     if (down & KEY_SELECT) return MENU_ACTION_RESUME;
     uint32_t page = opt.page, count = optCounts[page], i = opt.cur[page];
@@ -1279,6 +1279,7 @@ typedef struct {
     uint8_t kind;
     uint8_t key;
 } OptStep;
+extern const OptStep CtrCtrlui_probe[]; extern const uint8_t CtrCtrlui_probeCount; // opt_probe=2: ctr_ctrlui.c's
 static const OptStep optSteps[] OPT_RO = {
     { 5, 2, 0x00 }, { 10, 1, 0x80 }, { 11, 2, 0x00 }, { 12, 2, 0x00 }, { 13, 1, 0x80 }, { 14, 2, 0x00 }, { 15, 2, 0x00 },
     { 20, 1, 0x80 }, { 22, 1, 0x80 }, { 24, 1, 0x00 }, { 26, 1, 0x01 }, { 28, 2, 0x00 }, { 30, 1, 0x80 }, { 32, 2, 0x00 },
@@ -1291,16 +1292,15 @@ static const OptStep optSteps[] OPT_RO = {
 
 OPT_STATIC bool optProbeBuiltin(const char* line) {
     int value = 0;
-    if (sscanf(line, optFmtProbeKey, &value) != 1 || value != 1) return false;
+    if (sscanf(line, optFmtProbeKey, &value) != 1 || (value != 1 && value != 2)) return false;
     if (opt.probes != 0) return true; // applyIniOverrides runs twice
-    for (uint32_t i = 0; sizeof(optSteps) / sizeof(optSteps[0]) > i; i++) {
+    const OptStep* steps = value == 2 ? CtrCtrlui_probe : optSteps; // 2: the Controls page's steps (change ctrlui)
+    uint32_t count = value == 2 ? CtrCtrlui_probeCount : sizeof(optSteps) / sizeof(optSteps[0]);
+    for (uint32_t i = 0; count > i; i++) {
         OptProbe* p = &opt.probe[i];
-        p->tick = optSteps[i].tick;
-        p->kind = optSteps[i].kind;
-        p->done = 0;
-        p->arg = optSteps[i].key;
+        p->tick = steps[i].tick; p->kind = steps[i].kind; p->done = 0; p->arg = steps[i].key;
     }
-    opt.probes = (uint8_t) (sizeof(optSteps) / sizeof(optSteps[0]));
+    opt.probes = (uint8_t) count;
     char name[96];
     snprintf(name, sizeof(name), optFmtPath, opt.dir, optAutopauseName);
     FILE* f = fopen(name, optWriteMode);

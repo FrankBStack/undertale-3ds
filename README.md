@@ -14,50 +14,44 @@ DELTARUNE: in progress. It comes after UNDERTALE.
 
 The goal: every scene running at a locked 30 fps on every model.
 
-The bars count the scenes we measure on real consoles that pass. They come from the builds before the newest one (29 October 2026); the newest build is being measured now.
+The bars count the scenes we measure on real consoles that pass, each on the newest build it was measured on. On the New 3DS every scene was measured on a build from 30 October or later. On the older models, about half the scenes were last measured on builds from 27-29 October, and the rest on builds from 30 October to 2 November.
 
 ```
-New 3DS / New 3DS XL / New 2DS XL   ███████████████████░   97%
-3DS / 3DS XL / 2DS                  ████████████████░░░░   78%
-Overall                             █████████████████░░░   87%
+New 3DS / New 3DS XL / New 2DS XL   ███████████████████░   99%
+3DS                                 ██████████████████░░   92%
+2DS                                 ██████████████████░░   88%
+Overall                             ███████████████████░   93%
 ```
 
-A scene passes only when every single frame in play is ready in time, with no dropped frames. Some scenes that fail miss by a single frame here and there, which is hard to notice while playing. That's why the beta is judged by playing the worst scenes.
+A scene passes only when every single frame in play is ready in time, with no dropped frames. Most scenes that fail miss by a single frame here and there, which is hard to notice while playing. That's why the beta is judged by playing the worst scenes.
 
-New 3DS: 63 of 65 measured scenes pass. The other two (the Omega Flowey finale and one credits scene) dropped no frames, but their single slowest frame still needs measuring.
+New 3DS: 70 of 71 measured scenes pass. The one left is the Omega Flowey fight, with a single late frame.
 
-Older models: 54 of 69 measured scenes pass on a 3DS (45 of 71 on 28 October). Left:
+Older models: 65 of 71 measured scenes pass on a 3DS and 64 of 73 on a 2DS (on 29 October: 54 of 69 on a 3DS). Left:
 
-- The Omega Flowey finale
-- Asriel's fight, and two of the scenes where you save your friends during it
-- Mettaton's opera
-- Parts of the fights with Asgore and Mad Dummy
-- Lemon Bread in the True Lab
-- The ending credits
-- The end of Undyne's bridge in Waterfall
+- The Omega Flowey fight
+- The ending credits: the spinning circles of text, and on a 2DS also the part where you dodge the names
+- Asriel's fight: its start, and saving Undyne during it; on a 2DS also the dream part (last measured on 27 October)
+- On a 2DS, one Hotland room, with a single late frame
 - One Snowdin scene that dropped no frames but still needs its slowest frame measured
 - A final check of every scene
 
-Asriel, Mad Dummy and Lemon Bread were measured before the 29 October sound fix, and Asgore before the 30 October changes.
+On a 3DS XL, 46 of the 54 scenes measured on it so far pass; 19 scenes haven't been measured on it yet, so it has no bar of its own.
 
-We also measured every room of a full playthrough on the older models, on an earlier build: 589 of 595 rooms pass on a 3DS.
+We also measured every room of a full playthrough on recent builds: 595 of 595 rooms pass on a New 3DS, 594 of 595 on a 3DS, 580 of 581 on a 2DS and 595 of 596 on a 3DS XL.
 
-## What changed since the last update (1 November)
+## What changed since the last update (2 November)
 
-- Older models: loading into a battle is much shorter. In our console tests: the battle at the Snowdin ice exit about 1.0-1.5 s down to 0.5-0.8 s, Papyrus 0.45-0.67 s down to 0.2-0.26 s, and a Waterfall battle 0.3-0.5 s down to 0.09-0.16 s.
-- Older models: the slowest frame during the Omega Flowey fight (before the ending's load) is lower: 2DS 70 to 50 ms, 3DS 65 to 51 ms, 3DS XL 56 to 53 ms. A locked 30 needs about 33 ms or less.
-- Older models: in our console tests, the fights with Asgore, Undyne, Sans and Mettaton EX ran at a locked 30 on all three models, apart from the one Asgore hitch below.
-- FPS counter: with the game on the bottom screen and the counter on the top, black lines no longer flicker through the counter.
-- The dialogue box at a save point no longer lingers for a moment over the SAVE menu. We first saw it at a Waterfall save point.
-- The red pixels around the last Froggit in the ending credits: the builder now cleans up that art when it prepares the game. This should hide them, but it isn't a full fix, and we haven't confirmed it on a console yet.
-- The alarm-timing fix mentioned last time is in this build.
+- Options: a new Controls page. Each 3DS button can be set to what it does in the game (Confirm, Cancel, Menu, a direction, or nothing), with Default, B confirms and Custom layouts. It won't let you take the last Confirm, Cancel, Menu or Move off your buttons. The Controls row on the main options page showed Default but left and right didn't change it; now they switch between Default and B confirms.
+- Older models: entering a battle is shorter again. In our console tests of this build: the battle at the Snowdin ice exit 0.37-0.66 s down to 0.23-0.50 s, Papyrus 0.19-0.23 s down to 0.14-0.17 s, and a Waterfall battle 0.09-0.14 s down to about 0.04 s. In the earlier tests of this change, Asgore's battle (entered with the game's art already cached) went from about 0.29-0.33 s to 0.13-0.14 s.
+- Older models: during testing, a 2DS showed one late frame in a Waterfall battle. It didn't happen again when we re-ran that battle four times.
 
 ## Setbacks
 
-- Older models: the Asgore fight has one hitch near its start, when its art loads for the first time. The fix is planned for the next build.
-- Older models: the Omega Flowey fight still drops frames for a second or two after the 2nd SOUL.
-- Older models: the spinning circles of text in the ending credits still drop frames.
-- Older models: in Asriel's fight, the music cut out once in play-testing when we went to save Alphys. We're looking into it.
+- Older models: Asgore's first turns can still have two or three single late frames while some of his art loads from the SD card. The fix we planned for this build didn't cover it; a new fix is ready for the next build.
+- Older models: in the Omega Flowey fight, the flame attack can still drop a single frame when its sound starts: about 50-57 ms in most of our tests of this build, 72 ms once.
+- Older models: the spinning circles of text in the ending credits still drop frames. Each circle's first frame takes about as long as the frame budget allows, so some of them are late.
+- Older models: in Asriel's fight, the music cut out once in play-testing when we went to save Alphys. We're still looking into it.
 
 ## Known issues
 
