@@ -1,0 +1,43 @@
+{
+  "schema": 1,
+  "inventory_algorithm": "SHA-256 of compact ASCII JSON [relative POSIX path,size,SHA-256] rows sorted lexically by path",
+  "windows": {
+    "source": "Local python.org CPython installation, prepared with prepare_windows_runtime.py",
+    "python": "3.14.6",
+    "architecture": "x86_64",
+    "python_exe_sha256": "03168c01b7b7491423350e82c26fee71f35b43694d1319d3c668bda6903a0c38",
+    "inventory": {
+      "files": 1067,
+      "sha256": "a1f5754cbf8cd6845f7356360e84832f7bbb1f105d11b2b2446dbcd44de3bbeb"
+    }
+  },
+  "macos": {
+    "source": "https://github.com/astral-sh/python-build-standalone",
+    "release": "20261026",
+    "python": "3.14.10",
+    "archives": {
+      "arm64": {
+        "triple": "aarch64",
+        "bytes": 26753457,
+        "sha256": "95eb8c87d16af37c54e9765e31d8c56c0d8ffa9968ea0f704f73a9b83f84e9f9"
+      },
+      "x86_64": {
+        "triple": "x86_64",
+        "bytes": 26943401,
+        "sha256": "2fd8becd48cf0ff5f0a15df3c0db7cae7aa708dcaacf901bd30d6cdd6229370b"
+      }
+    },
+    "licences_inventory": {
+      "files": 132,
+      "sha256": "b208c61cf75b3ca1f082d26a96f35077d3fac917de08e0244d203899ddf17558"
+    }
+  },
+  "linux": {
+    "mode": "system",
+    "executable": "python3",
+    "minimum_version": "3.9",
+    "requires": [
+      "Tk"
+    ]
+  }
+}

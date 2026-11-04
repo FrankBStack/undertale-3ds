@@ -17,14 +17,13 @@ import struct
 import tarfile
 import zipfile
 import zlib
+import runtime_pins
 
-RELEASE = '20261026'
-PYTHON = '3.14.10'
+RELEASE = runtime_pins.PINS['macos']['release']
+PYTHON = runtime_pins.PINS['macos']['python']
 VERSION = '3.14'
-PINS = {
-    'arm64': ('aarch64', 26753457, '95eb8c87d16af37c54e9765e31d8c56c0d8ffa9968ea0f704f73a9b83f84e9f9'),
-    'x86_64': ('x86_64', 26943401, '2fd8becd48cf0ff5f0a15df3c0db7cae7aa708dcaacf901bd30d6cdd6229370b'),
-}
+PINS = {arch: (row['triple'], row['bytes'], row['sha256'])
+        for arch, row in runtime_pins.PINS['macos']['archives'].items()}
 
 
 def runtime_url(arch):
@@ -193,6 +192,7 @@ def write_app(files, output, game, version, runtimes, opening, licences):
     """One ZIP containing one app, source, two native runtimes and dependency notices."""
     if set(runtimes) != set(PINS):
         raise ValueError('Mac app needs both arm64 and x86_64 runtime archives')
+    licence_files = runtime_pins.mac_licence_files(licences)
     title = game.upper() + ' 3DS Builder'
     prefix = title + '.app/Contents/'
     entries = {prefix + 'Resources/builder/' + rel: (data, 0o755 if rel.endswith('.sh') else 0o644)
@@ -221,24 +221,19 @@ def write_app(files, output, game, version, runtimes, opening, licences):
                    for rel, value in sorted(payload.items())})
     # Preserve upstream licensing records/texts, omitting the build-user location.
     licence_root = Path(licences)
-    for p in sorted(licence_root.rglob('*')):
-        if p.is_symlink():
-            raise ValueError('Unexpected licence symlink')
-        if p.is_file():
-            rel = p.relative_to(licence_root).as_posix()
-            data = p.read_bytes()
-            if rel in {arch + '/PYTHON.json' for arch in PINS}:
-                metadata = json.loads(data)
-                config = metadata.get('python_config_vars')
-                if isinstance(config, dict):
-                    config.pop('userbase', None)
-                data = (json.dumps(metadata, indent=2) + '\n').encode('utf-8')
-            entries[prefix + 'Resources/runtime-licences/' + rel] = (data, 0o644)
+    for rel, data in sorted(licence_files.items()):
+        if rel in {arch + '/PYTHON.json' for arch in PINS}:
+            metadata = json.loads(data)
+            config = metadata.get('python_config_vars')
+            if isinstance(config, dict):
+                config.pop('userbase', None)
+            data = (json.dumps(metadata, indent=2) + '\n').encode('utf-8')
+        entries[prefix + 'Resources/runtime-licences/' + rel] = (data, 0o644)
     for arch in PINS:
         root = licence_root / arch
         if not (root / 'PYTHON.json').is_file() or not list(root.rglob('LICENSE*')):
             raise ValueError('Missing upstream runtime licensing metadata/texts: ' + arch)
-        metadata = json.loads((root / 'PYTHON.json').read_text(encoding='utf-8'))
+        metadata = json.loads(licence_files[arch + '/PYTHON.json'])
         if metadata.get('target_triple') != PINS[arch][0] + '-apple-darwin' or metadata.get('python_version') != PYTHON:
             raise ValueError('Runtime licence metadata does not match its architecture/version')
         # Check every licence path referenced by the upstream build metadata, not only CPython.

@@ -835,8 +835,12 @@ class PackagingTests(unittest.TestCase):
             import json
             for platform in ("windows", "linux", "macos"):
                 with self.subTest(platform=platform):
-                    archive = package_builder.package(root, Path(tmp) / "out", "undertale", platform,
-                                                      runtime if platform == "windows" else None)
+                    runtime_files = package_builder.runtime_pins.read_files(runtime)
+                    fixture_pins = {'windows': dict(inventory=package_builder.runtime_pins.inventory_pin(runtime_files),
+                        python_exe_sha256=hashlib.sha256(runtime_files['python.exe']).hexdigest())}
+                    with mock.patch.object(package_builder.runtime_pins, 'PINS', fixture_pins):
+                        archive = package_builder.package(root, Path(tmp) / "out", "undertale", platform,
+                                                          runtime if platform == "windows" else None)
                     unpacked = Path(tmp) / platform
                     unpacked.mkdir()
                     if platform == "windows":
@@ -940,7 +944,11 @@ class PackageHygieneTests(unittest.TestCase):
             for rel in caches:
                 write(str(runtime/rel), self.private.encode())
                 write(str(root/'tools/release/builder'/rel), self.private.encode())
-            files = package_builder.inputs(root, 'undertale', runtime)
+            runtime_files = package_builder.runtime_pins.read_files(runtime, omit_caches=True)
+            fixture_pins = {'windows': dict(inventory=package_builder.runtime_pins.inventory_pin(runtime_files),
+                python_exe_sha256=hashlib.sha256(runtime_files['python.exe']).hexdigest())}
+            with mock.patch.object(package_builder.runtime_pins, 'PINS', fixture_pins):
+                files = package_builder.inputs(root, 'undertale', runtime)
             prefix = 'tools/release/builder/runtime/'
             self.assertEqual(files[prefix+'python314.zip'], vendor)
             self.assertIn(prefix+'tkinter/__init__.py', files)

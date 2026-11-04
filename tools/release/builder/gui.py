@@ -34,6 +34,7 @@ import discover
 import pipeline
 import products
 import preferences
+import updates
 import toolchain
 from processes import hidden_options
 
@@ -43,7 +44,6 @@ TERMS = "Store terms (Steam, GOG) restrict modifying or converting the game. Bui
 ABOUT = ("{app} builder\n\nFree software under the GNU AGPL-3.0. Source ZIP:\n{source}\n\n"
          "The ownership check is a deterrent, not a lock: it checks that the game files match an official release "
          "and that a store installed them.\n\n" + DISCLAIMER)
-SOURCE_URL = "https://github.com/ethancawse/{app}/releases"
 WRAP = 640
 SHORT_TARGET = {"n3ds": "New 3DS", "o3ds": "Old 3DS"}
 
@@ -1640,6 +1640,16 @@ class WelcomePage(Page):
             release = "Source files need repair. Download and unpack the builder again."
         label(self.frame, release)
         label(self.frame, TERMS)
+        self.check_updates = tk.BooleanVar(app.root, value=preferences.load(app.opts.work).get('updates', True))
+        checkbutton(self.frame, text='Allow update checks (GitHub)', variable=self.check_updates,
+                    command=self.update_preference).pack(anchor='w')
+        self.update_button = button(self.frame, text='Check for updates', command=lambda: app.check_updates(manual=True))
+        self.update_button.pack(anchor='w')
+        self.update_button.state(['!disabled'] if self.check_updates.get() else ['disabled'])
+        self.update_status = label(self.frame, '')
+        self.update_feedback = label(self.frame, '')
+        self.release_button = button(self.frame, text='Open release page', command=self.open_release)
+        self.release_url = None
         self.game = tk.StringVar(value=app.state.game)
         if not app.opts.game:
             label(self.frame, "Game:", bold=True)
@@ -1658,6 +1668,32 @@ class WelcomePage(Page):
     def changed(self):
         if self.game.get() != self.st.game:
             self.app.reset(self.game.get())
+
+    def update_preference(self):
+        preferences.save(self.app.opts.work, self.app.theme.boring, updates=self.check_updates.get())
+        self.update_button.state(['!disabled'] if self.check_updates.get() else ['disabled'])
+        if self.check_updates.get():
+            self.app.check_updates()
+        else:
+            self.update_status.config(text='')
+            self.update_feedback.config(text='')
+            self.release_button.pack_forget()
+            self.release_url = None
+
+    def open_release(self):
+        if self.release_url:
+            webbrowser.open(self.release_url)
+
+    def release_notice(self, notice):
+        if notice is None:
+            return
+        self.release_url = notice.url if notice else None
+        self.update_status.config(text=('v%s is out\n%s\nRebuild and deliver to update. Your saves are kept.'
+                                       % (notice.version, notice.notes)) if notice else '')
+        if notice:
+            self.release_button.pack(anchor='w')
+        else:
+            self.release_button.pack_forget()
 
     def auto(self):
         want = (self.app.opts.autopilot or {}).get("game")
@@ -3170,6 +3206,7 @@ class App:
         self.root, self.opts = root, opts
         self.state = State(opts.game or "undertale")
         self.q = queue.Queue()
+        self.update_checker = updates.Checker(opts.work, self.call)
         self.exit_code = 0
         root.configure(bg="#000000")
         boring = preferences.load(opts.work)["boring"] if opts.boring is None else opts.boring
@@ -3308,6 +3345,7 @@ class App:
         return self.pages[self.index]
 
     def reset(self, game):
+        self.pages[0].update_feedback.config(text='')
         self.state = State(game)
         self.pages[1].searched_for = None
 
@@ -3367,7 +3405,30 @@ class App:
 
     def about(self):
         app = products.PRODUCTS[self.state.game].app_name
-        messagebox.showinfo("About", ABOUT.format(app=app, source=SOURCE_URL.format(app=app)))
+        try:
+            source = updates.repository(self.state.game) + '/releases'
+        except Exception:
+            source = ''
+        messagebox.showinfo("About", ABOUT.format(app=app, source=source))
+
+    def check_updates(self, manual=False):
+        if self.pages[0].check_updates.get():
+            if manual:
+                self.pages[0].update_feedback.config(text='Checking...')
+            accepted = self.update_checker.request(self.state.game,
+                lambda game, result: self._release_notice(game, result, manual=manual), manual=manual)
+            if manual and not accepted:
+                self.pages[0].update_feedback.config(text="Couldn't check")
+
+    def _release_notice(self, game, result, manual=False):
+        if game == self.state.game and self.pages[0].check_updates.get():
+            if result and result.notice:
+                self.pages[0].release_notice(result.notice)
+            if manual:
+                text = ("Couldn't check" if result is None else
+                        'v%s is out' % result.notice.version if result.notice else
+                        'Up to date (v%s)' % result.current.removeprefix('v'))
+                self.pages[0].update_feedback.config(text=text)
 
     def close(self):
         if self.page.busy() and self.index != 5:
@@ -3465,5 +3526,7 @@ def _bring_to_front(root):
 def run(opts: Options):
     root = tk.Tk()
     app = App(root, opts)
+    if opts.autopilot is None:
+        root.after_idle(app.check_updates)
     root.mainloop()
     return app.exit_code

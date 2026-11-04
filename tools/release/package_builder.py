@@ -26,6 +26,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent / "builder"))
 import pipeline
 import texcache
 import sfx_encoder
+import runtime_pins
 
 EXTRA_FILES = ("tools/release/verify_game.py", "tools/release/release_contract.py",
                "tools/release/sfxpack-versions.json",
@@ -33,7 +34,8 @@ EXTRA_FILES = ("tools/release/verify_game.py", "tools/release/release_contract.p
                "tools/release/test_builder_platforms.py", "tools/release/builder_platform_probe.py",
                "tools/release/package_builder.py", "tools/release/test_builder_native_data.py",
                "tools/release/test_texcache.py", "tools/release/check_kit_hygiene.py", "tools/release/export_scrub.py",
-               "tools/release/macos_bundle.py",
+               "tools/release/macos_bundle.py", "tools/release/runtime_pins.py",
+               "tools/release/builder-runtime-pins.json",
                "tools/release/macos_runtime_check.py")
 DIRECTORIES = pipeline.SOURCE_DIRS + ("tools/release/builder",)
 
@@ -44,9 +46,7 @@ def generated_cache(name):
     The vendor standard-library ZIP is retained byte for byte, including its
     source-less bytecode. Only loose generated files are excluded here.
     """
-    parts = name.replace('\\', '/').lower().split('/')
-    return (any(part in ('__pycache__', '.pytest_cache', '.mypy_cache', '.ruff_cache') for part in parts)
-            or parts[-1].endswith(('.pyc', '.pyo')))
+    return runtime_pins.generated_cache(name)
 
 
 def validate_package_files(files):
@@ -140,6 +140,7 @@ def launcher(game, platform):
 
 
 def inputs(root, game, runtime=None):
+    runtime_files = runtime_pins.windows_files(runtime) if runtime is not None else {}
     result = {}
     for rel in pipeline.SOURCE_FILES + EXTRA_FILES:
         if generated_cache(rel) or not pipeline.source_wanted(rel, game):
@@ -166,22 +167,8 @@ def inputs(root, game, runtime=None):
     if changed != 1:
         raise ValueError("Builder game selection marker is missing or ambiguous")
     result[key] = text.encode("utf-8")
-    if runtime:
-        required = ("python.exe", "pythonw.exe", "_tkinter.pyd", "_multiprocessing.pyd",
-                    "tcl86t.dll", "tk86t.dll", "tkinter/__init__.py",
-                    "LICENSE.txt", "tcl/tcl8.6/license.terms", "tcl/tk8.6/license.terms")
-        for rel in required:
-            if not (runtime / rel).is_file() or not (runtime / rel).stat().st_size:
-                raise ValueError("Prepared Windows runtime is missing " + rel)
-        if not (runtime / "tcl").is_dir():
-            raise ValueError("Prepared Windows runtime is missing tcl/")
-        for p in sorted(runtime.rglob("*")):
-            if generated_cache(p.relative_to(runtime).as_posix()):
-                continue
-            if p.is_symlink():
-                raise ValueError("Prepared Windows runtime contains a symlink")
-            if p.is_file():
-                result["tools/release/builder/runtime/" + p.relative_to(runtime).as_posix()] = p.read_bytes()
+    for rel, data in runtime_files.items():
+        result["tools/release/builder/runtime/" + rel] = data
     import export_scrub
     return export_scrub.scrub_files(result)
 

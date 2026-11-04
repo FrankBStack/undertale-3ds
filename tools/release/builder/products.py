@@ -249,11 +249,15 @@ def sd_files(product: Product, folder: str, parts=None):
     chapters = {p for p in product.game.parts if p != "root"}
     chosen = set(parts) if parts is not None else chapters
     for dirpath, dirnames, filenames in os.walk(folder):
+        # Save import has its own explicit preview and confirmation. Rebuilding never imports saves or settings.
+        dirnames[:] = [d for d in dirnames if d.casefold() != 'saves']
         rel_dir = os.path.relpath(dirpath, folder)
         top = rel_dir.split(os.sep)[0]
         if rel_dir == ".":
             dirnames[:] = [d for d in dirnames if d not in chapters or d in chosen]
         for name in sorted(filenames):
+            if name.casefold() in ('settings.ini', 'legacycfg.ini', 'delta' + 'tale.ini'):
+                continue
             if name.lower().endswith(SKIP_SUFFIXES) or name.lower() in SKIP_NAMES:
                 continue
             if top in chapters and top not in chosen:

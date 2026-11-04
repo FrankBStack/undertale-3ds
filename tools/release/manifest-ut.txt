@@ -754,6 +754,9 @@ tools/release/licenses/winpthreads-COPYING
 tools/release/original-asset-policy.json
 tools/release/package_builder.py
 tools/release/macos_bundle.py
+tools/release/runtime_pins.py
+tools/release/builder-runtime-pins.json
+tools/release/test_runtime_pins.py
 tools/release/macos_runtime_check.py
 tools/release/test_builder_native_data.py
 tools/release/test_builder_platforms.py
@@ -1004,6 +1007,8 @@ platform/3ds/source/z_titandiag.c
 
 # omegaflowey ofloader (UNDERTALE): the audio loader's kept-open files (empty in DELTARUNE builds)
 platform/3ds/source/z_ofloader.c
+tools/release/builder/updates.py
+tools/release/test_builder_updates.py
 
 # drhitbox (DELTARUNE collision corrections; the UNDERTALE build excludes the object): its source, compiler launcher and test
 engine/src/z_drhitbox.c
