@@ -21,6 +21,9 @@ BACKUP_MISMATCH_MESSAGE = ("The 3DS didn't store a correct backup of its saves, 
                            "PC, then try again with another card.")
 
 
+BACKUP_FOLDER_MESSAGE = "Couldn't make a new backup folder for the 3DS saves, so nothing was replaced. Try again."
+
+
 class BackupMismatch(network.TransferError):
     def __init__(self):
         super().__init__(BACKUP_MISMATCH_MESSAGE)
@@ -142,6 +145,14 @@ def check_published(ftp, product, payloads):
     return [s.name for s, data in payloads if live.get(s.name.casefold()) != data]
 
 
+def same_files(a, b):
+    """Same files and bytes, matching names the way the card's FAT does (AUD-02): FILE0 and file0 are one file. Two
+    names in one folder that differ only in capitals can't both be one FAT file, so they never match."""
+    folded_a = {name.casefold(): data for name, data in a.items()}
+    folded_b = {name.casefold(): data for name, data in b.items()}
+    return len(folded_a) == len(a) and len(folded_b) == len(b) and folded_a == folded_b
+
+
 def check_backup(ftp, backup, original, *, cancelled=lambda: False):
     """Read the published backup folder back: it must hold exactly the original saves, byte for byte, before any
     live save is staged or replaced (R181 F1). A transfer checks each upload before its rename, not after."""
@@ -149,9 +160,14 @@ def check_backup(ftp, backup, original, *, cancelled=lambda: False):
         held = read_folder(ftp, backup, cancelled=cancelled)
     except network.Cancelled:
         raise
-    except network.TransferError:
-        held = None  # Unreadable, or grown past what a save can be: not a backup to trust.
-    if held == original:
+    except (OSError, EOFError, ftplib.Error) as exc:
+        lost = network.delivery_error(exc)
+        if lost is not exc:
+            # The connection dropped (or the card is full): that is what the player is told, not a failing card.
+            # Nothing live changed, and a later import makes and checks a new backup.
+            raise lost from exc
+        held = None  # Unreadable, refused, or grown past what a save can be: not a backup to trust.
+    if held is not None and same_files(held, original):
         return
     for name in original:  # Nobody should restore from it. The live saves are untouched.
         try:
@@ -159,6 +175,37 @@ def check_backup(ftp, backup, original, *, cancelled=lambda: False):
         except (OSError, EOFError, ftplib.Error):
             pass
     raise BackupMismatch()
+
+
+# What the 3DS ftpd (v2.3.1) answers when a listed path isn't there: 550 and strerror(ENOENT). Its other 550s
+# (an unreadable card, for one) can come from a folder that exists, so they never count as absence (R190c).
+MISSING_PATH_REPLY = '550 no such file or directory'
+LISTED_TYPES = ('file', 'dir', 'cdir', 'pdir')
+
+
+def well_formed(entry, facts):
+    """An MLSD row ftplib parsed from what ftpd writes: a name and the type fact asked for. ftplib turns a broken
+    row into name '' with junk facts instead of raising, and a broken listing proves nothing."""
+    kind = str(facts.get('type', '')).casefold()
+    return bool(entry) and (kind in LISTED_TYPES or kind.startswith('os.'))
+
+
+def name_is_free(ftp, folder, path):
+    """True only when `path`, a child of `folder`, is shown not to exist: the folder's listing is well formed and
+    doesn't name it under FAT rules (any capitals), and listing `path` itself gets ftpd's missing-path 550. Any doubt
+    is False (R190b, R190c). A dropped connection still raises, so the player is told about the connection."""
+    name = path.rsplit('/', 1)[1].casefold()
+    try:
+        for entry, facts in ftp.mlsd(folder, facts=['type']):
+            if not well_formed(entry, facts) or entry.casefold() == name:
+                return False
+        try:
+            list(ftp.mlsd(path, facts=['type']))
+        except ftplib.error_perm as exc:
+            return ' '.join(str(exc).split()).casefold() == MISSING_PATH_REPLY
+        return False
+    except (ftplib.error_perm, ftplib.error_temp, ftplib.error_reply, ftplib.error_proto):
+        return False
 
 
 def resumable(ftp, resume, folder, current, payloads, *, cancelled=lambda: False):
@@ -175,7 +222,8 @@ def resumable(ftp, resume, folder, current, payloads, *, cancelled=lambda: False
         if data != original.get(key) and data != incoming.get(key):
             return False
     if resume.original.files:
-        if not resume.backup or read_folder(ftp, resume.backup, cancelled=cancelled) != resume.original.files:
+        if not resume.backup or not same_files(read_folder(ftp, resume.backup, cancelled=cancelled),
+                                               resume.original.files):
             return False
     return True
 
@@ -208,6 +256,19 @@ def copy(value, product, scan, expected, *, overwrite=False, factory=network.Con
                     raise SavesChanged()
                 original = expected
                 backup = folder + '/backup-' + time.strftime('%Y%m%d-%H%M%S') + '-' + uuid.uuid4().hex[:8]
+                if expected.files:
+                    # The folder must be new: check_backup deletes from it on a mismatch, so it must never be an
+                    # older backup that happens to have the same name (R190 LOW 3). Some ftpd versions (v2.3.1)
+                    # answer MKD with 250 for a folder that already exists, so prove the name is free first.
+                    if not name_is_free(ftp, folder, backup):
+                        raise network.TransferError(BACKUP_FOLDER_MESSAGE)
+                    try:
+                        ftp.mkd(backup)
+                    except ftplib.error_perm as exc:
+                        if not str(exc).startswith('550'):
+                            raise
+                        raise network.TransferError(BACKUP_FOLDER_MESSAGE) from None
+                    transfer.folders.add(backup)
                 items = []
                 for name, data in expected.files.items():
                     source = Path(temporary)/name

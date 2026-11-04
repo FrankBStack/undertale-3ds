@@ -33,6 +33,7 @@ class FakeFtpd:
         self.getmtime = True
         self.banner = banner
         self.missing_reply = '550 none'
+        self.mkd_exists_reply = '550 exists'  # ftpd v2.3.1 sends '250 OK' when the folder already exists.
         self.after_retr = self.after_rename = None
         self.lock = threading.Lock()
         outer = self
@@ -91,7 +92,7 @@ class FakeFtpd:
                     elif cmd == "MLSD":
                         if not local.is_dir():
                             pasv.close()
-                            self.reply("550 no such folder")
+                            self.reply("550 No such file or directory")  # ftpd: 550 and strerror(ENOENT).
                             continue
                         self.reply("150 listing")
                         conn, _ = pasv.accept()
@@ -110,7 +111,7 @@ class FakeFtpd:
                         self.reply("213 %d" % local.stat().st_size if local.is_file() else outer.missing_reply)
                     elif cmd == "MKD":
                         if local.exists():
-                            self.reply("550 exists")
+                            self.reply(outer.mkd_exists_reply)
                         elif not local.parent.is_dir():
                             self.reply("550 no parent")
                         else:
