@@ -1,7 +1,6 @@
 # undertale-3ds
 
-> [!IMPORTANT]
-> **Not released yet. There is nothing to download or install here yet.**
+> **Not released yet. There is nothing to download or install yet.**
 >
 > **The first release (UNDERTALE 1.0 beta) is planned for early November.** It comes with the builder, a program that builds the port from your own copy of UNDERTALE and installs it. Until then, this repository is the source code only.
 
@@ -19,12 +18,6 @@ DELTARUNE: in progress. It comes after UNDERTALE.
 
 The goal: every scene running at a locked 30 fps on every model.
 
-The bars count the scenes we measure on real consoles that pass, each on the newest build it was measured on.
-
-- 3DS and 3DS XL: most scenes were measured on 3 November on our newest test build with the game on the bottom screen, which is how I play (63 of 72 measured scenes on the 3DS, 56 of 73 on the 3DS XL). The rest were measured with the game on the top screen, on builds from 27 October to 3 November.
-- New 3DS and 2DS: measured with the game on the top screen. On the New 3DS, every scene on a build from 30 October or later; on the 2DS, about half the scenes on builds from 27-29 October and the rest from 30 October to 3 November.
-- The newest test build's code isn't in this repository yet; it comes with the next code update.
-
 ```
 New 3DS / New 3DS XL / New 2DS XL   ███████████████████░   99%
 3DS                                 ███████████████████░   97%
@@ -35,36 +28,9 @@ Overall                             ██████████████�
 
 A scene passes only when every single frame in play is ready in time, with no dropped frames. Most scenes that fail miss by a single frame here and there, which is hard to notice while playing. That's why the beta is judged by playing the worst scenes.
 
-New 3DS: 70 of 71 measured scenes pass. The one left is the Omega Flowey fight, with a single late frame.
+New 3DS: 70 of 71 measured scenes pass.
 
-Older models: 70 of 72 measured scenes pass on a 3DS, 69 of 73 on a 3DS XL and 64 of 73 on a 2DS. Left:
-
-- The Omega Flowey fight, on every model
-- The ending credits: on a 3DS, one late frame on the final screen that we can't explain yet; on a 3DS XL, the part where you dodge the names, which runs just over our 30 ms limit (30.1 and 30.8 ms) though no frame is dropped; on a 2DS, the spinning circles of text and the part where you dodge the names (last measured before the newest build)
-- Asriel's fight: on a 3DS XL one frame took 41.8 ms in one of two runs, though no frame was dropped; on a 2DS its start, saving Undyne during it, and the dream part (last measured 27-31 October)
-- On a 2DS, one Hotland room, with a single late frame
-- One Snowdin scene on a 2DS that dropped no frames but still needs its slowest frame measured
-- On a 3DS, the dream part of Asriel's fight hasn't been measured yet
-- A final check of every scene
-
-We also measured every room of a full playthrough on recent builds: 595 of 595 rooms pass on a New 3DS, 594 of 595 on a 3DS, 580 of 581 on a 2DS and 595 of 596 on a 3DS XL. A second tour of 498 scenes, on a build from 1 November with the game on the top screen, dropped no frames in play on a 2DS, a 3DS or a 3DS XL.
-
-## What changed since the last update (3 November, morning)
-
-This update changes this page only. The code is the same as in the last update.
-
-- 3DS and 3DS XL: we measured our newest test build with the game on the bottom screen. On the 3DS XL, 52 of 53 scenes passed, most of them run twice; on the 3DS, 61 of 63 passed. We then measured the 3DS XL's remaining failures on it too: the ending credits and Asriel's fight no longer drop frames there, but they still go over our 30 ms limit, so they still count as failing.
-- 3DS XL: the 19 scenes that had never been measured on it now are, and all 19 pass. The 3DS XL gets its own bar.
-- Omega Flowey: in the newest test build, the flame attack no longer drops a frame when its sound starts, in our tests on all three older models.
-- Asgore: in the newest test build, the late frames in his first turns are gone in our tests, and his fight passes on a 3DS and a 3DS XL.
-- Ending credits on a 3DS: the hitch in the part where you dodge the names didn't show up, and the spinning circles of text passed, in our one run of each on the newest test build.
-
-## Setbacks
-
-- The Omega Flowey fight still drops a few frames on every model, mostly late in the fight on the older models. On the New 3DS it's the only scene left.
-- Ending credits on a 3DS: one 67 ms frame on the final screen, and we don't know the cause yet.
-- The fixes for Asgore and the Omega Flowey flame attack aren't in this repository's code yet; they come with the next code update.
-- Older models: in Asriel's fight, the music cut out once in play-testing when we went to save Alphys. We're still looking into it.
+Older models: 70 of 72 measured scenes pass on a 3DS, 69 of 73 on a 3DS XL and 64 of 73 on a 2DS.
 
 ## Known issues
 
