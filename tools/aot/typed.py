@@ -966,7 +966,7 @@ class Gen:
             b, x = S.pop(), S.pop()
             x = self.ensure_num(x, a, before)
             b = self.ensure_num(b, a, before)
-            if not (b.k == "i" and b.c.startswith("((int32_t)") and b.c != "((int32_t) 0)"):
+            if not (b.k == "i" and b.kv is not None and b.kv != 0):
                 self.deopt(a, before, "%s == (GMLReal) 0" % as_num(b))   # AOT_MOD's slow path: handleMod's error
             expr = "aotFmodOut(%s, %s)" % (as_num(x), as_num(b))
             if x.inv and b.inv:   # an out-of-line call: once an entry

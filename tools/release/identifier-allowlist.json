@@ -462,7 +462,7 @@
     {
       "member": "tools/aot/typed.py",
       "class": "engine-symbols",
-      "sha256": "844d70a48e404f486c097cfa8c6fb63d1c42a1cd9fcf054a66db9c78a3f83816",
+      "sha256": "fd62f3e0b0f405e35ecc42ae6ae88c401a51fad27975ebe78182b84601306d3e",
       "justification": "Reviewed parser limits, format fields, settings or upstream APIs; prefix overlap is not a game asset.",
       "evidence_sha256": [
         "51c9dd43dc11e9049fb863de83ba823301dd555bf882dc29e5025d2b3b86f50a"

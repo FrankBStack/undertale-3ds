@@ -65,6 +65,15 @@ def check_sd_writable(sd_root, extra_paths=(), platform=sys.platform):
             raise DeliverError(READ_ONLY_MESSAGE % sd_root)
 
 
+BACKUP_MISMATCH_MESSAGE = ("The SD card didn't store a correct backup of the 3DS saves, so nothing was replaced "
+                           "and the 3DS saves are as they were.\nThe card may be failing. Copy its saves folder to "
+                           "this PC, then try again with another card or card reader.")
+
+
+class BackupMismatch(OSError):
+    """An old-save backup read back different from the live save it copies (SCOURSOL4-001)."""
+
+
 def write_error(sd_root, exc: OSError) -> DeliverError:
     if isinstance(exc, PermissionError) or getattr(exc, "errno", None) in (errno.EACCES, errno.EROFS, errno.EPERM):
         return DeliverError(READ_ONLY_MESSAGE % sd_root)
@@ -451,6 +460,17 @@ def _copy_file(src, dst):
     os.utime(dst, (st.st_atime, st.st_mtime))
 
 
+def _same_bytes(a, b):
+    """True when both files hold the same bytes, read back from the card."""
+    with open(a, "rb") as fa, open(b, "rb") as fb:
+        while True:
+            block = fa.read(1 << 16)
+            if block != fb.read(len(block) or 1):
+                return False
+            if not block:
+                return True
+
+
 def _write_checked(dst, data, mtime):
     """Writes the checked bytes, flushed to the card, then reads the copy back: the staged file must be exactly
     the bytes that passed the checks. Never carries a read-only bit (see _copy_file)."""
@@ -533,7 +553,12 @@ def copy_pc_saves(sd_root: str, product: products.Product, pc_scan_or_folder, ov
                 b_dst = os.path.join(backup_dir, os.path.basename(old_path))
                 b_tmp = b_dst + ".part"
                 _copy_file(old_path, b_tmp)
+                # Read the backup back before any live save is replaced: it may be the only copy left (SCOURSOL4-001).
+                if not _same_bytes(old_path, b_tmp):
+                    raise BackupMismatch(errno.EIO, "the backup does not match the 3DS save", b_tmp)
                 os.replace(b_tmp, b_dst)
+                if not _same_bytes(old_path, b_dst):
+                    raise BackupMismatch(errno.EIO, "the backup does not match the 3DS save", b_dst)
 
         # Stage every incoming file before replacing any, so a failed copy (card pulled, card full) leaves the 3DS
         # saves exactly as they were instead of a mix of PC and 3DS files.
@@ -559,6 +584,10 @@ def copy_pc_saves(sd_root: str, product: products.Product, pc_scan_or_folder, ov
                     os.remove(tmp)
             except OSError:
                 pass
+        if isinstance(e, BackupMismatch) and not changing:
+            # Nothing live was touched. A backup that can't be trusted is removed so nobody restores from it.
+            shutil.rmtree(backup_dir, ignore_errors=True)
+            raise DeliverError(BACKUP_MISMATCH_MESSAGE) from e
         err = write_error(sd_root, e)
         if changing and backup_dir:
             err = DeliverError("%s\nYour previous 3DS saves are in %s." % (err, backup_dir))

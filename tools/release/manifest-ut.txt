@@ -712,6 +712,7 @@ tools/release/verify_game.py
 tools/release/test_verify_game.py
 tools/release/test_builder.py
 tools/release/test_builder_save_audit.py
+tools/release/test_builder_save_backups.py
 tools/release/test_builder_stale_inputs.py
 tools/release/test_builder_find_page.py
 tools/release/test_builder_build_cancel.py
