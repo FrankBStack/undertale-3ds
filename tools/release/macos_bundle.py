@@ -151,10 +151,15 @@ if __name__ == '__main__':
     if not any(arg in sys.argv for arg in ('--cli', '--dry-run', '--help', '-h')):
         # Finder supplies no terminal; capture early Python/Tk errors outside the app.
         logs = Path.home() / 'Library/Logs/3DS Builder'
-        logs.mkdir(parents=True, exist_ok=True)
-        sys.stdout = sys.stderr = (logs / 'launcher.log').open('w', encoding='utf-8', buffering=1)
-        print('Bundled Python:', sys.executable)
-        print('Runtime:', sys.version)
+        try:
+            logs.mkdir(parents=True, exist_ok=True)
+            log = (logs / 'launcher.log').open('w', encoding='utf-8', buffering=1)
+        except OSError:
+            log = None  # A read-only or full home folder must not stop the builder before its window.
+        if log is not None:
+            sys.stdout = sys.stderr = log
+            print('Bundled Python:', sys.executable)
+            print('Runtime:', sys.version)
     # Match direct Python script execution without relying on cwd, PATH or user site.
     sys.path.insert(0, str(app.parent))
     sys.argv[0] = str(app)

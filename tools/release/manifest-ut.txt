@@ -711,6 +711,11 @@ tools/release/verify_game.py
 tools/release/test_verify_game.py
 tools/release/test_builder.py
 tools/release/test_builder_save_audit.py
+tools/release/test_builder_stale_inputs.py
+tools/release/test_builder_find_page.py
+tools/release/test_builder_build_cancel.py
+tools/release/test_builder_card_names.py
+tools/release/test_macos_launcher_logs.py
 tools/release/fake_ftpd.py
 tools/release/generate_music_manifest.py
 tools/release/builder/builder.py

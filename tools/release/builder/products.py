@@ -190,6 +190,17 @@ def card_music_names(store='steam'):
         return {}
 
 
+def _same_bytes(a: str, b: str) -> bool:
+    # Not filecmp.cmp: it caches by size and date, which is the case this check is for.
+    with open(a, "rb") as fa, open(b, "rb") as fb:
+        while True:
+            x, y = fa.read(1 << 20), fb.read(1 << 20)
+            if x != y:
+                return False
+            if not x:
+                return True
+
+
 def aot_data_dir(product: Product, folder: str, staging: str):
     """The folder build.sh's data= gets. A Windows copy is used where it is. A macOS copy's game.ios is staged as
     <staging>/macos/data.win, a hard link (a copy where links don't work), since the AOT generator reads data.win."""
@@ -203,8 +214,9 @@ def aot_data_dir(product: Product, folder: str, staging: str):
     try:
         if os.path.samefile(src, dst):
             return out
-        s, d = os.stat(src), os.stat(dst)
-        if s.st_size == d.st_size and s.st_mtime == d.st_mtime:
+        # A copy (where links don't work) is kept only if its bytes still match: a replaced game.ios can keep the
+        # same size and date.
+        if os.stat(src).st_size == os.stat(dst).st_size and _same_bytes(src, dst):
             return out
     except OSError:
         pass

@@ -1723,6 +1723,10 @@ class FindPage(Page):
         self.status = label(self.frame, "")
         self.searching = False
         self.searched_for = None
+        # Each search has a number. Choosing a folder by hand bumps it, so a search still running then can't
+        # replace that choice when it finishes. Folders chosen by hand stay listed after later searches.
+        self.search_generation = 0
+        self.manual = []
 
     def on_show(self):
         self.intro.config(text="Select your %s install." % self.st.product.title)
@@ -1739,16 +1743,28 @@ class FindPage(Page):
         self.tree.delete(*self.tree.get_children())
         self.status.config(text="Searching...")
         game = self.st.game
-        self.app.work(lambda: discover.find_copies(game, self.app.opts.probes), self.found)
+        self.search_generation += 1
+        generation = self.search_generation
+        self.app.work(lambda: discover.find_copies(game, self.app.opts.probes),
+                      lambda copies: self.found(copies, generation))
 
-    def found(self, copies):
+    def found(self, copies, generation=None):
+        if generation is not None and generation != self.search_generation:
+            return  # The player chose a folder (or searched again) since this search started.
         self.searching = False
+        chosen = self.st.folder
         self.tree.delete(*self.tree.get_children())
         for i, c in enumerate(copies):
             self.tree.insert("", "end", iid=str(i), values=(c.store, c.folder, c.version + (" - " + c.note if c.note
                                                                                              else "")))
+        listed = [c.folder for c in copies]
+        for d in self.manual:
+            if d not in listed:
+                self.tree.insert("", "end", iid=str(len(listed)), values=("folder", d, "-"))
+                listed.append(d)
+        if listed:
+            self.tree.selection_set(str(listed.index(chosen)) if chosen in listed else "0")
         if copies:
-            self.tree.selection_set("0")
             self.status.config(text="Found %d %s." % (len(copies), "copy" if len(copies) == 1 else "copies"))
         else:
             p = self.st.product
@@ -1773,6 +1789,10 @@ class FindPage(Page):
             self.add_manual(os.path.normpath(d))
 
     def add_manual(self, d):
+        self.search_generation += 1  # A search still running must not replace this choice.
+        self.searching = False
+        if d not in self.manual:
+            self.manual.append(d)
         iid = str(len(self.tree.get_children()))
         self.tree.insert("", "end", iid=iid, values=("folder", d, "-"))
         self.tree.selection_set(iid)
@@ -2182,14 +2202,17 @@ class OptionsPage(Page):
             installed = [p for p, v in states.items() if p != 'root' and v[0] != 'missing']
             label(self.extra, 'Version: %s\nInstalled chapters: %s' %
                   (self.st.verdict.result.version or 'unknown', chapters.numbers(installed)), bold=True)
+            # Coming back keeps the player's choices: st.parts starts as every checked chapter (VerifyPage) and
+            # then holds the ticks, even none.
+            chosen = self.st.parts
             for part in self.st.verdict.parts:
                 if part == "root":
                     continue
-                v = tk.BooleanVar(value=True)
+                v = tk.BooleanVar(value=chosen is None or part in chosen)
                 self.part_vars[part] = v
                 checkbutton(self.extra, text="Chapter " + part[len("chapter")], variable=v,
                             command=self.changed).pack(anchor="w")
-            self.h264 = tk.BooleanVar(value=False)
+            self.h264 = tk.BooleanVar(value=bool(self.st.openh264))
             checkbutton(self.extra, text="Download openh264 2.6.0 for intro videos",
                         variable=self.h264, command=self.changed).pack(anchor="w")
         self.changed()
@@ -2239,6 +2262,9 @@ class OptionsPage(Page):
         return "next"
 
 
+CANCELLED = "The build was cancelled.\nClick Try again when ready."  # Build.run's own text.
+
+
 class BuildPage(Page):
     title = "Build"
 
@@ -2268,6 +2294,8 @@ class BuildPage(Page):
         self.failed = None
         self.log_path = None
         self.target_index = 0
+        # A confirmed Cancel stops the whole run, including a model whose build has not started yet (AUD-14).
+        self.stop = threading.Event()
 
     def on_show(self):
         self.intro.config(text="Building...")
@@ -2283,6 +2311,7 @@ class BuildPage(Page):
     def start(self):
         self.failed = None
         self.build = None
+        self.stop.clear()
         self.running = True
         self.st.artifacts, self.st.records = [], []
         self.log.delete("1.0", "end")
@@ -2306,6 +2335,9 @@ class BuildPage(Page):
                                    on_progress=lambda p: self.app.call(self.progress, p))
                 self.build = b
                 self.log_path = b.log_path
+                # Checked after self.build is set: a Cancel either sees this build or is seen here.
+                if self.stop.is_set():
+                    raise pipeline.BuildFailed(CANCELLED, self.log_path)
                 arts, record = b.run()
                 self.st.artifacts += arts
                 self.st.records.append(record)
@@ -2367,8 +2399,11 @@ class BuildPage(Page):
         self.app.update_nav()
 
     def cancel(self):
-        if self.build and messagebox.askyesno("Cancel build", "Stop the build?"):
-            self.build.cancel()
+        if self.running and messagebox.askyesno("Cancel build", "Stop the build?") and self.running:
+            self.stop.set()
+            build = self.build
+            if build is not None:
+                build.cancel()
 
     def copy_log(self):
         if not self.log_path:
@@ -2396,6 +2431,7 @@ class BuildPage(Page):
 class DeliverPage(Page):
     """Each way of delivering has its own panel and its own status text; a progress bar shows only while copying."""
     title = "Put it on the 3DS"
+    card_roots = {}  # Listed card text -> its root; refresh() replaces it.
 
     def __init__(self, app):
         super().__init__(app)
@@ -2552,6 +2588,8 @@ class DeliverPage(Page):
         except OSError:
             self.cards = []
         vals = ["%s  %s (%d MB free)" % (c.root, c.label, c.free // 10**6) for c in self.cards]
+        # The root is looked up, never parsed back out of the text: a card's name may hold two spaces (SCOURS1-003).
+        self.card_roots = dict(zip(vals, (c.root for c in self.cards)))
         if self.manual:
             vals.append(self.manual)
         self.card.config(values=vals)
@@ -2578,7 +2616,7 @@ class DeliverPage(Page):
             return None
         if self.manual and v == self.manual:
             return self.manual
-        return v.split("  ")[0]
+        return self.card_roots.get(v) or v.split("  ")[0]
 
     def copy(self):
         if self.copying:

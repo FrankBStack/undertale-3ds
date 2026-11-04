@@ -364,6 +364,14 @@ class Transfer:
         self.ftp.retrbinary('RETR ' + path, take, blocksize=BLOCK)
         return digest.hexdigest(), count
 
+    def local_digest(self, source):
+        digest = hashlib.sha256()
+        with source.open('rb') as stream:
+            while block := stream.read(BLOCK):
+                check_cancel(self.cancelled)
+                digest.update(block)
+        return digest.hexdigest()
+
     def upload(self, item):
         source, path = Path(item.src), remote_path(item.dst)
         initial = source.stat()
@@ -384,20 +392,20 @@ class Transfer:
                 raise TransferError('The game file on the 3DS changed during sending. Send again.')
         critical = (data_file or item.size <= SMALL or PurePosixPath(path).name == 'install.json'
                     or PurePosixPath(path).suffix.casefold() in ('.3dsx', '.cia', '.dtsp'))
-        local_hash = hashlib.sha256()
-        if critical:
-            with source.open('rb') as stream:
-                while block := stream.read(BLOCK):
-                    check_cancel(self.cancelled)
-                    local_hash.update(block)
-        digest = local_hash.hexdigest()
+        digest = self.local_digest(source) if critical else None
         self.mkdirs(path)
         if data_file:
             delete_if_present(self.ftp, str(PurePosixPath(path).parent / 'cache/data-version.txt'))
         existing = size(self.ftp, path)
         if existing == item.size:
             before = fingerprint(self.ftp, path) if data_file else None
-            if not critical or self.hash_remote(path, item.size) == (digest, item.size):
+            if not critical:
+                # A same-size file is kept only when its bytes match (AUD-12): an older or damaged copy of
+                # the same length would otherwise survive every resend. Large files are only read back here.
+                digest = self.local_digest(source)
+                self.total += item.size
+                self.work_progress.total[1] += item.size
+            if self.hash_remote(path, item.size) == (digest, item.size):
                 if data_file and fingerprint(self.ftp, path) != before:
                     raise TransferError('A file on the 3DS changed during the check. Send again: ' + path)
                 if data_file:
@@ -410,8 +418,9 @@ class Transfer:
                     raise TransferError('A file on the 3DS changed at the last step. Send again.')
                 self.tick('Already on the 3DS', path, item.size, wire=False)
                 return
-            self.total += item.size  # A failed same-size read-back precedes a new full copy.
-            self.work_progress.total[1] += item.size
+            if critical:
+                self.total += item.size  # A failed same-size read-back precedes a new full copy.
+                self.work_progress.total[1] += item.size
         # A stale version receipt must never survive a data replacement or interrupted upload.
         if data_file:
             delete_if_present(self.ftp, str(PurePosixPath(path).parent / 'cache/data-version.txt'))

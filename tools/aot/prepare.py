@@ -227,8 +227,16 @@ def fingerprint(game, target, data, selection, chapters=False, runs=(), typed=No
     if chapters:
         h.update(b"chapters %g" % CHAPTER_BYTES_PER_INSTR.get(target, 0))
     for part, path, _ in corpus.parts(game, data):
-        st = os.stat(path)
-        h.update(("%s %s %d %d" % (part, os.path.abspath(path), st.st_size, int(st.st_mtime))).encode())
+        # The data file's bytes, not its date: a same-size copy can land within the same second (SCOURT7-001).
+        h.update(("%s %s %s" % (part, os.path.abspath(path), file_digest(path))).encode())
+    return h.hexdigest()
+
+
+def file_digest(path):
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        for block in iter(lambda: f.read(1 << 20), b""):
+            h.update(block)
     return h.hexdigest()
 
 

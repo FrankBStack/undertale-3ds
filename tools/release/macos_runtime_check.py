@@ -59,10 +59,19 @@ def main():
     report = dict(passed=True, executable=sys.executable, python=sys.version, arch=arch,
                   ssl=ssl.OPENSSL_VERSION, certificate_file=os.environ.get('SSL_CERT_FILE'),
                   child=json.loads(child.stdout), worker=result, tkinter=tk)
-    logs = Path.home() / 'Library/Logs/3DS Builder'
-    logs.mkdir(parents=True, exist_ok=True)
-    (logs / 'runtime-check.json').write_text(json.dumps(report, indent=2) + '\n', encoding='utf-8', newline='\n')
+    save_report(report)
     print(json.dumps(report, indent=2))
+
+
+def save_report(report, home=None):
+    """Keep a copy for support; a read-only or full home folder still prints the report."""
+    logs = Path(home or Path.home()) / 'Library/Logs/3DS Builder'
+    try:
+        logs.mkdir(parents=True, exist_ok=True)
+        (logs / 'runtime-check.json').write_text(json.dumps(report, indent=2) + '\n', encoding='utf-8',
+                                                 newline='\n')
+    except OSError as error:
+        print('Could not save runtime-check.json: %s' % error, file=sys.stderr)
 
 
 if __name__ == '__main__':
