@@ -612,9 +612,8 @@ SECTIONS
     *(.text.late.builderxreceipt)
     *libctru.a:archive_dev.o(.text.archive_getmtime)
     *libctru.a:fs.o(.text.FSUSER_ControlArchive)
-    /* gogut (round 17, after all round-16 sections): GOG-only compatibility and lab root. */
-    *(.text.late.gogut)
-    *(.rodata.gogut_in_text)
+    /* gogut (round 17): GOG-only compatibility and lab root moved to the end of late text (zq44g, betasmoke R2-B2):
+       see the gogut lines after bakkeep. */
     /* sdlat (after symverdict_dr): profile-only Azahar SD elapsed floors. */
     *(.text.late.sdlat) *z_sdlat*(.text .text.*)
     /* benchshown (utflames, round 18, after sdlat, merge order; both games): the bench's presentation v1 fields
@@ -1443,6 +1442,16 @@ SECTIONS
        (z_bakkeep.c, reached through --wrap), then that file's out-of-line copies of header functions; appended. */
     *(.text_bakkeep)
     *z_bakkeep.o(.text .text.* .rodata .rodata.*)
+    /* gogut (GOG UNDERTALE only, empty in every Steam and DELTARUNE build; moved here by integrate21 zq44g, betasmoke
+       R2-B2): GOG's own late code (z_gogut.c, ctr_renderer.c's Smart texel and font-folder helpers, ctr_pixgrid.c's
+       data check), then its constants. It sat after round 16 (and ctr_renderer.o's .text.late.* line took most of it
+       earlier still), ahead of the freebytes H1 holes and the other fixed gaps whose ends come from the Steam layout:
+       5,146 B there pushed relprep and asgborder past their limits, and no release build of GOG UNDERTALE linked on
+       the Old 3DS. Here, after every fixed hole, the layout up to the holes is Steam's; GOG's two extra late pages
+       take the code. Named .text_gogut, outside .text.late.*, so no catch-all or per-file late line takes it first
+       (tools/release/test_gogut_late_order.py pins both). */
+    *(.text_gogut)
+    *(.rodata.gogut_in_text)
     /* repack test install (repacka, 11-02; build.sh repacktest= test builds only, empty in every release build):
        diag/ctr_repack_test.c's code and constants, last, so a test build keeps every late address of the release
        build. Keep these two lines last in late text. */

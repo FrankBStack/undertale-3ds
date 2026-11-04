@@ -10,7 +10,7 @@
 #include "log.h"
 #include <stdlib.h>
 
-#define GOGUT_TEXT __attribute__((noinline, section(".text.late.gogut")))
+#define GOGUT_TEXT __attribute__((noinline, section(".text_gogut")))
 #define GOGUT_CONST __attribute__((aligned(4), section(".rodata.gogut_in_text")))
 static const char gogLabFlag[] GOGUT_CONST = "--lab-gog-data";
 static const char gogLabDir[] GOGUT_CONST = "sdmc:/3ds/undertale-3ds-gog";
@@ -85,7 +85,7 @@ static const GogKnownFile gogKnownFiles[] __attribute__((aligned(8), section(".r
 };
 #undef DATA_VERSION
 
-__attribute__((noinline, section(".text.late.gogut"))) CtrDataVersionResult CTR_DATAVERSION_GOGUT(
+__attribute__((noinline, section(".text_gogut"))) CtrDataVersionResult CTR_DATAVERSION_GOGUT(
     CTR_DATAVERSION_CHAIN_PARAMS) {
     // main identifies chapter parts by the bundle folder's name. This bench-only UT folder is still root,
     // including for the downstream room-plan digest gate; no player or DELTARUNE chapter key changes.

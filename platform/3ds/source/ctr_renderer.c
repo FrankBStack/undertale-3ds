@@ -10811,7 +10811,7 @@ static bool drawSymmetric(CtrRenderer* r, int32_t tpagIndex, TexturePageItem* tp
 
 #if defined(CTRPORT_GOG_COMPAT)
 // Keep the packed reader/table in place; active scans decode its texels in late code.
-#define GOGUT_SMART_LATE __attribute__((noinline, noclone, optimize("no-jump-tables"), section(".text.late.gogut")))
+#define GOGUT_SMART_LATE __attribute__((noinline, noclone, optimize("no-jump-tables"), section(".text_gogut")))
 #ifdef ENABLE_WAD16
 extern bool ctrGogutSmartDecoded;
 #else

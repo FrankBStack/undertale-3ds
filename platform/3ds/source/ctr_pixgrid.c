@@ -268,7 +268,7 @@ __attribute__((noinline, section(".text.late.utkill"))) bool Pixgrid_takes(int32
 
 // Both GOG backdrop frames have the same decoded RGBA hashes as Steam's (gogut, 2026-10-22).
 // The GOG TPAG indices 50 and 58 are distinguished by bit 3, as pixgridInit requires.
-static __attribute__((noinline, section(".text.late.gogut"))) bool pixgridKnownGogData(const DataWin* dataWin) {
+static __attribute__((noinline, section(".text_gogut"))) bool pixgridKnownGogData(const DataWin* dataWin) {
     return pixgridKnownData(dataWin) || (dataWin->fileSize == 62951906 && dataWin->gen8.gameID == 0x338ADCD9u &&
                                         dataWin->gen8.timestamp == 1510950063u);
 }

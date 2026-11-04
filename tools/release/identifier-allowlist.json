@@ -183,7 +183,7 @@
     {
       "member": "platform/3ds/source/ctr_renderer.c",
       "class": "engine-lookups",
-      "sha256": "2ff1e7ef09e71abdf96ae882911be533fe01fa546c7d97cfd07784f007fa3939",
+      "sha256": "980477b8195eb7833012fffbbe8266773763133c306a55607e6697f861ee95b9",
       "justification": "Shader, object and sprite lookup names select renderer compatibility paths.",
       "evidence_sha256": [
         "b47ae0eeb50b4a01adfe2722ac27cb04c8fa69e3e88b357925af0ed56f2163c2"
@@ -687,7 +687,7 @@
     {
       "member": "platform/3ds/source/ctr_pixgrid.c",
       "class": "engine-lookups",
-      "sha256": "c5ce4d1b59cf365d156c6fed4b9200267ce5d8301ee87db19bc9147b9518dee6",
+      "sha256": "685c6b3b5ecae9c24e6b1865ca1b1e5cb10acf34824267346860d9632df9a41d",
       "justification": "Object and sprite names select native grid handling; opaque-run coordinates have been replaced with a private generated initializer.",
       "evidence_sha256": [
         "bf3ec76d74d72c36189415abe0ea315392349c471d2bd814be38b43e6752fe5d"
