@@ -231,7 +231,7 @@
     {
       "member": "tools/release/test_builder.py",
       "class": "engine-lookups",
-      "sha256": "dc44115db3c946847bd1c4123ab734a4ca414f82fa39a90e8ee10f55dc334423",
+      "sha256": "06f2e44342075d227a555aefe03e9f3b075b5c28617e719393f09ba7abfaa1b3",
       "justification": "Existing synthetic compiler/music fixtures and player cursor lookup; new tests only require private generator source closure in the exported builder.",
       "evidence_sha256": [
         "e1013ccac9297ff1f3205e0d2e1e0966f75c9b7b570515dedc2026aba40ade7b"
@@ -240,7 +240,7 @@
     {
       "member": "tools/release/builder/gui.py",
       "class": "engine-lookups",
-      "sha256": "2641948a31ff1d83496b3277d0bb2be51af59a4cb5b78961922790a0df070adb",
+      "sha256": "ee775cf56f03cf196021251851c05f48bc1e72621139ceb99e09c6174f72f0dd",
       "justification": "A sprite lookup extracts the cursor from the players own game.",
       "evidence_sha256": [
         "1b62cafb12b9229024771f28d5dab2c6ebfe350c96bb76639a061bf6de96155d"

@@ -26,6 +26,18 @@ NO_3DS_FOLDER_MESSAGE = ("Not a homebrew SD card (no 3ds folder).\n"
                          "Select your 3DS SD card root or create a 3ds folder.")
 
 
+CASE_CLASH_MESSAGE = ("These PC save files differ only in capital letters: %s.\n"
+                      "The 3DS SD card can't hold both, so nothing was copied. Keep one of them, then try again.")
+
+
+def case_clashes(save_files) -> list[str]:
+    """Names that one FAT folder can't hold together, because they differ only in capitals."""
+    seen = {}
+    for f in save_files:
+        seen.setdefault(f.name.casefold(), []).append(f.name)
+    return sorted(n for names in seen.values() if len(names) > 1 for n in names)
+
+
 class DeliverError(Exception):
     pass
 
@@ -87,6 +99,8 @@ class SaveFile:
     lv: int | None = None
     corrupt: bool = False
     detail: str = ""
+    # The exact bytes that passed the checks above. An import writes these, never the file as it is later.
+    data: bytes | None = dataclasses.field(default=None, repr=False, compare=False)
 
     @property
     def valid(self) -> bool:
@@ -226,7 +240,20 @@ def inspect_save_file(path: str, game_key: str = "undertale") -> SaveFile:
             raw = f.read(MAX_SAVE_BYTES + 1)
     except OSError:
         return SaveFile(name, path, 0, 0.0, "unknown", corrupt=True, detail="Corrupt (could not read file)")
+    # The file can change between stat and read; describe the bytes actually read.
+    size = len(raw)
+    if size == 0:
+        return SaveFile(name, path, 0, mtime, date, corrupt=True, detail="Corrupt (empty save file)")
+    if size > MAX_SAVE_BYTES:
+        return SaveFile(name, path, size, mtime, date, corrupt=True, detail="Corrupt (file is too large)")
+    result = _inspect_bytes(name, path, size, mtime, date, raw)
+    if not result.corrupt:
+        result.data = raw
+    return result
 
+
+def _inspect_bytes(name, path, size, mtime, date, raw) -> SaveFile:
+    low = name.lower()
     if b"\x00" in raw:
         return SaveFile(name, path, size, mtime, date, corrupt=True, detail="Corrupt (name and LV could not be read)")
     try:
@@ -324,6 +351,22 @@ def inspect_save_file(path: str, game_key: str = "undertale") -> SaveFile:
     return SaveFile(name, path, size, mtime, date, detail="Save data")
 
 
+def validated_payloads(scan: SaveScan, game_key: str) -> list:
+    """(SaveFile, bytes) for each valid file: the bytes that were checked, so the import writes what the preview
+    showed even if the PC file changed since. A scan made by hand without bytes is checked again here."""
+    out = []
+    for sf in scan.valid_files:
+        data = sf.data
+        if data is None:
+            fresh = inspect_save_file(sf.path, game_key)
+            if fresh.corrupt:
+                raise DeliverError("Can't read %s, so no saves were copied.\n"
+                                   "Choose another folder or skip." % sf.name)
+            data = fresh.data
+        out.append((sf, data))
+    return out
+
+
 def _is_save_candidate(name: str, game_key: str = "undertale") -> bool:
     low = name.lower()
     if low in IGNORED_SAVE_NAMES or low.startswith(".") or low.endswith(IGNORED_SAVE_SUFFIXES):
@@ -408,6 +451,20 @@ def _copy_file(src, dst):
     os.utime(dst, (st.st_atime, st.st_mtime))
 
 
+def _write_checked(dst, data, mtime):
+    """Writes the checked bytes, flushed to the card, then reads the copy back: the staged file must be exactly
+    the bytes that passed the checks. Never carries a read-only bit (see _copy_file)."""
+    _remove_stale(dst)
+    with open(dst, "wb") as fo:
+        fo.write(data)
+        fo.flush()
+        os.fsync(fo.fileno())
+    os.utime(dst, (mtime, mtime))
+    with open(dst, "rb") as fi:
+        if fi.read(len(data) + 1) != data:
+            raise OSError(errno.EIO, "the copy on the SD card does not match the PC save", dst)
+
+
 def _unique_backup_dir(dst_dir: str, now=None) -> str:
     stamp = time.strftime("%Y%m%d-%H%M%S", time.localtime(now) if isinstance(now, (int, float)) else (
         now if isinstance(now, time.struct_time) else time.localtime()))
@@ -434,6 +491,10 @@ def copy_pc_saves(sd_root: str, product: products.Product, pc_scan_or_folder, ov
     if not pc_scan.valid_files:
         raise DeliverError("No PC save files were found in %s.\n"
                            "Choose another folder or skip save import." % pc_scan.folder)
+    clash = case_clashes(pc_scan.valid_files)
+    if clash:
+        raise DeliverError(CASE_CLASH_MESSAGE % ", ".join(clash))
+    payloads = validated_payloads(pc_scan, product.key)
 
     dst_dir = sd_save_dir(sd_root, product)
     existing = existing_sd_save_files(sd_root, product)
@@ -447,7 +508,7 @@ def copy_pc_saves(sd_root: str, product: products.Product, pc_scan_or_folder, ov
     checker = getattr(sys.modules.get("deliver"), "check_sd_writable", check_sd_writable)
     checker(sd_root, target_paths)
 
-    need = sum(f.size for f in pc_scan.valid_files)
+    need = sum(len(data) for _, data in payloads)
     if existing:
         try:
             need += sum(os.path.getsize(p) for p in existing)
@@ -477,15 +538,15 @@ def copy_pc_saves(sd_root: str, product: products.Product, pc_scan_or_folder, ov
         # Stage every incoming file before replacing any, so a failed copy (card pulled, card full) leaves the 3DS
         # saves exactly as they were instead of a mix of PC and 3DS files.
         incoming_names = {f.name.lower() for f in pc_scan.valid_files}
-        for sf in pc_scan.valid_files:
+        for sf, data in payloads:
             tmp = os.path.join(dst_dir, sf.name) + ".part"
             staged.append(tmp)
-            _copy_file(sf.path, tmp)
+            _write_checked(tmp, data, sf.mtime)
 
         changing = True
-        for sf, tmp in zip(pc_scan.valid_files, staged):
+        for (sf, data), tmp in zip(payloads, staged):
             os.replace(tmp, os.path.join(dst_dir, sf.name))
-            bytes_copied += sf.size
+            bytes_copied += len(data)
 
         if existing:
             for old_path in existing:

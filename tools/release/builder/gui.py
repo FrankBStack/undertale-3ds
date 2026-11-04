@@ -2787,8 +2787,10 @@ class SavesPage(Page):
         self.folder_label = label(self.frame, "", bold=True)
         row = ttk.Frame(self.frame)
         row.pack(anchor="w", pady=(0, 8))
-        button(row, text="Scan again", command=self.scan).pack(side="left", padx=(0, 8))
-        button(row, text="Choose folder...", command=self.choose).pack(side="left")
+        self.scan_button = button(row, text="Scan again", command=self.scan)
+        self.scan_button.pack(side="left", padx=(0, 8))
+        self.choose_button = button(row, text="Choose folder...", command=self.choose)
+        self.choose_button.pack(side="left")
         self.tree = ttk.Treeview(self.frame, columns=("file", "date", "summary", "status"), show="headings", height=6,
                                  selectmode="none")
         for c, w, heading in (("file", 90, "File"), ("date", 150, "Saved"),
@@ -2809,8 +2811,13 @@ class SavesPage(Page):
         self.custom_dir = None
         self.ftp_snapshot = None
         self.ftp_running = False
+        self.ftp_resume = None  # A stopped import's state: the next import finishes it with the same backup.
+        # Each FTP check or import is one job with its own number and Cancel flag. Only the newest job's completion
+        # counts, and nothing starts another job while an import is replacing 3DS saves.
+        self.ftp_job = 0
+        self.ftp_importing = False
         self.ftp_cancel = threading.Event()
-        self.ftp_cancel_button = button(self.frame, text='Cancel', command=self.ftp_cancel.set)
+        self.ftp_cancel_button = button(self.frame, text='Cancel', command=lambda: self.ftp_cancel.set())
         self.ftp_cancel_button.pack_forget()
 
     def on_show(self):
@@ -2822,13 +2829,30 @@ class SavesPage(Page):
             return self.custom_dir
         return self.app.opts.probes.pc_save_dir(self.st.game)
 
+    def new_ftp_job(self):
+        """Supersedes the current FTP job: it is cancelled and its completion will be ignored."""
+        self.ftp_cancel.set()
+        self.ftp_cancel = threading.Event()
+        self.ftp_job += 1
+        return self.ftp_job, self.ftp_cancel
+
+    def importing_notice(self):
+        if self.ftp_importing:
+            self.status.config(text='Wait for the copy to finish, or click Cancel.')
+            return True
+        return False
+
     def choose(self):
+        if self.importing_notice():
+            return
         d = filedialog.askdirectory(title="Select %s PC save folder" % self.st.product.title)
-        if d:
+        if d and not self.importing_notice():
             self.custom_dir = os.path.normpath(d)
             self.scan()
 
     def scan(self):
+        if self.importing_notice():
+            return  # The import uses this page's scan and snapshot; never change them under it.
         p = self.st.product
         folder = self.target_save_dir()
         scan = deliver.scan_saves(folder, p.key)
@@ -2870,9 +2894,11 @@ class SavesPage(Page):
             self.choice.set('skip')
             self.ftp_snapshot = None
             self.ftp_running = True
-            self.ftp_cancel.clear()
+            job, cancel = self.new_ftp_job()
             self.status.config(text='Checking the 3DS saves...')
             def after(result):
+                if job != self.ftp_job:
+                    return  # A newer check or import owns the page now.
                 self.ftp_running = False
                 if isinstance(result, Exception):
                     self.status.config(text=ftp_saves.error_text(result, connecting=True))
@@ -2882,7 +2908,7 @@ class SavesPage(Page):
                     self.status.config(text=('3DS saves found. Copying will back them up first.' if result.files else
                                              'No 3DS saves found.'))
                 self.changed()
-            self.app.work(lambda: ftp_saves.inspect(self.st.ftp_console, p, cancelled=self.ftp_cancel.is_set),
+            self.app.work(lambda: ftp_saves.inspect(self.st.ftp_console, p, cancelled=cancel.is_set),
                           after, errors=True)
 
     def changed(self):
@@ -2937,23 +2963,34 @@ class SavesPage(Page):
             if not confirm('Replace 3DS saves?', prompt):
                 self.status.config(text='3DS saves kept.\nSelect Skip to go on.')
                 return False
-        self.ftp_running = True
-        self.ftp_cancel.clear()
+        self.ftp_running = self.ftp_importing = True
+        job, cancel = self.new_ftp_job()
+        for control in (self.scan_button, self.choose_button):
+            control.state(['disabled'])
         self.ftp_cancel_button.pack(anchor='w')
         self.status.config(text='Backing up the 3DS saves, then copying...')
         self.app.update_nav()
         def after(result):
-            self.ftp_running = False
+            if job != self.ftp_job:
+                return
+            self.ftp_running = self.ftp_importing = False
+            for control in (self.scan_button, self.choose_button):
+                control.state(['!disabled'])
             self.ftp_cancel_button.pack_forget()
             if isinstance(result, Exception):
+                if isinstance(result, ftp_saves.IncompleteImport):
+                    self.ftp_resume = result
                 self.status.config(text=ftp_saves.error_text(result))
             else:
+                self.ftp_resume = None
                 self.st.save_result = result
                 self.st.saves_done = True
                 self.app.show(self.app.index+1)
             self.app.update_nav()
-        self.app.work(lambda: ftp_saves.copy(self.st.ftp_console, self.st.product, self.st.save_scan, existing,
-                        overwrite=bool(existing.files), cancelled=self.ftp_cancel.is_set), after, errors=True)
+        resume, scan, console, product = self.ftp_resume, self.st.save_scan, self.st.ftp_console, self.st.product
+        self.app.work(lambda: ftp_saves.copy(console, product, scan, existing, overwrite=bool(existing.files),
+                                             cancelled=cancel.is_set, resume=resume),
+                      after, errors=True)
         return False
 
     def busy(self):

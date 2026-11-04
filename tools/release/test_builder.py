@@ -1361,14 +1361,14 @@ class SaveImportTest(unittest.TestCase):
         write(os.path.join(sd_saves, "file8"), valid_ut_slot("3DSPlayer", 4))
         before = folder_snapshot(sd_saves)
         scan = deliver.scan_saves(self.pc_saves, self.ut.key)
-        real_copy = saves._copy_file
+        real_write = saves._write_checked  # Stages the checked bytes (DEEP-06).
 
-        def flaky(src, dst):
+        def flaky(dst, data, mtime):
             if os.path.basename(dst) == "undertale.ini.part":
                 raise OSError(5, "I/O error")
-            real_copy(src, dst)
+            real_write(dst, data, mtime)
 
-        with mock.patch.object(saves, "_copy_file", side_effect=flaky):
+        with mock.patch.object(saves, "_write_checked", side_effect=flaky):
             with self.assertRaises(deliver.DeliverError):
                 deliver.copy_pc_saves(self.sd, self.ut, scan, overwrite=True)
         top_files = sorted(n for n in os.listdir(sd_saves) if os.path.isfile(os.path.join(sd_saves, n)))
