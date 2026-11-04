@@ -1,1 +1,5 @@
 blank_issues_enabled: false
+contact_links:
+  - name: Chat, ideas and questions (Discussions)
+    url: https://github.com/ethancawse/undertale-3ds/discussions
+    about: Talk about the port, share an idea, show your setup or ask for help.
