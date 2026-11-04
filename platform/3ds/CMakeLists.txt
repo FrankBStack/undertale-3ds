@@ -1522,6 +1522,9 @@ target_link_options(ctrport PRIVATE -Wl,--wrap=VMBuiltins_registerAll)
 if(CTRPORT_GAME STREQUAL "undertale")
     target_link_options(ctrport PRIVATE -Wl,--wrap=Hitbox_registerAll)
 endif()
+# bakkeep (change auditfixe, SCOURSOL2-001): z_bakkeep.c recovers a save stranded in its .bak (a failed write) before
+# ctr_file_system.c's rename or delete forgets the backup, and keeps the .bak if that recovery fails.
+target_link_options(ctrport PRIVATE -Wl,--wrap=CtrSafeSave_forgetBackup)
 # Timestamp logs from before libctru service/heap setup, retaining its r0 argument.
 target_link_options(ctrport PRIVATE -Wl,--wrap=__libctru_init)
 # ctr_frame_pacer.c holds citro3d's screen flips for the vblank that ends each frame's slot.

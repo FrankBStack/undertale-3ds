@@ -1044,3 +1044,5 @@ platform/3ds/source/z_glyphsafe.c
 platform/3ds/source/z_inisafe.c
 # dndrel (auditfixe SCOURS3-002): relative action_set_motion adds its motion, as on PC (UNDERTALE; empty in DELTARUNE)
 platform/3ds/source/z_dndrel.c
+# bakkeep (auditfixe SCOURSOL2-001): a game rename or delete recovers a save stranded in .bak before forgetting the backup
+platform/3ds/source/z_bakkeep.c

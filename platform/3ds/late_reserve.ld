@@ -1439,6 +1439,10 @@ SECTIONS
     *(.text_dndrel)
     *(.rodata.dndrel_in_text)
     *z_dndrel.o(.text .text.* .rodata .rodata.*)
+    /* bakkeep (auditfixe SCOURSOL2-001, after dndrel, merge order; both games): CtrSafeSave_forgetBackup's wrap
+       (z_bakkeep.c, reached through --wrap), then that file's out-of-line copies of header functions; appended. */
+    *(.text_bakkeep)
+    *z_bakkeep.o(.text .text.* .rodata .rodata.*)
     /* repack test install (repacka, 11-02; build.sh repacktest= test builds only, empty in every release build):
        diag/ctr_repack_test.c's code and constants, last, so a test build keeps every late address of the release
        build. Keep these two lines last in late text. */
