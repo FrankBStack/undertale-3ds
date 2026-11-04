@@ -1,5 +1,9 @@
 # undertale-3ds
 
+![Contributions welcome](https://img.shields.io/badge/contributions-welcome-yellow?style=for-the-badge)
+
+**Contributions are greatly appreciated! If you want to improve the port, fix bugs or add your own features, please open a pull request.**
+
 > **Not released yet. There is nothing to download or install yet.**
 >
 > **The first release (UNDERTALE 1.0 beta) is planned for early November.** It comes with the builder, a program that builds the port from your own copy of UNDERTALE and installs it. Until then, this repository is the source code only.
