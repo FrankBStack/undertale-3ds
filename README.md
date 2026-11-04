@@ -10,7 +10,7 @@ You build it from your own copy of UNDERTALE.
 
 ## Status
 
-UNDERTALE 1.0 beta: coming in early November. The newest build is being measured on every console now, and I'll play the hardest scenes on it myself. The beta goes out once I can't notice lag in them, after a final check.
+UNDERTALE 1.0 beta: The newest build is being measured on every console now, and I'll play the hardest scenes on it myself. The beta goes out once I can't notice lag in them, after a final check.
 
 DELTARUNE: in progress. It comes after UNDERTALE.
 
