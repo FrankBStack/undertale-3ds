@@ -154,11 +154,39 @@ def compiler_details(tc, run=run_capture):
     return result
 
 
+def complete_windows_exe(path):
+    """False for a Windows program cut short, such as one an older builder left when the disk filled during
+    unpacking (SCOURSOL4-003): every section its header lists must be in the file. Elsewhere a cut-short tool
+    was never made executable, so the X_OK test already skips it."""
+    try:
+        size = os.path.getsize(path)
+        with open(path, "rb") as f:
+            head = f.read(min(size, 1 << 20))
+    except OSError:
+        return False
+    def word(at, n):
+        return int.from_bytes(head[at:at + n], "little")
+    if len(head) < 64 or head[:2] != b"MZ":
+        return False
+    pe = word(0x3C, 4)
+    if pe + 24 > len(head) or head[pe:pe + 4] != b"PE\x00\x00":
+        return False
+    sections, table = word(pe + 6, 2), pe + 24 + word(pe + 20, 2)
+    end = table + 40 * sections
+    if not sections or end > len(head):
+        return False
+    for at in range(table, table + 40 * sections, 40):
+        raw_size, raw_at = word(at + 16, 4), word(at + 20, 4)
+        if raw_size:
+            end = max(end, raw_at + raw_size)
+    return end <= size
+
+
 def _find_tool(name, dirs, exe):
     for d in dirs:
         if d:
             p = os.path.join(d, name + exe)
-            if os.path.isfile(p) and (exe or os.access(p, os.X_OK)):
+            if os.path.isfile(p) and (complete_windows_exe(p) if exe else os.access(p, os.X_OK)):
                 return p
     return None
 
@@ -676,10 +704,25 @@ def extract_exe(zip_path, exe_name, dest_dir):
             raise Refused("%s has no %s" % (zip_path, exe_name))
         os.makedirs(dest_dir, exist_ok=True)
         out = os.path.join(dest_dir, exe_name)
-        with z.open(members[0]) as src, open(out, "wb") as dst:
-            shutil.copyfileobj(src, dst)
-    if not exe_name.lower().endswith(".exe"):
-        os.chmod(out, 0o755)
+        # Unpack beside it and rename only when complete: a full disk must not leave a cut-short tool under the
+        # final name, which detection would then call installed (SCOURSOL4-003).
+        part = out + ".part"
+        try:
+            with z.open(members[0]) as src, open(part, "wb") as dst:
+                shutil.copyfileobj(src, dst)  # zipfile checks the member's CRC when it reaches the end.
+                dst.flush()
+                os.fsync(dst.fileno())
+            if os.path.getsize(part) != z.getinfo(members[0]).file_size:
+                raise Refused("%s didn't unpack completely. Free some disk space, then try again." % exe_name)
+            if not exe_name.lower().endswith(".exe"):
+                os.chmod(part, 0o755)
+            os.replace(part, out)
+        except BaseException:
+            try:
+                os.remove(part)
+            except OSError:
+                pass
+            raise
     return out
 
 

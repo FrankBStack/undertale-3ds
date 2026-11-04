@@ -713,6 +713,8 @@ tools/release/test_verify_game.py
 tools/release/test_builder.py
 tools/release/test_builder_save_audit.py
 tools/release/test_builder_save_backups.py
+tools/release/test_builder_verify_retry.py
+tools/release/test_builder_tool_extract.py
 tools/release/test_builder_stale_inputs.py
 tools/release/test_builder_find_page.py
 tools/release/test_builder_build_cancel.py
@@ -1036,3 +1038,7 @@ platform/3ds/source/ctr_pinwheel_fast.inc
 # utlife: UT Outside Room compatibility bounds; shared runner header is required in both kits
 engine/src/z_utlife.c
 engine/src/z_utlife.h
+# glyphsafe (auditfixe DEEP-02): argui's text drawn only when its font pages and tiles are resident
+platform/3ds/source/z_glyphsafe.c
+# inisafe (auditfixe DEEP-01): the INI cache drop in front of the builtins that change a file
+platform/3ds/source/z_inisafe.c

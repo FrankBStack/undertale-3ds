@@ -1739,7 +1739,14 @@ class FindPage(Page):
             else:
                 self.search()
 
+    def forget_check(self):
+        """The game may have been repaired or replaced since its last check, so check it again (SCOURSOL4-002)."""
+        if self.st.verdict is not None:
+            self.st.verdict = None
+            self.st.inputs += 1
+
     def search(self):
+        self.forget_check()
         self.searching = True
         self.searched_for = self.st.game
         self.tree.delete(*self.tree.get_children())
@@ -1792,6 +1799,7 @@ class FindPage(Page):
             self.add_manual(os.path.normpath(d))
 
     def add_manual(self, d):
+        self.forget_check()  # Choosing the same folder again checks it again.
         self.search_generation += 1  # A search still running must not replace this choice.
         self.searching = False
         if d not in self.manual:
@@ -1833,7 +1841,8 @@ class VerifyPage(Page):
 
     def on_show(self):
         self.intro.config(text="Checking %s..." % self.st.folder)
-        if self.st.verdict is None and not self.running:
+        # A refusal asks the player to repair the game and try again, so coming back here checks it again.
+        if (self.st.verdict is None or not self.st.verdict.accepted) and not self.running:
             self.start()
         else:
             self.render()

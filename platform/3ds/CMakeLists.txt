@@ -1511,6 +1511,12 @@ target_link_options(ctrport PRIVATE -Wl,--wrap=Instance_computeSpeedFromComponen
 # ofpoll (change creddodge): ctr_open_files.c's end looks at the keepers without the lock before CtrOpenFiles_poll
 # takes it, so a frame with nothing to shed never waits on a thread that holds it.
 target_link_options(ctrport PRIVATE -Wl,--wrap=CtrOpenFiles_poll)
+# glyphsafe (change auditfixe, DEEP-02): z_glyphsafe.c draws argui's text (first-boot hint, FPS counter) only when every
+# font page and tile it reads is resident.
+target_link_options(ctrport PRIVATE -Wl,--wrap=CtrFps_drawText,--wrap=CtrFpsbox_drawDigits)
+# inisafe (change auditfixe, DEEP-01): z_inisafe.c points the builtins that change a file at stubs that drop the INI
+# cache first, once VMBuiltins_registerAll has registered them.
+target_link_options(ctrport PRIVATE -Wl,--wrap=VMBuiltins_registerAll)
 # Timestamp logs from before libctru service/heap setup, retaining its r0 argument.
 target_link_options(ctrport PRIVATE -Wl,--wrap=__libctru_init)
 # ctr_frame_pacer.c holds citro3d's screen flips for the vblank that ends each frame's slot.

@@ -16,6 +16,16 @@ class SavesChanged(network.TransferError):
         super().__init__('The 3DS saves changed after they were checked. Nothing was replaced. Check the saves again, then retry.')
 
 
+BACKUP_MISMATCH_MESSAGE = ("The 3DS didn't store a correct backup of its saves, so nothing was replaced and the 3DS "
+                           "saves are as they were.\nIts SD card may be failing. Copy the card's saves folder to this "
+                           "PC, then try again with another card.")
+
+
+class BackupMismatch(network.TransferError):
+    def __init__(self):
+        super().__init__(BACKUP_MISMATCH_MESSAGE)
+
+
 class IncompleteImport(network.TransferError):
     """Replacing the live saves stopped partway. Says what each file holds now, where the backup is, how to finish
     and how to undo. The wizard hands it back to copy(resume=...) so its retry reuses the verified backup."""
@@ -132,6 +142,25 @@ def check_published(ftp, product, payloads):
     return [s.name for s, data in payloads if live.get(s.name.casefold()) != data]
 
 
+def check_backup(ftp, backup, original, *, cancelled=lambda: False):
+    """Read the published backup folder back: it must hold exactly the original saves, byte for byte, before any
+    live save is staged or replaced (R181 F1). A transfer checks each upload before its rename, not after."""
+    try:
+        held = read_folder(ftp, backup, cancelled=cancelled)
+    except network.Cancelled:
+        raise
+    except network.TransferError:
+        held = None  # Unreadable, or grown past what a save can be: not a backup to trust.
+    if held == original:
+        return
+    for name in original:  # Nobody should restore from it. The live saves are untouched.
+        try:
+            network.delete_if_present(ftp, backup + '/' + name)
+        except (OSError, EOFError, ftplib.Error):
+            pass
+    raise BackupMismatch()
+
+
 def resumable(ftp, resume, folder, current, payloads, *, cancelled=lambda: False):
     """True when the card holds what a stopped import of these same PC bytes can leave, and its backup still holds
     the original saves byte for byte: then a retry finishes it without a second backup."""
@@ -184,8 +213,10 @@ def copy(value, product, scan, expected, *, overwrite=False, factory=network.Con
                     source = Path(temporary)/name
                     source.write_bytes(data)
                     items.append(CopyItem(str(source), backup+'/'+name, len(data)))
-                transfer.send(items)  # All old bytes read back and checked in the backup folder first.
-                if not expected.files:
+                transfer.send(items)
+                if expected.files:
+                    check_backup(ftp, backup, expected.files, cancelled=cancelled)
+                else:
                     backup = None
             baseline = current.files  # What is being replaced, as checked above.
             staged = []

@@ -1420,6 +1420,19 @@ SECTIONS
        CtrOpenFiles_poll's check of the keepers without the lock (ctr_open_files.c's end, reached through --wrap).
        Named outside .text.* so the catch-alls leave it here; appended, so no earlier late code moves. */
     *(.text_ofpoll)
+    /* glyphsafe (auditfixe DEEP-02, after ofpoll, merge order; both games): the check that argui's text has
+       every font page and tile it reads (z_glyphsafe.c, reached through --wrap), then that file's out-of-line
+       copies of header functions (none expected). Named outside .text.late.*; appended, so no earlier late code
+       moves. */
+    *(.text_glyphsafe)
+    *z_glyphsafe.o(.text .text.* .rodata .rodata.*)
+    /* inisafe (auditfixe DEEP-01, after glyphsafe, merge order, before the repack test sections; both games): the
+       INI cache drop in front of every builtin that changes a file (z_inisafe.c, reached through --wrap), then its
+       constants, then that file's out-of-line copies of header functions (none expected). Named outside
+       .text.late.* so the catch-alls leave it here; appended, so no earlier late code moves. */
+    *(.text_inisafe)
+    *(.rodata.inisafe_in_text)
+    *z_inisafe.o(.text .text.* .rodata .rodata.*)
     /* repack test install (repacka, 11-02; build.sh repacktest= test builds only, empty in every release build):
        diag/ctr_repack_test.c's code and constants, last, so a test build keeps every late address of the release
        build. Keep these two lines last in late text. */
@@ -2261,6 +2274,9 @@ SECTIONS
     /* spdmemo (creddodge, last, after omegaflowey pcorder (75zq unit 39), merge order; both games): its
        two entries (z_spdmemo.c; named outside .bss.late.* so the catch-alls leave it here). */
     *(.bss.spdmemo_late)
+    /* inisafe (auditfixe DEEP-01, after spdmemo, merge order; both games): the builtins its stubs lead to (z_inisafe.c;
+       named outside .bss.late.* so the catch-alls leave it here). */
+    *(.bss.inisafe_late)
     /* 3dsxtool refuses a segment whose size isn't a multiple of 4 ("The segments is not word-aligned!"), and this
        block ends the RW segment: late statics of odd sizes (bools) would end it off a word. */
     . = ALIGN(4);

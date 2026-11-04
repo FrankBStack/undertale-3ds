@@ -48,6 +48,21 @@ def fixture(name, **subs):
     return text
 
 
+def fake_exe(body=b"invented program body"):
+    """The smallest Windows program header toolchain.complete_windows_exe reads: one section holding `body`."""
+    header = bytearray(0x80)
+    header[:2] = b"MZ"
+    header[0x3C:0x40] = (0x40).to_bytes(4, "little")
+    header[0x40:0x44] = b"PE\x00\x00"
+    header[0x44:0x46] = (0x8664).to_bytes(2, "little")
+    header[0x46:0x48] = (1).to_bytes(2, "little")  # One section; no optional header.
+    section = 0x58
+    header[section:section + 5] = b".text"
+    header[section + 16:section + 20] = len(body).to_bytes(4, "little")
+    header[section + 20:section + 24] = (0x80).to_bytes(4, "little")
+    return bytes(header) + body
+
+
 def write(path, data):
     os.makedirs(os.path.dirname(path), exist_ok=True)
     mode = "wb" if isinstance(data, bytes) else "w"
@@ -310,8 +325,8 @@ def fake_devkitpro(tmp, files=toolchain.REQUIRED_FILES, cia=True):
     for f in files:
         write(os.path.join(root, f), b"")
     if cia:
-        write(os.path.join(root, "tools", "bin", "makerom.exe"), b"")
-        write(os.path.join(root, "tools", "bin", "bannertool.exe"), b"")
+        write(os.path.join(root, "tools", "bin", "makerom.exe"), fake_exe())
+        write(os.path.join(root, "tools", "bin", "bannertool.exe"), fake_exe())
     return root
 
 
@@ -358,8 +373,8 @@ class ToolchainTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = fake_devkitpro(tmp, cia=False)
             tools = os.path.join(tmp, "tools")
-            write(os.path.join(tools, "makerom.exe"), b"")
-            write(os.path.join(tools, "bannertool.exe"), b"")
+            write(os.path.join(tools, "makerom.exe"), fake_exe())
+            write(os.path.join(tools, "bannertool.exe"), fake_exe())
             tc = toolchain.detect(tools, platform="win32", run=pacman(self.ALL), roots=[root])
             self.assertTrue(tc.can_cia)
 

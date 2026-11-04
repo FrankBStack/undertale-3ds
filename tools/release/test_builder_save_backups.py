@@ -99,8 +99,8 @@ class BackupReadBackTests(SaveFixture):
         a.write_bytes(b'')
         self.assertIs(saves._same_bytes(str(a), str(b)), True)
 
-    def test_ftp_import_refuses_a_backup_the_card_stores_wrongly(self):
-        # The Wi-Fi path already reads every save-sized upload back; this keeps it that way.
+    def test_ftp_import_refuses_a_backup_upload_the_card_stores_wrongly(self):
+        # Each save-sized upload is hash-checked before its rename (MAX_SAVE_BYTES <= SMALL).
         self.assertLessEqual(saves.MAX_SAVE_BYTES, ftp_delivery.SMALL)
         scan = self.prepare()
         expected = ftp_saves.inspect(self.address, UT)
@@ -108,6 +108,54 @@ class BackupReadBackTests(SaveFixture):
         with self.assertRaises(ftp_delivery.TransferError):
             ftp_saves.copy(self.address, UT, scan, expected, overwrite=True)
         self.assertEqual(self.live(), OLD)
+
+
+class FtpBackupReadBackTests(SaveFixture):
+    """R181 F1: the Wi-Fi import reads the published backup folder back before any live save is staged or replaced.
+    A transfer checks each upload before its rename, so damage after the rename needs this check."""
+    prepare = BackupReadBackTests.prepare
+
+    def run_with_damage(self, damage_name, damage):
+        scan = self.prepare()
+        expected = ftp_saves.inspect(self.address, UT)
+        real_upload = ftp_delivery.Transfer.upload
+        damaged = []
+        def upload(transfer, item):
+            real_upload(transfer, item)
+            parts = item.dst.split('/')
+            if parts[-2].startswith('backup-') and parts[-1] == damage_name:
+                final = self.saves/parts[-2]/parts[-1]
+                final.write_bytes(damage(final.read_bytes()))  # The card keeps other bytes after the rename.
+                damaged.append(final)
+        with mock.patch.object(ftp_delivery.Transfer, 'upload', upload):
+            with self.assertRaises(ftp_saves.BackupMismatch) as caught:
+                ftp_saves.copy(self.address, UT, scan, expected, overwrite=True)
+        self.assertEqual(len(damaged), 1)
+        self.assertEqual(str(caught.exception), ftp_saves.BACKUP_MISMATCH_MESSAGE)
+        self.assertEqual(ftp_saves.error_text(caught.exception), ftp_saves.BACKUP_MISMATCH_MESSAGE)
+        self.assertEqual(self.live(), OLD)  # Nothing staged or replaced.
+        self.assertEqual(sorted(p.name for p in self.saves.rglob('*') if p.is_file() and p.parent != self.saves), [])
+        self.assertEqual({p.name: p.read_bytes() for p in self.pc.iterdir()}, NEW)
+
+    def test_same_length_damage_after_the_rename_is_refused(self):
+        self.run_with_damage('file0', lambda data: b'BAD' + data[3:])  # The reviewer's OLD -> BAD, same length.
+
+    def test_a_shorter_backup_after_the_rename_is_refused(self):
+        self.run_with_damage('undertale.ini', lambda data: data[:-1])
+
+    def test_a_longer_backup_after_the_rename_is_refused(self):
+        self.run_with_damage('file9', lambda data: data + b'x')
+
+    def test_a_backup_grown_past_a_save_is_refused(self):
+        self.run_with_damage('file9', lambda data: data + b'x' * (saves.MAX_SAVE_BYTES + 1))
+
+    def test_an_ordinary_ftp_import_keeps_an_exact_backup(self):
+        scan = self.prepare()
+        expected = ftp_saves.inspect(self.address, UT)
+        result = ftp_saves.copy(self.address, UT, scan, expected, overwrite=True)
+        self.assertEqual(self.live(), NEW)
+        backup = self.card/result.backup_dir.lstrip('/')
+        self.assertEqual({p.name: p.read_bytes() for p in backup.iterdir()}, OLD)
 
 
 if __name__ == '__main__':
