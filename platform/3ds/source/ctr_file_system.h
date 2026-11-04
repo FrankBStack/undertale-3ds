@@ -33,3 +33,7 @@ FileSystem* CtrFileSystem_create(const char* bundlePath, const char* savePath);
 void CtrFileSystem_destroy(FileSystem* fs);
 // Waits for every queued write to reach the SD card.
 void CtrFileSystem_flush(FileSystem* fs);
+// The same, but only until deadline (svcGetSystemTick ticks), for the APT sleep/HOME hook (z_sleepflush.c). Returns
+// how many writes are still queued: 0 when all are done (written, or given up on with CtrSave_failed set); otherwise
+// the deadline came first, and they stay queued and are written after it.
+int CtrFileSystem_flushBy(FileSystem* fs, uint64_t deadline);

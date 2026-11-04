@@ -1018,3 +1018,35 @@ static RACEFIX_CODE void racefixLost(void) {
     CtrSafeSave_failed();
     LightLock_Unlock(&racefixLock);
 }
+
+// ===[ sleepflush r2 (SCOURS2-005 r2, R178 F1): the sleep/HOME hook's flush has a deadline ]===
+//
+// CtrFileSystem_flush waits for the queue with no time limit, which the exit can afford. z_sleepflush.c's APT hook
+// can't: libctru sends the sleep reply and hands the screens to the HOME Menu only after the hook returns, and a card
+// whose writes fail (8 tries, 250 ms apart, per file) or hang would hold that up for seconds or for good. So this wait
+// stops at deadline (svcGetSystemTick ticks, one for the whole transition: every job and retry in it) and returns the
+// number of jobs still queued. 0: every job reached the card or was given up on (CtrSave_failed says which). More:
+// the deadline came first; those jobs keep their place, and the writer goes on with them after the hook, before the
+// console sleeps and after it wakes (by then they are past their write delay). The queue's idle signal ends the wait
+// as soon as a healthy card is done; the 10 ms slices only bound the wait's overrun past the deadline. The code is
+// late, after sleepflush r1's (late_reserve.ld: .text_sleepflush_r2), so nothing of this file's earlier code moves.
+#ifdef __3DS__
+#define SLEEPFLUSH_FS_CODE __attribute__((noinline, section(".text_sleepflush_r2")))
+#else // tools/analysis/test_sleep_flush.py
+#define SLEEPFLUSH_FS_CODE __attribute__((noinline))
+#endif
+#define SLEEPFLUSH_SLICE_NS (10ll * 1000000ll)
+
+SLEEPFLUSH_FS_CODE int CtrFileSystem_flushBy(FileSystem* fs, uint64_t deadline) {
+    CtrFileSystem* cfs = (CtrFileSystem*) fs;
+    LightLock_Lock(&cfs->lock);
+    if (arrlen(cfs->queue) > 0) {
+        cfs->hurry++;
+        CondVar_Signal(&cfs->wake);
+        while (arrlen(cfs->queue) > 0 && deadline > svcGetSystemTick()) CondVar_WaitTimeout(&cfs->idle, &cfs->lock, SLEEPFLUSH_SLICE_NS);
+        cfs->hurry--;
+    }
+    int left = (int) arrlen(cfs->queue);
+    LightLock_Unlock(&cfs->lock);
+    return left;
+}

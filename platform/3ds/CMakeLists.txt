@@ -1525,6 +1525,21 @@ endif()
 # bakkeep (change auditfixe, SCOURSOL2-001): z_bakkeep.c recovers a save stranded in its .bak (a failed write) before
 # ctr_file_system.c's rename or delete forgets the backup, and keeps the .bak if that recovery fails.
 target_link_options(ctrport PRIVATE -Wl,--wrap=CtrSafeSave_forgetBackup)
+# symkeep (change auditfixe, SCOURT5-003): z_symkeep.c gives symmetric halving's copy array (CtrRenderer.symTex) its
+# whole capacity at a room change while it is empty, so a batch never draws a copy through a block that moved; where
+# the array still grows (R193), CtrArray_add draws the renderer's batches first, and the display caps link names
+# the renderer.
+if(CTRPORT_GAME STREQUAL "undertale")
+    target_link_options(ctrport PRIVATE -Wl,--wrap=CtrRenderer_chainFontVerdictsSymverdict,--wrap=CtrArray_add,--wrap=CtrRenderer_chainCapsItemverdict)
+endif()
+# credfail (change auditfixe, DEEP-11): z_credfail.c says on the Credits page when the build has no credits to show
+# (romfs:/credits.txt missing, empty or unreadable) and that B goes back, once ctr_legal.c's CtrLegalui_open drew it.
+if(CTRPORT_GAME STREQUAL "undertale")
+    target_link_options(ctrport PRIVATE -Wl,--wrap=CtrLegalui_open)
+endif()
+# sleepflush (change auditfixe, SCOURS2-005): z_sleepflush.c adds an APT hook at the first CtrFileSystem_create that
+# flushes the save queue before the console sleeps or the HOME Menu opens.
+target_link_options(ctrport PRIVATE -Wl,--wrap=CtrFileSystem_create,--wrap=CtrFileSystem_destroy)
 # Timestamp logs from before libctru service/heap setup, retaining its r0 argument.
 target_link_options(ctrport PRIVATE -Wl,--wrap=__libctru_init)
 # ctr_frame_pacer.c holds citro3d's screen flips for the vblank that ends each frame's slot.

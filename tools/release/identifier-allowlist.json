@@ -426,7 +426,7 @@
     {
       "member": "platform/3ds/source/ctr_file_system.c",
       "class": "engine-symbols",
-      "sha256": "f69e7cbda79286d6fc364aa20fcad835b96491607d3bdeda7a6f863c55f49d11",
+      "sha256": "6160e1ddc18387e3d001dbb412fd7d9655fc80331b8a449c284be4aec2eb64a6",
       "justification": "Reviewed parser limits, format fields, settings or upstream APIs; prefix overlap is not a game asset.",
       "evidence_sha256": [
         "f4d8d125c95da0a3abfeea00ec7c1aa4076cb9f819c965d9049f51802a090640"

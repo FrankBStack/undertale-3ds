@@ -1442,6 +1442,35 @@ SECTIONS
        (z_bakkeep.c, reached through --wrap), then that file's out-of-line copies of header functions; appended. */
     *(.text_bakkeep)
     *z_bakkeep.o(.text .text.* .rodata .rodata.*)
+    /* gdretry (auditfixe SCOURT6-001 = SCOURS2-003, after bakkeep, merge order; both games): z_gamedir.c's
+       failed settings.ini write kept owed and tried again at the exit (gdWritten, gdNotWritten, which gdSaveNow calls
+       in place of logInfo, and gdOwedAtExit with gdStopWorker, R176 F1), and the listing-off hook (gdLogInfo,
+       gdKeepOn, and its branches gdKeepPaths and gdKeepRecover, R176 F2). Named outside .text.late.*, so
+       z_gamedir.o's rule above leaves it here; appended, so no earlier late code moves. */
+    *(.text_gdretry)
+    /* symkeep (auditfixe SCOURT5-003, after bakkeep, merge order; UNDERTALE, empty in DELTARUNE): the symverdict
+       link's wrap that gives symmetric halving's copy array its whole capacity while it is empty, CtrArray_add's
+       that draws the batches before that array grows (R193), the caps link's that names the renderer (z_symkeep.c,
+       reached through --wrap), then that file's out-of-line copies of header functions; appended. */
+    *(.text_symkeep)
+    *z_symkeep.o(.text .text.* .rodata .rodata.*)
+    /* credfail (auditfixe DEEP-11, after symkeep, merge order; UNDERTALE, empty in DELTARUNE): CtrLegalui_open's
+       wrap that says on the Credits page when it has no credits (z_credfail.c, reached through --wrap), its text,
+       then that file's out-of-line copies of header functions; appended. */
+    *(.text_credfail)
+    *(.rodata.credfail_in_text)
+    *z_credfail.o(.text .text.* .rodata .rodata.*)
+    /* sleepflush (auditfixe SCOURS2-005, after gdretry, merge order; both games): the APT hook that flushes the
+       save queue on sleep and HOME, and main.c's CtrFileSystem_create/destroy wraps (z_sleepflush.c, reached through
+       --wrap), then that file's out-of-line copies of header functions (none expected); appended. */
+    *(.text_sleepflush)
+    *z_sleepflush.o(.text .text.* .rodata .rodata.*)
+    /* sleepflush r2 (auditfixe3, SCOURS2-005 r2 / R178 F1; both games): the deadline log line's named arrays
+       (z_sleepflush.c; not a mergeable string section, so no earlier late string folds into them), then the bounded
+       flush (ctr_file_system.c's CtrFileSystem_flushBy, z_sleepflush.c's sleepflushBounded). After r1's code, which
+       keeps its bytes but the hook's call target. Appended. */
+    *(.rodata_sleepflush)
+    *(.text_sleepflush_r2)
     /* gogut (GOG UNDERTALE only, empty in every Steam and DELTARUNE build; moved here by integrate21 zq44g, betasmoke
        R2-B2): GOG's own late code (z_gogut.c, ctr_renderer.c's Smart texel and font-folder helpers, ctr_pixgrid.c's
        data check), then its constants. It sat after round 16 (and ctr_renderer.o's .text.late.* line took most of it
@@ -1449,7 +1478,8 @@ SECTIONS
        5,146 B there pushed relprep and asgborder past their limits, and no release build of GOG UNDERTALE linked on
        the Old 3DS. Here, after every fixed hole, the layout up to the holes is Steam's; GOG's two extra late pages
        take the code. Named .text_gogut, outside .text.late.*, so no catch-all or per-file late line takes it first
-       (tools/release/test_gogut_late_order.py pins both). */
+       (tools/release/test_gogut_late_order.py pins both). Later appends go above this block, so GOG's other late
+       code keeps the Steam addresses too (empty in Steam, so moving it there moves nothing). */
     *(.text_gogut)
     *(.rodata.gogut_in_text)
     /* repack test install (repacka, 11-02; build.sh repacktest= test builds only, empty in every release build):
@@ -2299,6 +2329,12 @@ SECTIONS
     /* dndrel (auditfixe SCOURS3-002, after inisafe, merge order; UNDERTALE): the two builtins it leads to
        (z_dndrel.c). */
     *(.bss.dndrel_late)
+    /* symkeep (auditfixe SCOURT5-003 R193, after dndrel, merge order; UNDERTALE): the renderer and its copy
+       array's address (z_symkeep.c). */
+    *(.bss.symkeep_late)
+    /* sleepflush (auditfixe SCOURS2-005, after inisafe, merge order; both games): its file system pointer, hook
+       cookie and flag (z_sleepflush.c). */
+    *(.bss.sleepflush_late)
     /* 3dsxtool refuses a segment whose size isn't a multiple of 4 ("The segments is not word-aligned!"), and this
        block ends the RW segment: late statics of odd sizes (bools) would end it off a word. */
     . = ALIGN(4);

@@ -57,6 +57,8 @@
 #include <3ds.h>
 #include <sys/iosupport.h>
 #include <sys/syslimits.h> // NAME_MAX: readdir's name buffer (sys/dirent.h)
+// This file's log lines go through gdLogInfo, logInfo's in all but one (change auditfixe, gdKeepOn below).
+#define logInfo gdLogInfo
 #include "log.h"
 #include "ctr_wrap_chain.h"
 #define GD_TICKS() svcGetSystemTick()
@@ -216,6 +218,7 @@ static GD_CODE bool gdBloom(const char* name, bool add) {
 static GD_CODE void gdDropSettings(void);
 static GD_CODE int gdSettingsPart(const char* name);
 static GD_CODE void gdRecover(struct _reent* r, int found);
+void gdKeepOn(const char* why);
 
 // Off for the rest of the run (the caller holds the lock): every call goes to the card, settings.ini's too.
 static GD_CODE void gdTurnOff(const char* why) {
@@ -224,6 +227,9 @@ static GD_CODE void gdTurnOff(const char* why) {
     gd.why = why;
     gdDropSettings();
     logInfo(gdOff, why);
+#ifdef GAMEDIR_HOST_TEST
+    gdKeepOn(why); // (on the console gdLogInfo calls it: below)
+#endif
 }
 
 // The listing (the caller holds the lock). False turns the layer off.
@@ -433,6 +439,8 @@ static GD_CODE int gdFill(struct _reent* r, void* fd, const char* path) {
 }
 
 static GD_CODE void gdSaveNow(void);
+static void gdWritten(const char* fmt, unsigned long ms);
+static void gdNotWritten(const char* fmt, int step, int err);
 
 // The copy written to the card if it is newer (on this thread, after any write the worker is making), before a call
 // that goes to the card's own settings.ini. Not while a session writes it (on this thread, the caller's own).
@@ -731,8 +739,9 @@ static GD_CODE void gdSaveNow(void) {
         uint64_t t0 = GD_TICKS();
         r->_errno = 0;
         int step = gdWriteOut(r, c);
-        if (step == 0) logInfo(gdSaved, (unsigned long) ((GD_TICKS() - t0) / GD_TICKS_PER_MS));
-        else logInfo(gdNotSaved, step, r->_errno);
+        // (gdWritten and gdNotWritten log as logInfo did, then keep a failed copy for a later try: change auditfixe)
+        if (step == 0) gdWritten(gdSaved, (unsigned long) ((GD_TICKS() - t0) / GD_TICKS_PER_MS));
+        else gdNotWritten(gdNotSaved, step, r->_errno);
         LightLock_Lock(&gd.lock);
         c->refs--;
         gdRelease(c);
@@ -759,9 +768,192 @@ static GD_CODE void gdRecover(struct _reent* r, int found) {
     logInfo(gdRecovered, found);
 }
 
+// ===[ A failed write tried again (change auditfixe, SCOURT6-001 = SCOURS2-003; R176 F1) ]===
+// gdSaveNow takes the copy off gd.dirty before it writes, so a write that failed (the .tmp's create or write refused:
+// a full or busy card, the open-file limit) was never tried again, not even at the exit, and the change was lost at the
+// next boot with the old settings.ini on the card. Now a failed copy stays owed: the next save writes the latest anyway,
+// and the exit tries it again (twice more if that fails too: a bounded number of tries, not a bound in time, since each
+// try waits for the card). Not at once during play: gdSaveNow would loop on a dead card. Late code of its own
+// (.text_gdretry, late_reserve.ld) so nothing of the layer moves: gdSaveNow only calls these two in place of logInfo.
+// Its state is in gd.retired, words nothing used, read and written under gd.lock: [0] a copy owed to the card, [1] the
+// exit's tries, [2] the exit's call registered (under gd.io), [3] the exit begun (host tests only).
+// The exit's call (atexit, registered at the first failure, after gdExit, so it runs first) stops the worker as gdExit
+// does and joins it before it takes the debt: a write the worker was still making, or still waiting to make, between
+// the start of the exit and gdExit (other exit calls run in between) can't fail after the debt is taken and be forgotten
+// (R176 F1). Then it writes what is owed itself, so the debt is written whichever of the two runs last (a first failure
+// during the exit registers it then, and newlib runs it after the call under way, possibly gdExit).
+#ifdef GAMEDIR_HOST_TEST
+#define GDR_CODE __attribute__((noipa, unused))
+#define GD_QUITTING() (gd.retired[3] != 0)
+#define GD_PAUSE() ((void) 0)
+#ifndef GD_JOIN
+#define GD_JOIN() ((void) 0) // (a fixture's worker runs here: its write still under way at the exit)
+#endif
+#define GD_STOP() (gd.retired[3] = 1, GD_JOIN())
+#else
+#define GDR_CODE __attribute__((noipa, section(".text_gdretry")))
+#define GD_QUITTING() (__atomic_load_n(&gd.quit, __ATOMIC_ACQUIRE) != 0)
+#define GD_PAUSE() svcSleepThread(50000000LL)
+#define GD_STOP() gdStopWorker()
+// As gdExit's first lines: the worker told to stop, and joined after any write it is making (twice is harmless: a
+// finished thread's join returns at once).
+static GDR_CODE void gdStopWorker(void) {
+    __atomic_store_n(&gd.quit, 1, __ATOMIC_RELEASE);
+    Thread t = gd.thread;
+    if (t != NULL && t != threadGetCurrent()) {
+        LightEvent_Signal(&gd.wake);
+        threadJoin(t, U64_MAX);
+    }
+}
+#endif
+
+// The exit's call for a copy owed: the worker stopped first, then the debt is newer than the card again, and written.
+static GDR_CODE void gdOwedAtExit(void) {
+    GD_STOP();
+    LightLock_Lock(&gd.lock);
+    if (gd.retired[0] != 0 && gd.copy != NULL) gd.dirty = 1;
+    gd.retired[0] = 0;
+    LightLock_Unlock(&gd.lock);
+    gdSaveNow();
+}
+
+static GDR_CODE void gdWritten(const char* fmt, unsigned long ms) {
+    logInfo(fmt, ms);
+    LightLock_Lock(&gd.lock);
+    gd.retired[0] = 0; // (gd.io held: the latest copy is on the card, or a newer one is dirty and written next)
+    LightLock_Unlock(&gd.lock);
+}
+
+// gdKeepOn's and gdNotWritten's branches to gdPaths and gdRecover (the asm below; why: at gdKeepOn).
+#ifdef GAMEDIR_HOST_TEST
+#define gdKeepPaths gdPaths
+#define gdKeepRecover gdRecover
+#else
+bool gdKeepPaths(char (*path)[96]);
+void gdKeepRecover(struct _reent* r, int found);
+#endif
+
+// gdSaveNow's failed write (gd.io held, not gd.lock).
+// A write that failed after its .tmp became the .new (gdWriteOut steps 4, 5), or one stopped by a .new already there
+// (step 3), can leave that .new the only whole copy: the next write removed it (gd.leftNew) before its own .tmp became
+// the .new, so a power cut there left no settings at all (R176b), or only a settings.ini a write outside the copy cut
+// short (R186). A .new is whole (only a written, closed .tmp becomes one). So a failed write first takes back the next
+// write's leave to remove it, before anything here can fail (R186 1): gd.leftNew is never set between writes now, and
+// no write removes a .new. Then a .new found on the card is put in at once, over settings.ini if that is there,
+// as a boot's listing puts it in (gdRecover); if that fails too it stays, the run's next writes stop at their rename
+// onto it (step 3, the .tmp left; the card renames onto no existing name) and try again to put it in, and so does the
+// next boot. Whether settings.ini is there says nothing of whether it is whole (R186 2). Two stats, on a failed write
+// only.
+static GDR_CODE void gdNotWritten(const char* fmt, int step, int err) {
+    gd.leftNew = 0;
+    logInfo(fmt, step, err);
+    char path[3][96];
+    struct stat st;
+    struct _reent* r = GD_REENT(); // (gdSaveNow set its deviceData; gdRecover keeps its errno)
+    if (gdKeepPaths(path) && gd.real->stat_r(r, path[2], &st) == 0) {
+        int found = gd.real->stat_r(r, path[0], &st) == 0 ? 8 | 2 : 8;
+        LightLock_Lock(&gd.lock);
+        gdKeepRecover(r, found);
+        LightLock_Unlock(&gd.lock);
+    }
+    bool quitting = GD_QUITTING(), again = false, owed;
+    LightLock_Lock(&gd.lock);
+    // (gd.dirty set: a newer copy came meanwhile, and the loop writes it next)
+    if (!gd.dirty && gd.copy != NULL) {
+        if (!quitting) gd.retired[0] = 1;
+        else again = gd.retired[1]++ < 2u;
+        gd.dirty = again;
+    }
+    owed = gd.retired[0] != 0;
+    LightLock_Unlock(&gd.lock);
+    if (again) GD_PAUSE();
+    if (!quitting && owed && gd.retired[2] == 0) {
+        gd.retired[2] = 1;
+        atexit(gdOwedAtExit);
+    }
+}
+
+// ===[ settings.ini kept whole when the listing fails (change auditfixe, SCOURT4-001 = SCOURT5-001, SCOURT3-001,
+// SCOURT7-002) ]===
+// Off, every settings.ini write went to the card as the writers make it: the options menu's save truncates the file
+// (ctr_display.c's fopen "w") and appends four parts, with no error checks, so a card error mid-save left a cut file
+// and the old settings lost. A listing that fails, or finds a name outside plain ASCII, says nothing about
+// settings.ini's copy, which needs only the file's plain name: then the layer stays on with a listing that has every
+// name (each lookup goes to the card, as off), and settings.ini's writes keep going to the copy and out whole
+// (gdWriteOut, and gdNotWritten's retry). Off for good, as before, after a write by an unusual path or the folder made
+// anew (the copy can't be trusted then), or with no memory for the listing. The log line at the log's opening then
+// reads "0 names listed" (gd.count). gdTurnOff (the caller holds the lock) calls it in place of logInfo.
+// gdTurnOff's line is the hook, not a call of its own: a call of anything else there makes the compiler emit the
+// layer's functions and constants in another order (every one moves). So on the console every logInfo of this file is
+// gdLogInfo (the #define at the top), which goes straight on to logInfo, and after gdTurnOff's line (its format,
+// gdOff) to gdKeepOn too. gdKeepOn never names the reasons' constants either (that too reorders): their first letters
+// tell them apart (gdWhyList "listing failed", gdWhyName "a name outside plain ASCII"; gdWhyPath "a write ...",
+// gdWhyFolder "the folder ...").
+// No listing then finds a write cut short (R176 F2): a settings.ini.new left by a power cut after the old settings.ini
+// went is the only whole copy, and the first read of settings.ini (the listing comes first) would find none and the
+// game its defaults, and the next save remove that .new. So the .new is looked for by its own name (one stat, at the
+// listing, before any read of settings.ini) and put in as gdRecover puts it in (a .tmp is left: gdWriteOut opens it
+// truncated). If that fails the .new stays: the run's saves then stop at gdWriteOut's rename onto it, and the next
+// boot puts it in. With no .new nothing on the card changes. On the console gdPaths and gdRecover are reached through
+// two branches in the asm below (gdKeepPaths, gdKeepRecover), for the same reason: a call of either from here moves
+// the layer's functions (gdRead goes ahead of gdRelease). They keep their own names (a clone would not link).
+GDR_CODE __attribute__((used)) void gdKeepOn(const char* why) {
+    if (why[0] != 'l' && why[2] != 'n') return;
+    uint32_t* bits = gd.bits != NULL ? gd.bits : malloc(GD_BITS / 8u);
+    if (bits == NULL) return;
+    memset(bits, 0xff, GD_BITS / 8u);
+    gd.bits = bits;
+    gd.count = 0;
+    char path[3][96];
+    struct stat st;
+    struct _reent* r = GD_REENT();
+    void* dev = r->deviceData;
+    int err = r->_errno;
+    r->deviceData = gd.real->deviceData; // (as gdSaveNow: inside the dispatch it already is)
+    // (2: settings.ini removed first if it is there; none is fine)
+    if (gdKeepPaths(path) && gd.real->stat_r(r, path[2], &st) == 0) gdKeepRecover(r, 8 | 2);
+    r->deviceData = dev;
+    r->_errno = err;
+    __atomic_store_n(&gd.state, 1, __ATOMIC_RELEASE); // the bits first
+}
+#ifndef GAMEDIR_HOST_TEST
+// r0 the format, r1 on: logInfo's arguments, untouched on the way to it.
+__asm__(".pushsection .text_gdretry, \"ax\", %progbits\n\t"
+        ".align 2\n\t"
+        ".global gdLogInfo\n\t"
+        ".type gdLogInfo, %function\n"
+        "gdLogInfo:\n\t"
+        "ldr ip, 1f\n\t"
+        "cmp r0, ip\n\t"
+        "bne logInfo\n\t"
+        "push {r1, lr}\n\t"
+        "bl logInfo\n\t"
+        "pop {r0, lr}\n\t"
+        "b gdKeepOn\n"
+        "1:\t.word gdOff\n\t"
+        ".size gdLogInfo, . - gdLogInfo\n\t"
+        ".global gdKeepPaths\n\t"
+        ".type gdKeepPaths, %function\n"
+        "gdKeepPaths:\n\t"
+        "b gdPaths\n\t"
+        ".size gdKeepPaths, . - gdKeepPaths\n\t"
+        ".global gdKeepRecover\n\t"
+        ".type gdKeepRecover, %function\n"
+        "gdKeepRecover:\n\t"
+        "b gdRecover\n\t"
+        ".size gdKeepRecover, . - gdKeepRecover\n\t"
+        ".popsection");
+#endif
+
 #ifdef GAMEDIR_HOST_TEST
 static GD_CODE void gdKick(void) { GD_KICK(); }
-static GD_CODE void gdExit(void) { gdSaveNow(); }
+// As on the console: the exit's owed-copy call (atexit, registered after gdExit, so first: it stops the worker), then
+// gdExit's own write.
+static GD_CODE void gdExit(void) {
+    gdOwedAtExit();
+    gd.retired[3] = 1;
+    gdSaveNow();
+}
 #else
 // The worker: woken by a session's last close, it waits for the writes to go quiet (the menu's save closes and
 // reopens the file four times), then writes the latest copy. The exit's signal (gd.quit) ends any wait at once; a

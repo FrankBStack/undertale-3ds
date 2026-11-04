@@ -663,3 +663,11 @@ LUI_CODE void CtrLegalui_update(CtrMenu* menu, u32 down) {
 // 1 byte more than that text, so this bound keeps it whole for any URL CMake accepts.
 _Static_assert(sizeof(CTR_RELEASE_SOURCE_HEADING) + sizeof(CTR_RELEASE_SOURCE_URL) + sizeof("Build:") +
                CTR_RELEASE_BUILD_ID_SIZE <= 126 + 1, "Legal page source and build text would not fit its buffer");
+
+#ifdef __3DS__
+// credfail (change auditfixe, DEEP-11): lui.credits under a global name for z_credfail.c, as an exact alias (no C
+// added, so nothing above moves or changes).
+_Static_assert(__builtin_offsetof(__typeof__(lui), credits) == 20, "CtrLegalui_credits is lui.credits");
+__asm__(".global CtrLegalui_credits\n.type CtrLegalui_credits,%object\n"
+        ".set CtrLegalui_credits,lui+20\n.size CtrLegalui_credits,4\n");
+#endif
