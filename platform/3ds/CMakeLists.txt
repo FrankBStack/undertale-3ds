@@ -1517,6 +1517,11 @@ target_link_options(ctrport PRIVATE -Wl,--wrap=CtrFps_drawText,--wrap=CtrFpsbox_
 # inisafe (change auditfixe, DEEP-01): z_inisafe.c points the builtins that change a file at stubs that drop the INI
 # cache first, once VMBuiltins_registerAll has registered them.
 target_link_options(ctrport PRIVATE -Wl,--wrap=VMBuiltins_registerAll)
+# dndrel (change auditfixe, SCOURS3-002): z_dndrel.c points action_set_motion at a builtin that adds the motion (as
+# motion_add) when the D&D Relative flag is set, once Hitbox_registerAll (UNDERTALE's last builtin registration) ends.
+if(CTRPORT_GAME STREQUAL "undertale")
+    target_link_options(ctrport PRIVATE -Wl,--wrap=Hitbox_registerAll)
+endif()
 # Timestamp logs from before libctru service/heap setup, retaining its r0 argument.
 target_link_options(ctrport PRIVATE -Wl,--wrap=__libctru_init)
 # ctr_frame_pacer.c holds citro3d's screen flips for the vblank that ends each frame's slot.

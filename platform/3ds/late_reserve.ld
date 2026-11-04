@@ -1433,6 +1433,12 @@ SECTIONS
     *(.text_inisafe)
     *(.rodata.inisafe_in_text)
     *z_inisafe.o(.text .text.* .rodata .rodata.*)
+    /* dndrel (auditfixe SCOURS3-002, after inisafe, merge order; UNDERTALE, empty in DELTARUNE): the relative
+       action_set_motion and Hitbox_registerAll's wrap (z_dndrel.c, reached through --wrap), its names, then that
+       file's out-of-line copies of header functions; appended. */
+    *(.text_dndrel)
+    *(.rodata.dndrel_in_text)
+    *z_dndrel.o(.text .text.* .rodata .rodata.*)
     /* repack test install (repacka, 11-02; build.sh repacktest= test builds only, empty in every release build):
        diag/ctr_repack_test.c's code and constants, last, so a test build keeps every late address of the release
        build. Keep these two lines last in late text. */
@@ -2277,6 +2283,9 @@ SECTIONS
     /* inisafe (auditfixe DEEP-01, after spdmemo, merge order; both games): the builtins its stubs lead to (z_inisafe.c;
        named outside .bss.late.* so the catch-alls leave it here). */
     *(.bss.inisafe_late)
+    /* dndrel (auditfixe SCOURS3-002, after inisafe, merge order; UNDERTALE): the two builtins it leads to
+       (z_dndrel.c). */
+    *(.bss.dndrel_late)
     /* 3dsxtool refuses a segment whose size isn't a multiple of 4 ("The segments is not word-aligned!"), and this
        block ends the RW segment: late statics of odd sizes (bools) would end it off a word. */
     . = ALIGN(4);

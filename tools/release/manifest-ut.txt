@@ -1042,3 +1042,5 @@ engine/src/z_utlife.h
 platform/3ds/source/z_glyphsafe.c
 # inisafe (auditfixe DEEP-01): the INI cache drop in front of the builtins that change a file
 platform/3ds/source/z_inisafe.c
+# dndrel (auditfixe SCOURS3-002): relative action_set_motion adds its motion, as on PC (UNDERTALE; empty in DELTARUNE)
+platform/3ds/source/z_dndrel.c
