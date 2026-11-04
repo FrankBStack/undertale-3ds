@@ -237,7 +237,7 @@
     {
       "member": "tools/release/test_builder.py",
       "class": "engine-lookups",
-      "sha256": "c40462e68416d6f64defdebb24f08d939148413505af53894cbeb63341ff4db0",
+      "sha256": "26874e81c6c0252a3cf167a702b54e5d70512ed0bcd63f6f3145ce85636f57ae",
       "justification": "Existing synthetic compiler/music fixtures and player cursor lookup; new tests only require private generator source closure in the exported builder.",
       "evidence_sha256": [
         "e1013ccac9297ff1f3205e0d2e1e0966f75c9b7b570515dedc2026aba40ade7b"

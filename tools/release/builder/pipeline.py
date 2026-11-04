@@ -457,14 +457,140 @@ def source_payload(root, game):
     return {rel: (root / rel).read_bytes() for rel in sorted(paths)}
 
 
-def release_source(root, game):
-    contract = products.release_contract
+NO_SOURCE_LINK = ("This copy of the source has no release-descriptor.json and no Git history, so the builder can't "
+                  "name the source it builds. Clone it with git (git clone %s), or use the release builder.")
+# A source build never claims to match its commit (R198a3): files git ignores or is told not to check are built too,
+# so "based on" is the only claim the builder can always stand behind. "with local changes" when git reports any.
+SOURCE_BUILD = ("Source build: this checkout has no release-descriptor.json, so it builds as an unofficial copy based "
+                "on commit %s%s. Its Legal page shows the release tag; the build log links to that base commit: %s.")
+# Git history whose HEAD can't be read stops at once (R201): the release line builds only with
+# {repository}/tree/{commit}, which keeps the release layout guards, and a reused work folder would keep the last
+# commit's link in CMake's cache.
+NO_SOURCE_COMMIT = ("This checkout has no release-descriptor.json and the builder could not read which commit it is "
+                    "on, so it can't name the source it builds. Clone it again with git (git clone %s), or use the "
+                    "release builder.")
+SOURCE_CHANGED = ", with local changes"
+
+
+def ref_name_ok(ref):
+    """Git's own ref-name rules (git check-ref-format), so any branch git allows is read, and nothing that could
+    leave the refs folder: no '..', empty or dot-led component, '.lock' ending, control character, space,
+    ~^:?*[, backslash or '@{'. Non-ASCII names are allowed, as in git."""
+    if not ref.startswith('refs/') or ref.endswith(('/', '.')) or '..' in ref or '@{' in ref:
+        return False
+    if any(ord(c) < 0x20 or c == '\x7f' or c in ' ~^:?*[\\' for c in ref):
+        return False
+    return all(part and not part.startswith('.') and not part.endswith('.lock') for part in ref.split('/'))
+
+
+def _git_text(path):
+    """A file git wrote, as UTF-8 with only git's own ASCII whitespace trimmed: a branch name may end in a non-ASCII
+    space (U+00A0, U+0085, U+2003), which str.strip() would cut off (R198a3)."""
+    return path.read_bytes().decode('utf-8').strip(' \t\r\n')
+
+
+def checkout_commit(root):
+    """HEAD's commit ID when `root` is the top of a Git checkout, read from .git without running git; else None
+    (no history, or a HEAD this can't read: source_build still builds then, with the commit unknown)."""
+    git = Path(root) / '.git'
     try:
-        descriptor = json.loads((Path(root) / contract.DESCRIPTOR).read_text(encoding='utf-8'))
-        return contract.validate_source(descriptor, game, release_version(root),
-                                        contract.payload_digest(source_payload(root, game)))
+        if git.is_file():       # A linked worktree or submodule: "gitdir: <path>".
+            line = _git_text(git)
+            if not line.startswith('gitdir:'):
+                return None
+            git = (Path(root) / line[7:].strip(' \t')).resolve()
+        common = git
+        if (git / 'commondir').is_file():
+            common = (git / _git_text(git / 'commondir')).resolve()
+        head = _git_text(git / 'HEAD')
+        if head.startswith('ref:'):
+            ref = head[4:].strip(' \t')
+            if not ref_name_ok(ref):
+                return None
+            loose = common / ref
+            try:
+                is_loose = loose.is_file()
+            except OSError:         # a name git allows but this file system can't hold: git packs it
+                is_loose = False
+            if is_loose:
+                head = _git_text(loose)
+            else:
+                head = None
+                packed = common / 'packed-refs'
+                if packed.is_file():
+                    # Rows end in LF only; U+0085, U+2028 and U+2029 can be inside a name (not str.splitlines()).
+                    # Compared as bytes, so another row git wrote in a different encoding can't stop the lookup.
+                    want = ref.encode('utf-8')
+                    for row in packed.read_bytes().split(b'\n'):
+                        parts = row.rstrip(b'\r').split(b' ')
+                        if len(parts) == 2 and parts[1] == want:
+                            head = parts[0].decode('ascii', 'replace')
+                            break
+    except (OSError, ValueError):       # UnicodeDecodeError is a ValueError
+        return None
+    if head and re.fullmatch(r'[0-9a-f]{40}', head) and head != '0' * 40:
+        return head
+    return None
+
+
+def local_changes(root):
+    """True or False when git can tell whether the checkout differs from HEAD; None when it can't (no git).
+    Untracked files count: the build takes every file in its source folders, added ones too (R198a)."""
+    git = shutil.which('git')
+    if not git:
+        return None
+    try:
+        result = subprocess.run([git, '-C', str(root), 'status', '--porcelain', '--untracked-files=all'],
+                                stdin=subprocess.DEVNULL, capture_output=True, timeout=30, **hidden_options())
+    except (OSError, subprocess.SubprocessError):
+        return None
+    return bool(result.stdout.strip()) if result.returncode == 0 else None
+
+
+def source_build(root, game):
+    """A source checkout has no release descriptor: describe it from the same release contract a kit's comes from,
+    with the checkout's own commit, so it builds with the release profile and is labelled a source build."""
+    contract = products.release_contract
+    commit = checkout_commit(root)
+    if commit is None:
+        text = NO_SOURCE_COMMIT if os.path.lexists(os.path.join(str(root), '.git')) else NO_SOURCE_LINK
+        raise BuildFailed(text % contract.source_descriptor(game, '', '')['repository'])
+    try:
+        version = release_version(root)
+        digest = contract.payload_digest(source_payload(root, game))
+        descriptor = contract.source_descriptor(game, version, digest)
+        descriptor['public_commit'] = commit
+        result = contract.validate_source(descriptor, game, version, digest)
+    except (OSError, ValueError, KeyError, TypeError) as exc:
+        raise BuildFailed('Could not read this source checkout: ' + str(exc)) from exc
+    # What git reported, not a claim that the build matches the commit: git leaves out ignored and assume-unchanged
+    # files, which the build still takes.
+    result.update(kind='source', git_reports_changes=local_changes(root))
+    return result
+
+
+def source_build_text(source):
+    """The one line that tells a player a build is a source build (CLI, dry run, build log and record)."""
+    changed = SOURCE_CHANGED if source.get('git_reports_changes') else ''
+    return SOURCE_BUILD % (source['public_commit'][:12], changed, source['source_url'])
+
+
+def release_source(root, game):
+    """The release descriptor's verified source link. A kit carries the descriptor; a missing one means a source
+    checkout, which builds as a labelled source build (source_build). A descriptor that is present but unset or
+    doesn't match still stops the build."""
+    contract = products.release_contract
+    path = Path(root) / contract.DESCRIPTOR
+    if not os.path.lexists(path):
+        return source_build(root, game)
+    try:
+        descriptor = json.loads(path.read_text(encoding='utf-8'))
+        result = contract.validate_source(descriptor, game, release_version(root),
+                                          contract.payload_digest(source_payload(root, game)))
     except (OSError, ValueError, KeyError, TypeError) as exc:
         raise BuildFailed('Could not verify this builder\'s public source: ' + str(exc)) from exc
+    result['kind'] = 'release'
+    return result
 
 
 def write_python_shims(bin_dir, python):
@@ -549,6 +675,9 @@ class Progress:
         self.warnings = 0
         self.outputs = []
         self.activity = STAGES[0]
+        # build.sh makes the .cia whenever makerom and bannertool are there. Without --cia nobody asked for one, so
+        # that step shows as packaging (betasmoke B8).
+        self.cia_wanted = True
 
     def feed(self, line):
         t = self.clock()
@@ -588,7 +717,7 @@ class Progress:
                     self.outputs.append(s[6:])
         if ": warning:" in s:
             self.warnings += 1
-        self.activity = ('Making .cia' if 'Building CIA' in s else
+        self.activity = (('Making .cia' if self.cia_wanted else STAGES[3]) if 'Building CIA' in s else
                          'Making .3dsx' if 'Creating 3DSX' in s else
                          self.activity if self.stage == 3 and not s.startswith('built ') else STAGES[self.stage])
 
@@ -703,6 +832,33 @@ class BuildFailed(Exception):
 
 
 FAILED = "The build stopped.\nClick Try again, or click Copy log to report the error."
+# A failing step's own words, so the command line can say what failed (B2). Warnings are never the cause.
+_ERROR_LINE = re.compile(r"(?:^|\s)(?:fatal )?error:|: error\b|overfilled|undefined reference|^ld: |"
+                         r"^make(?:\[\d+\])?: \*\*\*|^CMake Error|^Traceback ", re.I)
+# A diagnostic's severity is its first "warning:" or "error:" marker ("ld: warning: ...", "a.c:3:1: warning: ...").
+# Only a warning by that first marker is skipped: "a.c:1:19: error: warning: ..." and "a.S:1: Error: warning: ..."
+# are errors (R198c2), and a line naming something called warning is no warning at all.
+_SEVERITY = re.compile(r"(?:^|:\s*)(warning|(?:fatal )?error):", re.I)
+
+
+def _is_warning(text):
+    m = _SEVERITY.search(text)
+    return bool(m) and m.group(1).lower() == 'warning'
+
+
+def first_error(log_path, limit=300):
+    """The first line in a build log that reads as the failure (a compiler, linker, make or Python error), or
+    None. Warning diagnostics are skipped (devkitARM's ld prints harmless ones in every build); an error that
+    only names something called warning is kept."""
+    try:
+        with open(log_path, encoding='utf-8', errors='replace') as log:
+            for line in log:
+                text = line.strip()
+                if text and not _is_warning(text) and _ERROR_LINE.search(text):
+                    return text[:limit]
+    except (OSError, TypeError):
+        pass
+    return None
 
 
 @dataclasses.dataclass
@@ -712,6 +868,20 @@ class Artifact:
     path: str
     size: int
     sha256: str
+
+
+SFX_PACK_MISSING = ("WARNING: No sound pack for the Old 3DS: %s. The Old 3DS will play the original sounds "
+                    "instead, which can hold frames in busy scenes. The release builder makes the sound pack.")
+SFX_NO_ENCODER = ("this copy of the builder has no Windows sound encoder (%s comes only with the release builder)"
+                  % sfx_encoder.RELATIVE)
+
+
+def sfx_pack_problem(source_root=SOURCE_ROOT, platform=None):
+    """Why this PC can't make UNDERTALE's Old 3DS sound pack before building, or None (betasmoke R2 finding 1:
+    a Windows source checkout has no encoder DLL, and the build used to say so only in its log)."""
+    if (platform or sys.platform) == 'win32' and not (Path(source_root) / sfx_encoder.RELATIVE).is_file():
+        return SFX_NO_ENCODER
+    return None
 
 
 def prepare_sfx_pack(job, data_dir):
@@ -807,6 +977,7 @@ class Build:
         self.parts = parts
         self.notices = []
         self.progress = Progress(product, target, clock)
+        self.progress.cia_wanted = "cia" in self.outputs
         self.proc = None
         self.cancelled = False
         self._lock = threading.Lock()
@@ -829,6 +1000,9 @@ class Build:
                 raise BuildFailed(str(exc), self.log_path) from exc
         version = release_version(self.source_root)      # an incomplete archive stops before anything is written
         self.release_source = release_source(self.source_root, self.product.key)
+        if self.release_source.get('kind') == 'source':
+            self.notices.append(source_build_text(self.release_source))
+            self.on_line(self.notices[-1])
         need = int(self.product.disk_mb[self.target] * 1.5 + 30) * 1024 * 1024
         if self.product.key == 'deltarune':
             need += chapters.stage_bytes(self.data_dir, self.parts)
@@ -886,6 +1060,8 @@ class Build:
                 log.write("builder: private game inputs staged in %s\n" % data_dir)
             log.write("toolchain packages (pacman -Q at detection):\n")
             log.write('public source: ' + self.release_source['source_url'] + '\n')
+            if self.release_source.get('kind') == 'source':
+                log.write(source_build_text(self.release_source) + '\n')
             log.write('compiler: ' + json.dumps(compiler, sort_keys=True) + '\n')
             if self.product.key == 'deltarune':
                 self.chapter_record = {'version': sorted({v[1][1] for v in chapters.inventory(data_dir).values()
@@ -949,10 +1125,12 @@ class Build:
             except Exception as error:
                 if self.cancelled:
                     raise BuildFailed('The build was cancelled.', self.log_path) from error
-                message = 'Sound pack could not be prepared. The game will use the original sounds.'
+                reason = sfx_pack_problem(self.source_root) or 'its sound step failed (the build log says why)'
+                message = SFX_PACK_MISSING % reason
                 with open(self.log_path, 'a', encoding='utf-8', newline='\n') as log:
                     log.write(message + '\n' + 'builder: sfxpack: ' + str(error) + '\n')
                 self.on_line(message)
+                self.notices.append(message)
                 pack = None
             if pack is not None:
                 arts.append(pack)
@@ -988,7 +1166,7 @@ class Build:
         if 'cia' in outputs and not self.tc.can_cia:
             # build.sh always makes a 3dsx. Never collect a stale CIA from an earlier run.
             outputs = ('3dsx',)
-            self.notices = [CIA_NOT_MADE]
+            self.notices.append(CIA_NOT_MADE)
             with open(self.log_path, 'a', encoding='utf-8', newline='\n') as log:
                 log.write(CIA_NOT_MADE + '\n')
             self.on_line(CIA_NOT_MADE)

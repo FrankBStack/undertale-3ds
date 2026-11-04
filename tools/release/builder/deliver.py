@@ -306,7 +306,7 @@ def _copy_payload(sd_root, items, product, folder, work, parts=None, progress=No
             res = texcache.deliver_textures(sd_root, product, folder, work, parts, tool=tool, progress=progress,
                                             cancelled=cancelled, log=log, prepared=prepared)
         else:
-            res = texcache.Result(False, "Textures: the 3DS will prepare them the first time.")
+            res = texcache.Result(False, texcache.FIRST_START)
         if data_version:
             if cancelled():
                 raise InterruptedError("cancelled")
@@ -515,6 +515,16 @@ def file_copy_steps(product, outputs):
     return '\n'.join(lines)
 
 
+def which_3dsx(product, targets):
+    """The .3dsx to start; with more than one, the console each is for."""
+    names = [products.package_stem(product, t) + ".3dsx" for t in targets]
+    if len(names) == 1:
+        return names[0]
+    on = ["%s on %s %s" % (name, "an" if products.TARGETS[t][0] in "AEIOU" else "a", products.TARGETS[t])
+          for name, t in zip(names, targets)]
+    return ", or ".join(on)
+
+
 def instructions(product: products.Product, targets, outputs, sd_root=None,
                  saves_result: SaveCopyResult | None = None, save_result: SaveCopyResult | None = None,
                  delivery=None):
@@ -532,8 +542,7 @@ def instructions(product: products.Product, targets, outputs, sd_root=None,
         steps.extend(file_copy_steps(product, outputs).splitlines())
         steps.append('Put the SD card in your 3DS.')
     if "3dsx" in outputs:
-        stems = " or ".join(products.package_stem(product, t) + ".3dsx" for t in targets)
-        steps.append("Open the Homebrew Launcher and start %s." % stems)
+        steps.append("Open the Homebrew Launcher and start %s." % which_3dsx(product, targets))
     if "cia" in outputs:
         steps.append("Install the .cia from %s/cia with FBI, then start it from the HOME Menu." % where)
     steps.append("Press SELECT in-game for display and control options.")

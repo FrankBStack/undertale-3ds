@@ -1420,6 +1420,16 @@ class SaveImportTest(unittest.TestCase):
 # ---------------------------------------------------------------------------------------------------------------------
 
 class CliTest(MusicFixtures):
+    def setUp(self):
+        super().setUp()
+        # The CLI checks its own source first (B1). These tests are about later steps, so they never depend on
+        # whether the checkout running them has Git history or a release descriptor.
+        source = mock.patch.object(app.pipeline, 'release_source', return_value={
+            'kind': 'release', 'public_commit': 'a' * 40,
+            'source_url': 'https://github.com/ethancawse/undertale-3ds/tree/' + 'a' * 40})
+        source.start()
+        self.addCleanup(source.stop)
+
     def test_cli_missing_cia_tools_delivers_3dsx_and_only_its_instructions(self):
         with tempfile.TemporaryDirectory() as tmp:
             tree = SteamTree(tmp)
@@ -1445,7 +1455,9 @@ class CliTest(MusicFixtures):
                     '--work', os.path.join(tmp, 'work'), '--sd', sd]), out=out.append)
             self.assertEqual(rc, 0)
             self.assertTrue(Path(sd, '3ds/undertale-3ds/undertale-3ds-n3ds.3dsx').is_file())
-            self.assertIn(pipeline.CIA_NOT_MADE, out)
+            # The command line says it in its own words (B2): no window buttons, and only once.
+            self.assertEqual(out.count(app.cli_text(pipeline.CIA_NOT_MADE)), 1)
+            self.assertNotIn(pipeline.CIA_NOT_MADE, out)
             self.assertIn('Homebrew Launcher', '\n'.join(out))
             self.assertNotIn('with FBI', '\n'.join(out))
 

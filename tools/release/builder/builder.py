@@ -123,6 +123,18 @@ def probes_for(o):
     return discover.Probes(save_dir=o["save_dir"])
 
 
+def source_line(game):
+    """What the build would say about its source: the release kit's verified link, a source build, or why a build
+    can't start (B1: the dry run used to call a source checkout fine, then every build stopped)."""
+    try:
+        source = pipeline.release_source(pipeline.SOURCE_ROOT, game)
+    except pipeline.BuildFailed as exc:
+        return "Source: CANNOT BUILD. %s" % exc
+    if source.get('kind') == 'source':
+        return pipeline.source_build_text(source)
+    return "Source: release builder for %s; its Legal page shows the release tag." % source['source_url']
+
+
 def dry_run(o, out=print):
     game = o["game"] or "undertale"
     work = o["work"] or pipeline.default_work_dir()
@@ -135,6 +147,7 @@ def dry_run(o, out=print):
     except pipeline.BuildFailed as e:
         ver = "cannot build: %s" % e
     out("Source tree: %s (%s)" % (pipeline.SOURCE_ROOT, ver))
+    out(source_line(game))
     out("")
     out("Steam clients: %s" % (", ".join(probes.roots()) or "none found"))
     copies = discover.find_copies(game, probes)
@@ -170,11 +183,45 @@ def dry_run(o, out=print):
     for line in texcache.data_version_dry_run_lines(products.PRODUCTS[game],
                                                     o["folder"] or (copies[0].folder if copies else None)):
         out(line)
+    if game == "undertale" and "o3ds" in targets:
+        problem = pipeline.sfx_pack_problem()
+        out(pipeline.SFX_PACK_MISSING % problem if problem else "Sound pack for the Old 3DS: made on this PC")
     return 0
 
 
+# --target both, and the second model failed (B7): the first one is fine, and this is how to copy only it.
+BUILT_BEFORE_FAILURE = ("The %s build (%s) finished, but nothing was copied. To copy only it, run the same command "
+                        "with --target %s; most of its work is reused.")
+MODEL = {"n3ds": "New 3DS", "o3ds": "Old 3DS"}
+
+
+# The window's messages name its buttons. The command line has none, so it says what to do there instead (B2).
+CLI_WORDING = (
+    ("Click Try again, or click Copy log to report the error.",
+     "Run the same command to try again, or report the error with the log named below."),
+    ("Click Try again when ready.", "Run the same command again when ready."),
+    ("Click Copy log to report the error, then try again with a repaired builder.",
+     "Report the error with the log named below, then try again with a repaired builder."),
+    ("Untick .cia on Options or set up the .cia tools.",
+     "Leave out --cia, or set up the .cia tools in the builder window first."),
+    ("Click Copy to card to try again.", "Run the same command to copy again."),
+    ("Click Save files to try again.", "Run the same command to save them again."),
+    ("then click Send to pick up where it left off.", "then run the same command to pick up where it left off."),
+    ("then click Send.", "then run the same command again."),
+    ("Click Next to finish copying.", "Run the same command again to finish copying."),
+    ("Click Back, then Next, to check them again.", "Run the same command again to check them again."),
+)
+
+
+def cli_text(text):
+    for window, command_line in CLI_WORDING:
+        text = text.replace(window, command_line)
+    return text
+
+
 def cli(o, out=print):
-    """The wizard's steps without a window. Refusals print the same messages and stop."""
+    """The wizard's steps without a window. Refusals print the same messages, in command-line wording, and stop."""
+    out = (lambda write: lambda text: write(cli_text(text)))(out)
     game = o["game"] or "undertale"
     product = products.PRODUCTS[game]
     work = o["work"] or pipeline.default_work_dir()
@@ -216,6 +263,14 @@ def cli(o, out=print):
 
 
 def _build_and_deliver(o, out, game, product, work, probes, folder, v, parts):
+    # A source that can't build stops before the toolchain checks and the build (B1). A source checkout says so.
+    try:
+        source = pipeline.release_source(pipeline.SOURCE_ROOT, game)
+    except pipeline.BuildFailed as exc:
+        out(str(exc))
+        return 1
+    if source.get('kind') == 'source':
+        out(pipeline.source_build_text(source))
     tc = toolchain.detect(os.path.join(work, "tools", "bin"), roots=[o["devkitpro"]] if o["devkitpro"] else None)
     for c in tc.checks:
         out("  [%s] %s: %s" % ("ok" if c.ok else "--", c.name, c.detail))
@@ -224,6 +279,13 @@ def _build_and_deliver(o, out, game, product, work, probes, folder, v, parts):
         return 1
     outputs = ["3dsx"] + (["cia"] if o["cia"] else [])
     targets = ["n3ds", "o3ds"] if o["target"] == "both" else [o["target"]]
+    shown = set()
+    if game == "undertale" and "o3ds" in targets:
+        problem = pipeline.sfx_pack_problem()
+        if problem:       # Said now, before the long build, and again from the record once the Old build ends.
+            out(pipeline.SFX_PACK_MISSING % problem)
+    if source.get('kind') == 'source':
+        shown.add(pipeline.source_build_text(source))
     arts = []
     for t in targets:
         last = [-1, -1, None]
@@ -239,14 +301,23 @@ def _build_and_deliver(o, out, game, product, work, probes, folder, v, parts):
         except pipeline.BuildFailed as e:
             out(str(e))
             if e.log_path:
+                cause = pipeline.first_error(e.log_path)
+                if cause:
+                    out("What failed: %s" % cause)
                 out("Log: %s" % e.log_path)
+            if t != targets[0]:
+                out(BUILT_BEFORE_FAILURE % (MODEL[targets[0]], targets[0], targets[0]))
             return 1
         arts += a
-        for notice in rec.get('notices', []):
-            out(notice)
         out("Built %s in %.1f s (%d compiler warnings)." % (t, rec["seconds"], rec["compiler_warnings"]))
         for x in a:
             out("  %s  %d bytes  sha256 %s" % (x.path, x.size, x.sha256))
+        # The record's notices (no sound pack, and so on) reach the command line too. The source-build line was
+        # already printed before the toolchain checks.
+        for notice in rec.get("notices", ()):
+            if notice not in shown:
+                shown.add(notice)
+                out(notice)
     saves_res = None
     if o.get('ftp'):
         import ftp_delivery

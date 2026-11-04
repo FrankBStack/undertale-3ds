@@ -499,10 +499,8 @@ def describe(plans):
         if p.keep:
             lines.append("  %s: already prepared (%d pages), kept" % (p.cs.sd_dir, p.cs.pages))
         else:
-            lines.append("  %s: delete %s; write %d of %d pages as .part then rename (%d already there); remove %d "
-                         "files beyond the page count; write %s last (%.1f MB)"
-                         % (p.cs.sd_dir, MARKER, len(p.write_pages), p.cs.pages, p.same_pages, len(p.remove), MARKER,
-                            p.bytes / 1e6))
+            lines.append("  %s: writing %d of %d texture pages (%d already there, %.1f MB)"
+                         % (p.cs.sd_dir, len(p.write_pages), p.cs.pages, p.same_pages, p.bytes / 1e6))
     return lines
 
 
@@ -581,20 +579,32 @@ class Result:
     files: tuple = ()      # only the explicit cache/receipt paths delivered by this operation
 
 
+FIRST_START = "Textures: the 3DS will prepare them the first time the game starts, so that start takes longer."
+
+
+def no_tool_text(message, platform=sys.platform):
+    """What a player reads when this PC can't prepare the textures. The technical reason goes to the log."""
+    if "no C compiler" in message:
+        return FIRST_START + " To prepare them on this PC, install a C compiler (gcc or clang) and copy again."
+    if platform == "win32" or "shipped texprep missing" in message or "pinned SHA-256" in message:
+        return FIRST_START + " The release builder prepares them on the PC."
+    return FIRST_START
+
+
 def deliver_textures(sd_root, product, folder, work, parts=None, tool=None, fs=None, progress=None,
                      cancelled=lambda: False, log=print, run=None, halfart=None, prepared=None):
     """Prepare on the PC and write to the card. Failures to prepare are not errors (the console prepares); a failed
     card write raises OSError like any other copy."""
     tool = tool or find_tool(work, log=log)
     if not tool.ok:
-        return Result(False, "Textures: the 3DS will prepare them the first time (%s)." % tool.message)
+        log("texprep: " + tool.message)
+        return Result(False, no_tool_text(tool.message))
     sets, problems = (prepared if prepared is not None else
                       prepare(tool, product, folder, work, parts, run=run, log=log, halfart=halfart))
     for pr in problems:
         log("texprep: " + pr)
     if not sets:
-        return Result(False, "Textures: the 3DS will prepare them the first time (%s)."
-                      % ("; ".join(problems) or "nothing to prepare"))
+        return Result(False, FIRST_START)
     plans = plan(sd_root, sets)
     need = sum(p.bytes for p in plans)
     free = shutil.disk_usage(sd_root).free
@@ -720,6 +730,10 @@ def parse_data_version(data):
     except UnicodeDecodeError:
         return None
     return (int(m.group(1)), int(m.group(2)), int(m.group(3)), m.group(4), m.group(5)) if m else None
+
+
+# "missing" also means unreadable, or not yet in a copy's fresh staging folder, so it claims nothing about the card.
+VERSION_WHY = {"stale": "the one there is out of date"}
 
 
 @dataclasses.dataclass
@@ -862,15 +876,16 @@ def deliver_data_versions(sd_root, product, folder, work, parts=None, fs=None, l
     try:
         plans = plan_data_versions(sd_root, product, folder, parts, source_root, digest)
     except (OSError, ValueError) as e:
-        return Result(False, "Version check: the 3DS will do it the first time (%s)." % e)
+        log("Version check: %s" % e)
+        return Result(False, "Version check: the 3DS will do it the first time the game starts.")
     if not plans:
-        return Result(False, "Version check: the 3DS will do it the first time.")
+        return Result(False, "Version check: the 3DS will do it the first time the game starts.")
     for p in plans:
-        log("%s: %s" % (p.sd_file, "%s; the 3DS checks it" % p.why if p.skip else "already there, kept" if p.keep
-                        else "%s, write as .part then rename" % p.why))
+        log("%s: %s" % (p.sd_file, "%s; the 3DS checks it" % p.why if p.skip else "already up to date, kept" if p.keep
+                        else "writing it (%s)" % VERSION_WHY[p.why] if p.why in VERSION_WHY else "writing it"))
     if all(p.skip for p in plans):
-        return Result(False, "Version check: the 3DS will do it the first time (the card's data.win is not the "
-                      "copied one).")
+        return Result(False, "Version check: the 3DS will do it the first time the game starts (the card's data.win "
+                      "is not the copied one).")
     os.makedirs(os.path.join(work, "texcache"), exist_ok=True)
     written, kept = write_data_versions(sd_root, plans, fs, os.path.join(work, "texcache"))
     msg = "Version check prepared: %d file(s) written, %d already up to date." % (written, kept)
