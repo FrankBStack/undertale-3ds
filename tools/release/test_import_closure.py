@@ -91,6 +91,8 @@ class ClosureTests(unittest.TestCase):
         self.assertFalse(gate.relevant('tools/aot/selection/typed-deltarune.txt', 'undertale'))
         self.assertFalse(gate.relevant('tools/aot/selection/typed-priority-deltarune-n3ds.txt', 'undertale'))
         self.assertTrue(gate.relevant('tools/aot/selection/typed-priority-deltarune-n3ds.txt', 'deltarune'))
+        self.assertFalse(gate.relevant('tools/aot/selection/typed-undertale-o3ds.txt', 'deltarune'))
+        self.assertTrue(gate.relevant('tools/aot/selection/typed-undertale-o3ds.txt', 'undertale'))
         self.assertFalse(gate.relevant('tools/roomplan/tracks/deltarune.json', 'undertale'))
 
     def test_track_plan_driver_requires_its_default_record_only_for_deltarune(self):

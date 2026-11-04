@@ -502,7 +502,7 @@ SECTIONS
     *(.text.late.utasgore)
     /* Any other late text (round 14 dropped the wildcard ahead of the host table: it placed nothing). Not
        ctr_renderer.c's or z_itemverdict.c's, whose smartcut sections come last (round 17). */
-    *(SORT_BY_NAME(EXCLUDE_FILE (*z_dlghold.o *z_redpix.o *z_labcut.o *ctr_fpsbox.o *ctr_legal.o *ctr_legal_romfs.o *z_colexact.o *z_utwindow.o *z_asrtext* *z_adpcm* *ctr_adpcm_probe.o *source/ctr_audio_system.o *z_knightnew_history.o *source/z_flowcode.o *ctr_data_version.o *z_gogut* *ctr_pixgrid* *z_builderx_review* *z_builderx_new* *z_builderx_old* *z_builderx_receipt* *runner.o *z_loadscreen.o *z_symverdict* *z_smalltext_dr* *z_utstall* *z_sdmigrate* *source/ctr_renderer.o *source/z_itemverdict.o *z_phaseplan* *z_utold_scalar* *source/ctr_benchmark.o *z_sdlat* *vm_builtins.o *z_gamedir* *ctr_flowervramg_promotion.o *ctr_memory.o *ctr_flowervramg_palette.o *ctr_textures.o) .text.late.*))
+    *(SORT_BY_NAME(EXCLUDE_FILE (*z_utlife.o *z_dlghold.o *z_redpix.o *z_labcut.o *ctr_fpsbox.o *ctr_legal.o *ctr_legal_romfs.o *z_colexact.o *z_utwindow.o *z_asrtext* *z_adpcm* *ctr_adpcm_probe.o *source/ctr_audio_system.o *z_knightnew_history.o *source/z_flowcode.o *ctr_data_version.o *z_gogut* *ctr_pixgrid* *z_builderx_review* *z_builderx_new* *z_builderx_old* *z_builderx_receipt* *runner.o *z_loadscreen.o *z_symverdict* *z_smalltext_dr* *z_utstall* *z_sdmigrate* *source/ctr_renderer.o *source/z_itemverdict.o *z_phaseplan* *z_utold_scalar* *source/ctr_benchmark.o *z_sdlat* *vm_builtins.o *z_gamedir* *ctr_flowervramg_promotion.o *ctr_memory.o *ctr_flowervramg_palette.o *ctr_textures.o) .text.late.*))
     /* builderx UT-only adapters, after every round-14 fixed section. DR excludes this object. */
     *z_builderx_review*(.text .text.* .rodata .rodata.*)
     *(.text.h1hole.bxreview)
@@ -1385,6 +1385,41 @@ SECTIONS
        so no earlier late code moves. */
     *(.pacer_share)
     *(.pacer_share_ro)
+    /* weirdshd pinwheel (after pacer C3 (75zq unit 31), merge order, before the repack test sections; DELTARUNE New only,
+       empty elsewhere): the certified pinwheel renderer (ctr_pinwheel.inc, ctr_pinwheel_fast.inc) and its in-text
+       table. Own names bypass every catch-all; appended, so no earlier late code moves. */
+    __weirdshd_pinwheel_start = ABSOLUTE(.);
+    *(.rodata.weirdshd_pinwheel_in_text)
+    *(.text.weirdshd_pinwheel_late)
+    __weirdshd_pinwheel_end = ABSOLUTE(.);
+    /* flowerhw vrgen (after weirdshd pinwheel (75zq unit 34), merge order, before the repack test sections; DELTARUNE
+       New only, empty elsewhere): the tower code forgets a renderer when it goes (vine_new_retain.inc's
+       Vine_rendererGone, through vine_old_observer_compile.py's routing of screensDestroy's tail call). Named outside
+       .text.* so ctr_renderer.o's catch-all leaves it here; appended, so no earlier late code moves. */
+    *(.text_flowerhw_vrgen)
+    /* titancpu L-F (after flowerhw vrgen (75zq unit 35), merge order, before the repack test sections; DELTARUNE New
+       only, empty elsewhere): the fountain mesh's copy with tile reuse and the clip skip (vine_titancpu_lf.inc's
+       Titan_lfMeshRegion, through vine_old_observer_compile.py's routing of fountainMeshRegion's two callers; the
+       old body keeps its place in .text.late.pillar). Named outside .text.* so ctr_renderer.o's catch-all leaves it
+       here; appended, so no earlier late code moves. */
+    *(.text_titancpu_lf)
+    /* omegaflowey pcorder (drawonce rev 3; after titancpu L-F (75zq unit 37), merge order, before the repack test
+       sections; UNDERTALE only, empty in DELTARUNE): utkDrawRoom's mid-pass step in GameMaker 1.4's order (runner.c's
+       end). Named outside .text.* so runner.o's lines above leave it here; appended, so no earlier late code moves. */
+    *(.text_omegaflowey_pcorder)
+    /* utlife A (after omegaflowey pcorder (75zq unit 39), merge order, before the repack test sections; UNDERTALE
+       only, empty in DELTARUNE): Outside Room's inclusive compatibility bounds. Appended, so no earlier late code
+       moves. */
+    *(.text.late.utlife)
+    /* spdmemo (creddodge, after utlife A (75zq unit 40), merge order, before the repack test
+       sections; both games): the speed/direction memo in front of Instance_computeSpeedFromComponents
+       (z_spdmemo.c, reached through --wrap).
+       Named outside .text.late.* so the catch-alls leave it here; appended, so no earlier late code moves. */
+    *(.text_spdmemo)
+    /* ofpoll (creddodge, after spdmemo, merge order, before the repack test sections; both games):
+       CtrOpenFiles_poll's check of the keepers without the lock (ctr_open_files.c's end, reached through --wrap).
+       Named outside .text.* so the catch-alls leave it here; appended, so no earlier late code moves. */
+    *(.text_ofpoll)
     /* repack test install (repacka, 11-02; build.sh repacktest= test builds only, empty in every release build):
        diag/ctr_repack_test.c's code and constants, last, so a test build keeps every late address of the release
        build. Keep these two lines last in late text. */
@@ -2218,6 +2253,14 @@ SECTIONS
        its chain, sealed entries, per-queue GPU-time records and gate (and the trace ring in gpukick-trace
        builds). KM rev 4.1's .bss.cheaplevers_kick_late above keeps its place and size. */
     *(.bss.pacer_km5_late)
+    *(.bss.weirdshd_pinwheel_late)
+    /* omegaflowey pcorder (last, after weirdshd pinwheel (75zq unit 34), merge order; UNDERTALE only): the flag that
+       marks the draw list after a pass that went on in its starting order (runner.c's end; named outside .bss.* so the
+       catch-alls leave it here). */
+    *(.bss_omegaflowey_pcorder)
+    /* spdmemo (creddodge, last, after omegaflowey pcorder (75zq unit 39), merge order; both games): its
+       two entries (z_spdmemo.c; named outside .bss.late.* so the catch-alls leave it here). */
+    *(.bss.spdmemo_late)
     /* 3dsxtool refuses a segment whose size isn't a multiple of 4 ("The segments is not word-aligned!"), and this
        block ends the RW segment: late statics of odd sizes (bools) would end it off a word. */
     . = ALIGN(4);

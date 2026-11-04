@@ -7,6 +7,7 @@
 #include "utils.h"
 #include "json_writer.h"
 #include "collision.h"
+#include "z_utlife.h"
 #include "video.h"
 #include "load_trace.h"
 #include "aot/vm_aot_hooks.h"
@@ -4482,7 +4483,7 @@ static void dispatchOutsideRoomEvents(Runner* runner) {
             } else {
 #endif
 #line 4443
-            InstanceBBox bbox = Collision_computeBBox(runner, inst);
+            InstanceBBox bbox = UTLIFE_OUTSIDE_ROOM_BBOX(runner, inst);
             if (bbox.valid) {
                 outside = (0 > bbox.right || bbox.left > roomWidth || 0 > bbox.bottom || bbox.top > roomHeight);
             } else {
@@ -6560,7 +6561,7 @@ static __attribute__((noinline, section(".text.late.utkill"))) void utkRebuildIf
 #define DSKIP_ON 1
 extern const int32_t utkDskipKey[2] __asm__("utkDskipKey");
 #endif
-
+extern bool utkPcLater; static int32_t utkPcResume(Runner* runner, int32_t i, const DrawKey* last); // pcorder, this file's end
 static __attribute__((noinline, section(".text.late.utkill"))) void utkDrawRoom(Runner* runner) {
     if (DataWin_isVersionAtLeast(runner->dataWin, 2, 0, 0, 0) || arrlen(runner->runtimeLayers) != 0) {
         drawRoom(runner);
@@ -6586,34 +6587,34 @@ static __attribute__((noinline, section(".text.late.utkill"))) void utkDrawRoom(
     while (true) {
         if (runner->drawableListSortDirty || runner->drawableListStructureDirty) {
             run.on = false;
-            UTSW_REBUILD(runner);
-
-            if (i != 0) {
-                // Something created things during draw events! Figure out the new cursor position (drawRoom's way).
-                bool foundSomething = false;
-
-                repeat(arrlen(runner->cachedDrawables), j) {
-                    Drawable* drawable = &runner->cachedDrawables[j];
-
-                    DrawKey drawKey = utkDrawableKey(drawable);
-
-                    int result = utkCompareDrawKeys(&drawKey, &lastProcessedDrawKey);
-
-                    if (result == 0) {
-                        i = (int32_t) j + 1;
-                        foundSomething = true;
-                        break;
-                    }
-
-                    if (result == 1) {
-                        i = (int32_t) j;
-                        foundSomething = true;
-                        break;
-                    }
-                }
-
-                if (!foundSomething) break;
+            if (i == 0) {
+                UTSW_REBUILD(runner);
+            } else {
+                // A draw made an instance or changed a depth: the pass goes on in the list as it began, GameMaker 1.4's
+                // way (pcorder, utkPcResume at this file's end): a new instance goes in at its creation depth and is
+                // drawn this pass only if that is ahead of the cursor; a depth change moves nothing until Draw End is
+                // over. Past the end: nothing is left to draw.
+                i = utkPcResume(runner, i, &lastProcessedDrawKey);
             }
+            //
+            //
+            //
+            //
+            //
+            //
+            //
+            //
+            //
+            //
+            //
+            //
+            //
+            //
+            //
+            //
+            //
+            //
+            // (empty comment lines: the lines after keep their numbers)
 
             drawableCount = arrlen(runner->cachedDrawables);
         }
@@ -6678,8 +6679,8 @@ static __attribute__((noinline, section(".text.late.utkill"))) void utkDrawRoom(
     }
 
     runner->drawDepth = DRAW_DEPTH_NONE; drawableCount = flushPendingDrawDepthChanges(runner, drawableCount);
+    if (utkPcLater) { utkPcLater = false; runner->drawableListStructureDirty = runner->drawableListSortDirty = true; } // pcorder: Draw End reads the instances; then the keep and the sort (a key rewritten at the same depth leaves the keep nothing to flag)
     fireDrawSubtype(runner, runner->cachedDrawables, drawableCount, DRAW_END);
-
     // Draw foreground backgrounds (in front of instances, behind GUI)
     drawGMS1Backgrounds(runner, true);
 }
@@ -7518,3 +7519,125 @@ RESTARTEXACT_LATE void Restartexact_restart(Runner* runner) {
     runner->gameStartFired = true;
     Runner_executeEventForAll(runner, EVENT_OTHER, OTHER_ROOM_START);
 }
+
+#if defined(UTK_PLAIN_RUNS)
+// ===[ pcorder (change omegaflowey, drawonce rev 3 after change parity's native traversal oracle, R156; UNDERTALE, 3DS) ]===
+// GameMaker 1.4 walks a Draw pass in the order the pass began with (parity's native runs, 26 cases, confirmed):
+// - a depth change during Draw moves nothing in the pass: an instance not yet drawn that goes behind the cursor is
+//   still drawn at its old place, one already drawn is not drawn again, one moved ahead is not drawn early;
+// - a new instance goes in at its creation depth in front of that depth's instances, and is drawn this pass only if
+//   that is ahead of the cursor; Draw End sees it (first when it went in at the front);
+// - a destroyed instance is skipped (its entry stays, as here);
+// - Draw End walks the same order; the next frame is sorted by the final depths, the last changed first at a tie.
+// drawRoom's way, which rebuilt and re-sorted the list mid-pass and went on after the saved key, drew an instance
+// twice when its depth went down after its draw (the ending fight's controller, +80 random draws a frame), skipped
+// one moved behind the cursor before its turn, and ran Draw End in the new order. utkPcResume is the mid-pass step
+// for that: the list as it stands, the new instances put in (Instance_create's drawRank -1 marks an instance never in
+// the list), the dust swarm's spans merged again, the flags cleared, and utkPcLater for utkDrawRoom, which marks the
+// list's structure and its sort before Draw End: that pass reads the instances themselves (an instance_change's
+// object), then the keep (Utorder_keep before Draw Post and GUI) takes the new keys and the next frame's sort pass the
+// new depths and keys. The sort flag is set again there because the setter rewrites a key in place on a clean list: a
+// depth that changes and comes back in one Draw leaves an entry with its old depth and a new key, which the keep does
+// not flag (first rev 3 build: the list stayed out of order for hundreds of frames). Where the count of
+// the list's tiles or drawn particle systems changed under it (tile_add, tile_delete, part_system_create or _destroy
+// during Draw) or more than 64 instances are new (a swarm materialized), the old way: the rebuild, the re-sort and the
+// saved key.
+// Code and statics in sections of their own (late_reserve.ld), after every late input already linked.
+#define PCORDER_TEXT __attribute__((noinline, optimize("Os"), section(".text_omegaflowey_pcorder")))
+bool utkPcLater __attribute__((section(".bss_omegaflowey_pcorder,\"aw\",%nobits @")));
+
+// The resume index; the list's length when nothing is left to draw.
+static PCORDER_TEXT int32_t utkPcResume(Runner* runner, int32_t i, const DrawKey* last) {
+    Room* room = runner->currentRoom;
+    Drawable* list = runner->cachedDrawables;
+    int32_t n = (int32_t) arrlen(list);
+    if (runner->drawableListStructureDirty) {
+        // As many tiles and drawn particle systems as the list holds, else the old way. With the same counts every tile
+        // entry's index is in range, and the particle system draw checks its system itself.
+        if (room == nullptr) goto old;
+        uint32_t tiles = 0;
+        ParticleSystem* pool = runner->particleSystemPool;
+        int32_t poolCount = (int32_t) arrlen(pool), parts = 0;
+        repeat(n, j) {
+            if (list[j].type == DRAWABLE_TILE) tiles++;
+            else if (list[j].type == DRAWABLE_PARTICLE_SYSTEM) parts++;
+        }
+        if (tiles != room->tileCount) goto old;
+        repeat(poolCount, p) if (pool[p].used && pool[p].automaticDraw) parts--;
+        if (parts != 0) goto old;
+
+        // The new instances, each in front of its creation depth's instances, in the order they were made (a later one
+        // in front of an earlier one at the same depth). The place is found with a key before every other: the
+        // instance's own key may be newer than a later birth's, after a depth write that came back (GameMaker 1.4
+        // put it in at its birth and moves it after the pass; c26rev R156c F1).
+        Instance** live = runner->instances;
+        int32_t liveCount = (int32_t) arrlen(live), births = 0;
+        repeat(liveCount, k) {
+            if (live[k] == nullptr) goto old;
+            if (live[k]->drawRank == -1) births++;
+        }
+        if (births > 64) goto old;
+        if (births != 0) {
+            arrsetlen(runner->cachedDrawables, n + births);
+            list = runner->cachedDrawables;
+            repeat(liveCount, k) {
+                Instance* inst = live[k];
+                if (inst->drawRank != -1) continue;
+                Drawable b;
+                memset(&b, 0, sizeof b);
+                b.type = DRAWABLE_INSTANCE;
+                b.depth = runner->dataWin->objt.objects[inst->objectIndex].depth;
+                b.instance = inst;
+                b.order = INT32_MIN;
+                b.objectIndex = inst->objectIndex;
+                int32_t at = 0;
+                while (n > at && 0 > utkCompareDrawables(&list[at], &b)) at++;
+                b.order = UTORDER_KEY(inst);
+                memmove(&list[at + 1], &list[at], (size_t) (n - at) * sizeof(Drawable));
+                list[at] = b;
+                n++;
+                inst->drawRank = at; // in the list now (a stale rank, as any after an insert: the checks of a rank hold)
+                if (i > at) i++;
+            }
+        }
+#if defined(UTSW_ON)
+        // The dust swarm's spans, merged again (new pixels in front of their depth's entries, by their keys); the
+        // cursor stays after the same entry (the last one taken is never a span: a span draws no code).
+        int32_t kept = 0;
+        repeat(i, j) if (!UTSW_IS_SPAN(&list[j])) kept++;
+        Utsw_merge(runner);
+        list = runner->cachedDrawables;
+        for (i = 0; kept > 0; i++) if (!UTSW_IS_SPAN(&list[i])) kept--;
+#endif
+    }
+    runner->drawableListSortDirty = false;
+    runner->drawableListStructureDirty = false;
+    utkPcLater = true;
+    return i;
+
+old:
+    // drawRoom's way: the list rebuilt and sorted, the pass on after the saved key
+    UTSW_REBUILD(runner);
+    list = runner->cachedDrawables;
+    n = (int32_t) arrlen(list);
+    repeat(n, j) {
+        DrawKey key = utkDrawableKey(&list[j]);
+        int result = utkCompareDrawKeys(&key, last);
+        if (result == 0) return (int32_t) j + 1;
+        if (result == 1) return (int32_t) j;
+    }
+    return n;
+}
+
+// utkDrawRoom lost its inline resume search (GCC 16.1.0 Release, nm -S: 0x514 -> 0x454 Old, 0x4d0 -> 0x42c New) and is
+// the last function of its section: the padding is subsection 1 of that section, after its code and literal pool, so
+// the section keeps its size and nothing after it moves.
+#if defined(__3DS__) && defined(__GNUC__) && (defined(CTRPORT_TARGET_O3DS) || defined(CTRPORT_TARGET_N3DS))
+#if defined(CTRPORT_TARGET_O3DS)
+#define PCORDER_PAD "192"
+#else
+#define PCORDER_PAD "164"
+#endif
+__asm__(".pushsection .text.late.utkill,\"ax\",%progbits\n.subsection 1\n.space " PCORDER_PAD "\n.popsection\n");
+#endif
+#endif

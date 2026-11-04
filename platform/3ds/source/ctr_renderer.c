@@ -29390,3 +29390,14 @@ __asm__("\t.globl CtrGsfix_yieldAlias\n\t.type CtrGsfix_yieldAlias, %function\n\
 #if defined(CTRPORT_VINE_DIAGNOSTIC_HELPER) && defined(CTRPORT_SHAREBUF)
 #include "ctr_renderer_sharebuf.inc"
 #endif
+
+#ifdef CTRPORT_WEIRDSHD_PINWHEEL
+#include "ctr_pinwheel.inc"
+#endif
+
+// Append only (titancpu L-F, DELTARUNE New): the fountain mesh's copy with tile reuse and the clip skip, compiled in
+// the vine helper pass only, so this file's own code is compiled exactly as without it; vine_old_observer_compile.py
+// routes fountainMeshRegion's two callers to it, and its section is linked last in late text (late_reserve.ld).
+#if defined(CTRPORT_VINE_DIAGNOSTIC_HELPER) && defined(ENABLE_WAD17) && defined(CTRPORT_TARGET_N3DS)
+#include "vine_titancpu_lf.inc"
+#endif

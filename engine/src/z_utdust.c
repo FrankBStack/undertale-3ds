@@ -295,8 +295,8 @@ void Utdust_applyGravity(Instance* inst) {
 }
 
 // Is the instance certainly inside the room for the Outside Room event? Collision_computeBBox's unrotated box, before
-// any rounding, at least 1 pixel inside every edge: then the box the event tests, rounded or not, is inside, since
-// rounding to an integer can't cross an integer edge (the margin also covers any difference in the last bit). When
+// any rounding, with a 2 pixel right/bottom margin: compatibility rounds the near edge, then the scaled width.
+// A 1 pixel margin can round twice to exclusive right/bottom 0 at fractional scales, which is outside. When
 // this says no, the caller works it out in full, as before. It saves the dust the four floor() calls of
 // collision-compatibility rounding and the box's return.
 bool Utdust_insideRoom(Runner* runner, Instance* inst, int32_t roomWidth, int32_t roomHeight) {
@@ -318,5 +318,5 @@ bool Utdust_insideRoom(Runner* runner, Instance* inst, int32_t roomWidth, int32_
     if (left > right) { GMLReal tmp = left; left = right; right = tmp; }
     if (top > bottom) { GMLReal tmp = top; top = bottom; bottom = tmp; }
     // Each test fails for a NaN, which then goes the full way too.
-    return right >= 1.0 && (GMLReal) (roomWidth - 1) >= left && bottom >= 1.0 && (GMLReal) (roomHeight - 1) >= top;
+    return right >= 2.0 && (GMLReal) (roomWidth - 1) >= left && bottom >= 2.0 && (GMLReal) (roomHeight - 1) >= top;
 }

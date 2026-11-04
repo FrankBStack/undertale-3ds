@@ -155,6 +155,7 @@ file(GLOB ENGINE_SOURCES "${ENGINE_DIR}/src/*.c")
 # drhitbox is appended explicitly, on the proved DR path only.
 list(REMOVE_ITEM ENGINE_SOURCES "${ENGINE_DIR}/src/z_drhitbox.c")
 list(REMOVE_ITEM ENGINE_SOURCES "${ENGINE_DIR}/src/z_colexact.c")
+list(REMOVE_ITEM ENGINE_SOURCES "${ENGINE_DIR}/src/z_utlife.c")
 # loop.c is the desktop main loop; source/main.c replaces it.
 list(REMOVE_ITEM ENGINE_SOURCES "${ENGINE_DIR}/src/loop.c")
 # Allocation helpers are cold; link them last to keep new code out of the
@@ -769,6 +770,11 @@ endif()
 # DR Old Flowery worst frames 13-70 ms lower). Text and the 4 KiB set phase do not move; only DELTARUNE Old's
 # .rodata, .data, .bss and TLS move, by one whole page. DR Old's linear memory is at its 32 MB cap, so the 4 KiB
 # comes off the heap (.3dsx 25,536 -> 25,532 KB; installed 80 MB CIA about 39,880 -> 39,876 KB).
+# zq27 DR New pages (review decision 2026-11-04, one reserve-only unit composed ahead of its users): DELTARUNE New four
+# more pages, 0x62000. Frozen 75zq27 left 4,464 B against weirdshd production-ON 5,016 B (its own page folds into
+# these), flowerhw palpre (palfast + palpre) 7,040 B, flowerhw vrgen 320 B and flowerhw afill ~3.5-4.5 KB (an
+# estimate): about 4-5 KB are left after all of them. Late constants keep their page. Text and the 4 KiB set phase
+# do not move; only DELTARUNE New's .rodata, .data, .bss and TLS move, by four whole pages (linear -16 KB).
 # bubblecheck test builds (CTRPORT_BUBBLE_CHECK, never Release): four more pages for the checker, which is late code
 # with the rest of z_smalltext.c. Added ahead of the game's own value below, which then replaces the placeholder.
 if(CTRPORT_BUBBLE_CHECK)
@@ -779,7 +785,7 @@ if(CTRPORT_GAME STREQUAL "deltarune" AND CTRPORT_TARGET STREQUAL "o3ds")
     string(REPLACE "/* LATE_TEXT_RESERVE */ 0x30000" "0x44000"
            CTRPORT_LATE_LD_TEXT "${CTRPORT_LATE_LD_TEXT}")
 elseif(CTRPORT_GAME STREQUAL "deltarune")
-    string(REPLACE "/* LATE_TEXT_RESERVE */ 0x30000" "0x5E000"
+    string(REPLACE "/* LATE_TEXT_RESERVE */ 0x30000" "0x62000"
            CTRPORT_LATE_LD_TEXT "${CTRPORT_LATE_LD_TEXT}")
     string(REPLACE "/* TEST_RODATA_RESERVE */ 0x2000" "0x4000"
            CTRPORT_LATE_LD_TEXT "${CTRPORT_LATE_LD_TEXT}")
@@ -859,7 +865,12 @@ else()
     # within about 4-8 KiB of the linear floor that sheds sound effects and tiles. At 59,092 that shed evicts one more
     # tile (0.1 MB) than at 59,100 (UT10 capped twins; the tile is not loaded again in that session). Each further Old
     # page costs a tile there unless linear memory grows (memsplit's 19 / 39 split is the clean fix).
-    set(ctrport_ut_late 0x69000)
+    # New pages 4 + 5 (lead GO 2026-11-04, 75zq unit 38): New 0x6B000 (GOG 0x6D000). After pcorder New has 1,520 B
+    # left against rngexact 1,556, thinart ~1,460-1,576, loadgame 688, creddodge speed memo 260 and utlife A 88
+    # (4,168 B firm, ~4.9 KB with utlife B and offdraw early-destroy): one page would leave ~700 B. The same
+    # whole-page move: text does not move; only New's .rodata, .data, .bss and TLS move, by two whole pages (New's
+    # heap and linear about 4 KiB less each of 57,268 KB).
+    set(ctrport_ut_late 0x6B000)
     if(CTRPORT_TARGET STREQUAL "o3ds")
         set(ctrport_ut_late 0x76000)
     endif()
@@ -1451,6 +1462,11 @@ option(CTRPORT_TYPED_CENSUS "typedaot census counters (prototype)" OFF)
 if(CTRPORT_TYPED_CENSUS)
     target_compile_definitions(ctrport PRIVATE CTRPORT_TYPED_CENSUS)
 endif()
+# spdcount (change creddodge, build.sh "spdcount"): per-frame [spd] counts of the speed/direction memo. Test only.
+option(CTRPORT_SPDCOUNT "creddodge: per-frame speed/direction memo counts in log.txt (test builds only)" OFF)
+if(CTRPORT_SPDCOUNT)
+    target_compile_definitions(ctrport PRIVATE CTRPORT_SPDCOUNT)
+endif()
 option(CTRPORT_TYPED_FRAMELOG "typedaot: per-frame step/draw log for matched-frame A/B (prototype)" OFF)
 if(CTRPORT_TYPED_FRAMELOG)
     target_compile_definitions(ctrport PRIVATE CTRPORT_TYPED_FRAMELOG)
@@ -1490,6 +1506,11 @@ target_link_options(ctrport PRIVATE
     -Wl,--wrap=GSPGPU_SaveVramSysArea,--wrap=GSPGPU_ImportDisplayCaptureInfo,--wrap=GSPGPU_ReleaseRight,--wrap=GSPGPU_AcquireRight,--wrap=gxCmdQueueWait)
 # ctr_watchdog.c records which thread holds newlib's heap lock for hang reports.
 target_link_options(ctrport PRIVATE -Wl,--wrap=__malloc_lock,--wrap=__malloc_unlock)
+# spdmemo (change creddodge): z_spdmemo.c keeps the last two speed/direction results in front of the engine function.
+target_link_options(ctrport PRIVATE -Wl,--wrap=Instance_computeSpeedFromComponents)
+# ofpoll (change creddodge): ctr_open_files.c's end looks at the keepers without the lock before CtrOpenFiles_poll
+# takes it, so a frame with nothing to shed never waits on a thread that holds it.
+target_link_options(ctrport PRIVATE -Wl,--wrap=CtrOpenFiles_poll)
 # Timestamp logs from before libctru service/heap setup, retaining its r0 argument.
 target_link_options(ctrport PRIVATE -Wl,--wrap=__libctru_init)
 # ctr_frame_pacer.c holds citro3d's screen flips for the vblank that ends each frame's slot.
@@ -3151,6 +3172,13 @@ if(CTRPORT_GAME STREQUAL "undertale")
     target_link_options(ctrport PRIVATE -Wl,--wrap=Btnprompt_registerAll)
 endif()
 
+# utlife: Outside Room's UT compatibility bounds; absent from DR builds.
+if(CTRPORT_GAME STREQUAL "undertale")
+    target_sources(ctrport PRIVATE "${ENGINE_DIR}/src/z_utlife.c")
+    set_source_files_properties("${ENGINE_DIR}/src/z_utlife.c" PROPERTIES
+        COMPILE_OPTIONS "-Os;-fno-merge-constants")
+endif()
+
 # colexact: append the new bbox correction object, preserving earlier weak helpers.
 if(CTRPORT_GAME STREQUAL "undertale")
     if(CMAKE_BUILD_TYPE STREQUAL "Release" AND NOT CTRPORT_PROFILE AND NOT CTRPORT_HEAP_PROFILE AND NOT CTRPORT_FREEWINS)
@@ -3378,3 +3406,5 @@ if(CTRPORT_GAME STREQUAL "deltarune")
         APPEND PROPERTY OBJECT_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/../../tools/buildcache/drhitbox_compile.py")
     target_link_options(ctrport PRIVATE -Wl,--wrap=Colflip_registerAll,--wrap=Colflip14_scanPixels)
 endif()
+
+include("${CMAKE_CURRENT_SOURCE_DIR}/pinwheel.cmake")

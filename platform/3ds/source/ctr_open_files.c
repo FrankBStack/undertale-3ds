@@ -145,15 +145,17 @@ static int shedOwn(void) {
     Thread self = threadGetCurrent();
     for (int i = 0; KEEPERS_MAX > i; i++) {
         LightLock_Lock(&lock);
-        Keeper k = keepers[i];
-        bool run = k.used && k.pending && k.thread == self;
+        // Field copies, not a whole-Keeper copy: seq is stored unlocked by its owner thread (R172b).
+        void (*shed)(void*) = keepers[i].shed;
+        void* owner = keepers[i].owner;
+        bool run = keepers[i].used && keepers[i].pending && keepers[i].thread == self;
         if (run) {
-            keepers[i].pending = false;
-            keepers[i].seq++;
+            __atomic_store_n(&keepers[i].pending, false, __ATOMIC_RELAXED); // read unlocked by __wrap_CtrOpenFiles_poll
+            __atomic_store_n(&keepers[i].seq, (uint8_t) (keepers[i].seq + 1), __ATOMIC_RELAXED); // racefixShed reads it unlocked
         }
         LightLock_Unlock(&lock);
         if (!run) continue;
-        k.shed(k.owner);
+        shed(owner);
         __atomic_store_n(&keepers[i].seq, (uint8_t) (keepers[i].seq + 1), __ATOMIC_RELEASE); // its thread's own byte
         sheds++;
     }
@@ -180,10 +182,10 @@ __attribute__((noinline)) static unsigned askToShed(bool own, ShedRequest* req) 
         Keeper* k = &keepers[i];
         if (!k->used) continue;
         if (k->thread == self && !own) continue;
-        k->pending = true;
+        __atomic_store_n(&k->pending, true, __ATOMIC_RELEASE); // pairs with __wrap_CtrOpenFiles_poll's acquire
         // A shed running now (odd) may have started too early to see this
         // request: then the one after it.
-        uint8_t seq = k->seq;
+        uint8_t seq = __atomic_load_n(&k->seq, __ATOMIC_RELAXED); // its thread's shedOwn stores it unlocked
         req->need[i] = seq + 2 + (seq & 1);
         asked |= 1u << i;
         if (k->thread == self) continue;
@@ -360,7 +362,17 @@ int CtrOpenFiles_addKeeper(void (*shed)(void* owner), void (*wake)(void* owner),
         // last had this slot (removed within its 150 ms) then waits it out,
         // as it would for a removed keeper anyway, or stops one wait early
         // if its need was past 128.
-        keepers[i] = (Keeper) { .shed = shed, .wake = wake, .owner = owner, .thread = threadGetCurrent(), .used = true };
+        // Field by field (change creddodge ofpoll): __wrap_CtrOpenFiles_poll reads thread, pending and used without
+        // the lock, so those are atomic stores, used last.
+        Thread self = threadGetCurrent();
+        Keeper* k = &keepers[i];
+        k->shed = shed;
+        k->wake = wake;
+        k->owner = owner;
+        __atomic_store_n(&k->seq, (uint8_t) 0, __ATOMIC_RELAXED);
+        __atomic_store_n(&k->thread, self, __ATOMIC_RELAXED);
+        __atomic_store_n(&k->pending, false, __ATOMIC_RELAXED);
+        __atomic_store_n(&k->used, true, __ATOMIC_RELAXED);
         id = i;
     }
     LightLock_Unlock(&lock);
@@ -370,7 +382,7 @@ int CtrOpenFiles_addKeeper(void (*shed)(void* owner), void (*wake)(void* owner),
 void CtrOpenFiles_removeKeeper(int id) {
     if (0 > id || KEEPERS_MAX <= id) return;
     LightLock_Lock(&lock);
-    keepers[id].used = false;
+    __atomic_store_n(&keepers[id].used, false, __ATOMIC_RELAXED); // read unlocked by __wrap_CtrOpenFiles_poll
     LightLock_Unlock(&lock);
 }
 
@@ -438,3 +450,24 @@ void CtrOpenFiles_log(const char* where, bool list) {
     if (0 < u) logInfo("Files:   and %d more not listed\n", u);
 }
 
+
+// change creddodge ofpoll (late text): every CtrOpenFiles_poll (main's each frame, and the loader, tile reader and
+// audio opener threads') looks at the keepers without the lock first and goes on to shedOwn only when one of the
+// calling thread's keepers is pending. shedOwn took the lock once a keeper, every frame, and on the o2ds the main
+// thread waited 19-22 ms there for an audio thread preempted while holding it (creddodge bfprobe, 11-04). Only
+// shedOwn clears `pending`, under the lock, after it checks it again, so this check cannot shed early or twice; a
+// flag set after this read is seen at the thread's next poll, as one set just after the poll always was. Every
+// write of the three fields read here is an atomic store (askToShed's request a release store, which this acquire
+// pairs with; the others under the lock), so the unlocked reads race with no plain access (review R172 F1). Reached
+// through --wrap; the real poll is unchanged.
+void __real_CtrOpenFiles_poll(void);
+__attribute__((optimize("Os"), section(".text_ofpoll"))) void __wrap_CtrOpenFiles_poll(void) {
+    Thread self = threadGetCurrent();
+    for (int i = 0; KEEPERS_MAX > i; i++) {
+        if (!__atomic_load_n(&keepers[i].pending, __ATOMIC_ACQUIRE)) continue;
+        if (__atomic_load_n(&keepers[i].used, __ATOMIC_RELAXED) && __atomic_load_n(&keepers[i].thread, __ATOMIC_RELAXED) == self) {
+            __real_CtrOpenFiles_poll();
+            return;
+        }
+    }
+}

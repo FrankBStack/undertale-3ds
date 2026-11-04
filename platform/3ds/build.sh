@@ -135,7 +135,8 @@
 # Typed regions (tools/aot/typed.py) are on by default wherever "aot" generates the code. For
 # DELTARUNE ("typed=all") typed.py makes them in every code entry the AOT compiles, wherever its rules accept a region,
 # from the player's data. For UNDERTALE the loops of the code entries listed in tools/aot/selection/typed-undertale.txt
-# run as typed C code. "typed=<list>" takes any other list. "typed=off" builds without them, generating into
+# run as typed C code, or those of typed-undertale-<target>.txt where that file exists (UNDERTALE Old: the credits
+# bullets' Draw, creddodge lever 2). "typed=<list>" takes any other list. "typed=off" builds without them, generating into
 # build/aot-<game>-<target>[-chapters]-tyoff/ and building into build/3ds-<game>-<target>[-single]-tyoff/. With
 # "aot=<dir>" they are off unless "typed" is given (the directory then needs prepare.py --typed's aot_typed.c), and that
 # build goes into -aot-ty/. "typed-stats" also counts each region's entries, guard failures, hand-overs and exits for
@@ -204,6 +205,7 @@ memcap=        # KB, empty: all the system grants
 openh264=ON
 typed_census=OFF
 typed_framelog=OFF
+spdcount=OFF  # spdcount (change creddodge, test word): per-frame [spd] counts of the speed/direction memo
 typed=         # typed AOT regions: ON, OFF, or empty: ON where "aot" generates the code
 typed_list=    # their selection list or "all"; empty: all for DELTARUNE, tools/aot/selection/typed-undertale.txt
 typed_stats=OFF
@@ -348,6 +350,7 @@ for arg in "$@"; do
         ppforce) ppforce=ON ;;
         typed-census) typed_census=ON ;;
         typed-framelog) typed_framelog=ON ;;
+        spdcount) spdcount=ON ;;
         typed) typed=ON ;;
         typed=off) typed=OFF ;;
         typed=*) typed=ON; typed_list=${arg#typed=} ;;
@@ -463,6 +466,9 @@ fi
 if [ "$typed_framelog" = ON ]; then
     build="$build-ft"
 fi
+if [ "$spdcount" = ON ]; then
+    build="$build-spdcount"
+fi
 if [ "$typed_stats" = ON ] || [ -n "$typed_stress" ]; then
     if [ "$typed" != ON ]; then
         echo "typed-stats and typed-stress=<n> need typed" >&2
@@ -473,7 +479,9 @@ typed_suffix=  # of the build and generated-code folders: -tyoff without typed r
 if [ "$typed" = ON ]; then
     if [ "$aot_mode" = dir ]; then typed_suffix=-ty; fi
     if [ -z "$typed_list" ]; then
-        if [ "$game" = deltarune ]; then typed_list=all; else typed_list="$repo/tools/aot/selection/typed-$game.txt"; fi
+        if [ "$game" = deltarune ]; then typed_list=all
+        elif [ -f "$repo/tools/aot/selection/typed-$game-$target.txt" ]; then typed_list="$repo/tools/aot/selection/typed-$game-$target.txt"
+        else typed_list="$repo/tools/aot/selection/typed-$game.txt"; fi
     fi
     if [ "$typed_stats" = ON ]; then build="$build-tystats"; fi
     if [ -n "$typed_stress" ]; then build="$build-tystress$typed_stress"; fi
@@ -698,6 +706,14 @@ aot_warn() {
 source "$here/python.sh"
 release_windows_profile_env
 release_find_python
+# Keep native support and generated event bindings in agreement. Other targets
+# retain their original generated code and native image.
+if [ "$game" = deltarune ] && [ "$target" = n3ds ] &&
+    { [ -n "$chapters" ] || { [ "$aot_mode" = dir ] && [ -f "$aot_dir/aot_modules.txt" ]; }; }; then
+    export CTRPORT_WEIRDSHD_PINWHEEL="${CTRPORT_WEIRDSHD_PINWHEEL:-1}"
+else
+    export CTRPORT_WEIRDSHD_PINWHEEL=0
+fi
 python_executable=$(release_python_executable)
 # prepare.py checks the same version table before using even an up-to-date AOT
 # result. Check non-AOT/custom-code builds too, without generating anything.
@@ -769,6 +785,12 @@ elif [ "$aot_mode" = dir ]; then
 elif [ "$aot_stress" = ON ]; then
     echo "aot-stress needs aot=<dir>" >&2
     exit 2
+fi
+
+# Preparation may continue without game data. Only chapter modules can call
+# the native event wrappers; single-AOT and interpreted builds leave them off.
+if [ -z "$aot_dir" ] || [ ! -f "$aot_dir/aot_modules.txt" ]; then
+    export CTRPORT_WEIRDSHD_PINWHEEL=0
 fi
 
 # UNDERTALE's battle-grid runs: private build input in both AOT and interpreted builds.
@@ -1141,7 +1163,7 @@ cmake -S "$here" -B "$build" -G "Unix Makefiles" \
     -DCTRPORT_FLOWERHW_TPROF="$towerprof" -DCTRPORT_FLOWERHW_FORCE="$towerforce" \
     -DCTRPORT_FLOWERHW_L2="$ppl2" -DCTRPORT_FLOWERHW_PPFORCE="$ppforce" \
     "${input_cmake[@]}" \
-    -DCTRPORT_TYPED_CENSUS="$typed_census" -DCTRPORT_TYPED_FRAMELOG="$typed_framelog" \
+    -DCTRPORT_TYPED_CENSUS="$typed_census" -DCTRPORT_TYPED_FRAMELOG="$typed_framelog" -DCTRPORT_SPDCOUNT="$spdcount" \
     -DCTRPORT_TYPED_AOT="$typed" -DCTRPORT_TYPED_STATS="$typed_stats" -DCTRPORT_TYPED_STRESS="$typed_stress" \
     ${aot_region:+-DCTRPORT_AOT_REGION_MB="$aot_region"}
 if [ -n "$launcher" ]; then

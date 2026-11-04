@@ -1516,6 +1516,15 @@ startGame:
 
         CtrWatchdog_mark("present"); FW_MARK(8);
         CtrRenderer_endFrame(renderer); FW_MARK(9);
+#ifdef CTRPORT_SPDCOUNT
+        {
+            extern uint32_t ctrSpdCalls, ctrSpdHits, ctrSpdHits2, ctrSpdSkip;
+            if (ctrSpdCalls) logInfo("[spd] f %ld calls %lu hits %lu hits2 %lu skip %lu\n", (long) runner->frameCount, (unsigned long) ctrSpdCalls,
+                                     (unsigned long) ctrSpdHits, (unsigned long) ctrSpdHits2, (unsigned long) ctrSpdSkip);
+            ctrSpdCalls = ctrSpdHits = ctrSpdHits2 = ctrSpdSkip = 0;
+        }
+#endif
+#line 1519
         if (benchRunning) CtrBench_endFrameTimed(stepMs, drawMs, frameSkipped); FW_MARK(10);
         if (firstFramePending && !frameSkipped && !roomChanging) {
             firstFramePending = false;

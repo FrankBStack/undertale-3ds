@@ -33,7 +33,8 @@ LATE_LANES = {'perfflowery': re.compile(r'^\.(?:text|rodata|data|bss)\.late\.per
                                       r'|^\.text_flowerhw_tail$|^\.(?:text|rodata|bss)\.tshare_late$'
                                       r'|^\.(?:text|bss)\.titancpu_late$|^\.text\.titancpu_tail$'
                                       r'|^\.(?:text|rodata|bss)\.sharebuf(?:_g2)?_late$'
-                                      r'|^\.text_knightgpu_dspe$|^\.(?:text|bss)_titancpu_g2log$')}
+                                      r'|^\.text_knightgpu_dspe$|^\.(?:text|bss)_titancpu_g2log$'
+                                      r'|^\.text_flowerhw_vrgen$|^\.text_titancpu_lf$')}
 sha = lambda text: hashlib.sha256(text.encode()).hexdigest()
 
 

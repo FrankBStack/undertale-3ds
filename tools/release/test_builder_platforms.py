@@ -480,7 +480,7 @@ class PipelinePlatformTests(unittest.TestCase):
         keep = ("engine/src/aot/vm_aot_hooks.h", "engine/src/cli/state_hash_reach.inc",
                 "engine/src/physics/disabled/physics_engine.c", "platform/3ds/source/ctr_argui.c",
                 "platform/3ds/bench_placeholder.S.in", "platform/3ds/bench/drawskip_undertale.txt",
-                "tools/aot/typed.py", "tools/aot/selection/typed-undertale.txt",
+                "tools/aot/typed.py", "tools/aot/selection/typed-undertale.txt", "tools/aot/selection/typed-undertale-o3ds.txt",
                 "tools/analysis/vine_old_observer_compile.py", "tools/analysis/vine_old_parent.py",
                 "tools/analysis/vine_extract.py")
         omit = ("engine/cmake/toolchains/PS3.cmake", "engine/src/loop.c", "engine/src/audio/al.c",

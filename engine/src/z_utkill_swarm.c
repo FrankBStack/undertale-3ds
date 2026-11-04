@@ -1248,14 +1248,14 @@ static void swStripSteps(Runner* runner) {
     if (blocked && gone != 0) swUnprovenAt(runner, "room change in the Step pass", gone);
 }
 
-// dispatchOutsideRoomEvents' full test (Collision_computeBBox), for a pixel the fast test can't place inside the room.
+// dispatchOutsideRoomEvents' inclusive UT test, for a pixel the fast test can't place inside the room.
 static bool swOutside(Runner* runner, const UtswPixel* p, int32_t roomWidth, int32_t roomHeight) SW_COLD;
 static bool swOutside(Runner* runner, const UtswPixel* p, int32_t roomWidth, int32_t roomHeight) {
     Instance* inst = swDraw;
     inst->x = p->x;
     inst->y = p->y;
     InstanceBBox bbox = Collision_computeBBox(runner, inst);
-    if (bbox.valid) return (0 > bbox.right || bbox.left > roomWidth || 0 > bbox.bottom || bbox.top > roomHeight);
+    if (bbox.valid) return (0 >= bbox.right || bbox.left > roomWidth || 0 >= bbox.bottom || bbox.top > roomHeight);
     return (0 > inst->x || inst->x > roomWidth || 0 > inst->y || inst->y > roomHeight);
 }
 
@@ -1338,7 +1338,7 @@ void Utsw_motion(Runner* runner) {
             if (left > right) { GMLReal tmp = left; left = right; right = tmp; }
             if (top > bottom) { GMLReal tmp = top; top = bottom; bottom = tmp; }
             // Each test fails for a NaN, which then goes the full way too.
-            inside = right >= 1.0 && lastX >= left && bottom >= 1.0 && lastY >= top;
+            inside = right >= 2.0 && lastX >= left && bottom >= 2.0 && lastY >= top;
         }
         bool outside = !inside && swOutside(runner, p, roomWidth, roomHeight);
         if (outside && !p->outsideRoom) {

@@ -1,0 +1,4 @@
+# names only. Typed AOT tier (tools/aot/typed.py, gmlaot.py --typed) for UNDERTALE Old (o3ds): build.sh uses this
+# list in place of typed-undertale.txt for that target. "<data.win folder> <code entry>" per line.
+# creddodge lever 2: the credits bullets' Draw as typed straight-line regions (typed.py UT_EFFECTS).
+root gml_Object_obj_creditbullet_Draw_0 0650-08E8 compact=0834-08E8 pad=1356

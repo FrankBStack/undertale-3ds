@@ -170,6 +170,26 @@ TITAN_EFFECTS = {
 }
 TITAN_EFFECTS_ARGS = {"ds_list_size": 1, "ds_list_find_value": 2}
 
+# More builtins of the EFFECTS kind, for UNDERTALE (WAD16) only (creddodge lever 2: the credits bullets' Draw, listed in
+# tools/aot/selection/typed-undertale-o3ds.txt). Each read in engine/src/vm_builtins.c as the ones above: none runs GML,
+# reads or writes a GML variable, creates or destroys an instance or raises a GML exception, and builtin_audit.py passes
+# all five. No other UNDERTALE typed region calls them, and DELTARUNE never sees them.
+UT_EFFECTS = {
+    # with a renderer, renderer->drawColor = RValue_toColour(args[0]); RValue_makeUndefined
+    "draw_set_color": ("effect", (), ("draw",), None),
+    # with a renderer, renderer->drawFont = RValue_toInt32(args[0]); RValue_makeUndefined
+    "draw_set_font": ("effect", (), ("draw",), None),
+    # with a renderer, renderer->drawHalign = RValue_toInt32(args[0]); RValue_makeUndefined
+    "draw_set_halign": ("effect", (), ("draw",), None),
+    # with a renderer: RValue_toReal of args 0, 1, 3, 4 and 5, borrowArgString of args[2] (freed after), then
+    # TextUtils_preprocessGmlTextIfNeeded and the renderer's drawText with the draw state; RValue_makeUndefined
+    "draw_text_transformed": ("effect", ("draw",), ("target",), None),
+    # REQUIRE_ARGC_AT_LEAST 7 (else RValue_makeReal(noone)); RValue_toReal/RValue_toInt32 of the arguments, then the
+    # target's instances (a snapshot pushed and popped) tested by bbox and mask; RValue_makeReal of an id or noone
+    "collision_line": ("pure", ("instance",), (), "R"),
+}
+UT_EFFECTS_ARGS = {"draw_set_color": 1, "draw_set_font": 1, "draw_set_halign": 1, "draw_text_transformed": 6}
+
 
 def effect_of(em, name):
     """(EFFECTS entry or None, arguments the builtin reads without checking argCount) of a builtin in em's build."""
@@ -177,6 +197,8 @@ def effect_of(em, name):
         return EFFECTS[name], EFFECTS_ARGS.get(name, 0)
     if name in TITAN_EFFECTS and titan_loops(em):
         return TITAN_EFFECTS[name], TITAN_EFFECTS_ARGS.get(name, 0)
+    if name in UT_EFFECTS and em.dw.wad == 16:
+        return UT_EFFECTS[name], UT_EFFECTS_ARGS.get(name, 0)
     return None, 0
 
 # Builtin array variables an inlined script may read with a constant index, on self or the builtin scope (what
@@ -222,10 +244,11 @@ class Val:
     0; inv: the same value at every execution within one region entry; n: for a "v" plain number, a GMLReal C
     expression already holding AOT_NUM of it (computed once an entry), else None. A scalar is always an RValue of its
     type with gmlStackType g, no asset tag, nothing owned."""
-    __slots__ = ("k", "c", "g", "t", "a0", "inv", "n", "kv")
+    __slots__ = ("k", "c", "g", "t", "a0", "inv", "n", "kv", "key")
 
-    def __init__(self, k, c, g=None, t=None, a0=False, inv=False, n=None, kv=None):
+    def __init__(self, k, c, g=None, t=None, a0=False, inv=False, n=None, kv=None, key=None):
         self.k, self.c, self.g, self.t, self.a0, self.inv, self.n, self.kv = k, c, g, t, a0, inv, n, kv
+        self.key = key   # the variable an untyped value was read from (infer's UNDERTALE pass-through), else None
         if k in ("r", "i", "b"):
             self.t, self.a0 = {"r": "R", "i": "I", "b": "B"}[k], True
 
@@ -447,7 +470,24 @@ def select_regions(em, report, name):
                          sum(1 for k in r.keys if r.entry[k][0] is not None),
                          " ".join(sorted(set(r.builtins.values()))) or "none", " ".join("%04X" % t for t in r.exits)))
     chosen += straight_regions(em, succs, sorted(heads.items()), chosen, report, name)
+    opt = options(getattr(em.dw, "folder", ""), name)
+    if opt is not None and opt["spans"] is not None:
+        kept = [r for r in chosen if any(lo <= min(r.lo, r.site) and r.hi <= hi for lo, hi in opt["spans"])]
+        for r in chosen:
+            if r not in kept:
+                report.append("typed %s: region %04X-%04X (%s) left out: outside the list's ranges" % (name, r.lo, r.hi, r.name))
+        chosen = kept
+    for r in chosen:
+        if compact(opt, r):
+            if not r.straight:
+                raise SystemExit("typed %s: compact names a loop region %04X-%04X" % (name, r.lo, r.hi))
+            report.append("typed %s: compact region %04X-%04X: its generated code left out" % (name, r.lo, r.hi))
     return sorted(chosen, key=lambda r: r.lo)
+
+
+def compact(opt, r):
+    """Whether the list option compact covers region r (opt: options())."""
+    return opt is not None and opt["compact"] is not None and any(lo <= r.lo and r.hi <= hi for lo, hi in opt["compact"])
 
 
 def straight_regions(em, succs, loops, chosen, report, name):
@@ -646,6 +686,7 @@ class Gen:
         self.pre_names = set()
         self.inl = None   # while a script call's body is being inlined: (Call address, operand stack before it)
         self.inl_chain = []   # the scripts being inlined, outermost first
+        self.numeric = set()   # variables whose untyped entry value an operation needs as a number (infer)
 
     def hoist(self, name, lines):
         if name not in self.pre_names:
@@ -742,6 +783,8 @@ class Gen:
         isn't proven."""
         if v.num():
             return v
+        if v.key is not None:
+            self.numeric.add(v.key)
         if v.k != "v" or v.t == "B":
             raise Unsupported("arithmetic on a bool at %04X" % addr)
         self.deopt(addr, before, "!vmIsPlainNumber(%s.type)" % v.c)
@@ -870,10 +913,10 @@ class Gen:
                 num = None
                 if t == "N" and a0:
                     num = self.hoist("nw%d" % i, ["    const GMLReal nw%d = AOT_NUM(&w%d);" % (i, i)])
-                S.append(Val("v", w, None, t, a0, inv, num))
+                S.append(Val("v", w, None, t, a0, inv, num, key=k if t is None else None))
             else:   # the weak copy pushVar makes
                 e("RValue %s = v%d; %s.ownsReference = false; %s.gmlStackType = %d;" % (n, i, n, n, T_VAR))
-                S.append(Val("v", n, None, t, a0, inv))
+                S.append(Val("v", n, None, t, a0, inv, key=k if t is None else None))
             return st, True
         elif a in r.writes:
             k = r.writes[a]
@@ -1121,6 +1164,8 @@ class Gen:
             raise Unsupported("Conv %02X at %04X" % (key, a))
         n = self.tmp()
         if x.k == "v":   # vmConvFast on a copy, else handleConv
+            if x.key is not None:
+                self.numeric.add(x.key)
             e("RValue %s = %s;" % (n, x.c))
             self.deopt(a, before, "!vmConvFast(&%s, 0x%02X)" % (n, key))
             e("%s.gmlStackType = %d;" % (n, t2))
@@ -1469,25 +1514,39 @@ Gen.retag = _retag
 Gen.inline_body = _inline_body
 
 
+def settle(r):
+    """Runs the walk from r.entry until the label states settle: (label states, the variables used as numbers)."""
+    entry = State([], dict(r.entry))
+    states, numeric = {}, set()
+    for _ in range(50):
+        g = Gen(r, states, False)
+        g.run(entry)
+        numeric |= g.numeric
+        if not g.changed:
+            return states, numeric
+    raise Unsupported("types do not settle")
+
+
 def infer(r):
     """Runs the walk until the label states settle (Unsupported for anything the tier can't type) and keeps them."""
     r.entry = {}
+    # UNDERTALE (WAD16): a variable whose value on entry only reaches builtin arguments, stores or truth tests (the
+    # credits bullets' text, a string) is not guarded as a number: a first walk with every variable untyped finds the
+    # ones some operation needs as a number (Gen.ensure_num, Gen.conv), and only those are guarded. Either way is
+    # exact (an untyped value is tested where it is used, handing over as the interpreter would): this only lets a
+    # region run when such a variable holds a string. DELTARUNE regions are guarded as before.
+    numeric = None
+    if r.em.dw.wad == 16 and not r.memory:
+        r.entry = {k: (None, False) for k in r.keys}
+        numeric = settle(r)[1]
     for k in r.keys:
-        if k in r.live_in and not r.memory:
+        if k in r.live_in and not r.memory and (numeric is None or k in numeric):
             # Preserve the entry's runtime tag, including for variables written by the region itself. Converting an
             # int32 to real here would change int/int arithmetic (wrapping) and the tags a later store observes.
             r.entry[k] = ("N", True)
         else:
             r.entry[k] = (None, False)
-    entry = State([], dict(r.entry))
-    states = {}
-    for _ in range(50):
-        g = Gen(r, states, False)
-        g.run(entry)
-        if not g.changed:
-            break
-    else:
-        raise Unsupported("types do not settle")
+    states = settle(r)[0]
     for lab in r.labels:
         if lab not in states:
             raise Unsupported("label %04X not reached" % lab)
@@ -1697,20 +1756,62 @@ def key_name(r, k):
 ALL = "all"   # gmlaot.py --typed all: every code entry the run compiles is a candidate
 
 
+# Per-entry options of a typed list line (load_selection): (folder, code entry) -> {"spans": [(lo, hi)] or None,
+# "compact": bool, "pad": int}.
+OPTIONS = {}
+
+
 def load_selection(path):
     """(folder, code entry) pairs of a typed selection list: "<data.win folder> <code entry>" per line, # comments;
     the folder "root" matches any data.win. The value "all" (ALL) names no file and selects every code entry the run
-    compiles: the regions then come from the player's data alone, each kept only if the rules above accept it."""
+    compiles: the regions then come from the player's data alone, each kept only if the rules above accept it.
+
+    A two-field line may go on with options (OPTIONS), for UNDERTALE's per-target lists:
+      LO-HI     (hex bytecode addresses, repeatable) only regions inside these ranges are kept;
+      compact   the generated code of each kept straight region is left out: when the region doesn't run (a guard fails,
+                ty_ 0) the interpreter carries on from its first instruction, and a jump into it from outside hands over
+                at its target (gmlaot.py Emitter.gen). Exact either way: the region runs nothing before its guards.
+                compact=LO-HI (repeatable): only the regions inside these ranges. Keep the generated code of a region
+                whose guards fail often (a variable a first run creates: its slot pointer is null), since the
+                interpreter is slower than it;
+      pad=N     N bytes of padding in the generated function's own section (gmlaot.py), so that a compact function
+                keeps the size it had without the option and nothing linked after it moves;
+      ropad=N   N bytes of constants put after the function's own (gmlaot.py, with pad=N), for the switch tables a
+                compact function no longer has, so that the file's later constants keep their offsets."""
+    OPTIONS.clear()
     if path == ALL:
         return ALL
     out = set()
     for line in open(path, encoding="utf-8"):
         f = line.split("#")[0].split()
-        if len(f) == 2:
+        if len(f) >= 2:
             out.add((f[0], f[1]))
+            if len(f) > 2:
+                opt = {"spans": None, "compact": None, "pad": 0, "ropad": 0}
+                for o in f[2:]:
+                    m = re.fullmatch(r"([0-9A-Fa-f]+)-([0-9A-Fa-f]+)", o)
+                    if m:
+                        opt["spans"] = (opt["spans"] or []) + [(int(m.group(1), 16), int(m.group(2), 16))]
+                    elif o == "compact":
+                        opt["compact"] = (opt["compact"] or []) + [(0, 1 << 30)]
+                    elif re.fullmatch(r"compact=([0-9A-Fa-f]+)-([0-9A-Fa-f]+)", o):
+                        lo, hi = o[8:].split("-")
+                        opt["compact"] = (opt["compact"] or []) + [(int(lo, 16), int(hi, 16))]
+                    elif re.fullmatch(r"pad=\d+", o) and int(o[4:]) % 4 == 0:
+                        opt["pad"] = int(o[4:])
+                    elif re.fullmatch(r"ropad=\d+", o) and int(o[6:]) % 2 == 0:
+                        opt["ropad"] = int(o[6:])
+                    else:
+                        raise SystemExit("%s: unknown typed list option %r" % (path, o))
+                OPTIONS[(f[0], f[1])] = opt
         elif len(f) == 1:
             out.add(("root", f[0]))
     return out
+
+
+def options(folder, name):
+    """The OPTIONS of a code entry ("root" lines match any data.win), or None."""
+    return OPTIONS.get((folder, name)) or OPTIONS.get(("root", name))
 
 
 def selected(sel, folder, name):

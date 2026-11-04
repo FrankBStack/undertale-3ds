@@ -39,6 +39,14 @@ SCOPED_NEW = (
     # titancpu L1 (lazy surface hand-off splits, vine_titancpu.inc): bindTarget's hand-off split only, its first
     # splitFrame call; the second is the inlined flushPendingStoresSharing's and stays.
     ('bindTarget.part.0', 'splitFrame', 'Titan_leaveSplit', 2, (0,)),
+    # vrgen (flowerhw): every renderer's destroy forgets it in the tower code first (vine_new_retain.inc's end), which
+    # then goes on to pillarDestroy, so a next renderer at the same address is new to it.
+    ('screensDestroy', 'pillarDestroy', 'Vine_rendererGone', 1, 'b'),
+    # titancpu L-F (vine_titancpu_lf.inc): the fountain mesh's two callers, pillarSurfaceQuad's call and
+    # pillarEmitPageRegion's tail branch, go to its copy with tile reuse and the clip skip. fountainMeshRegion's own
+    # body (and its two recursive calls of itself) stays as it is.
+    ('pillarSurfaceQuad.isra.0', 'fountainMeshRegion', 'Titan_lfMeshRegion', 1),
+    ('pillarEmitPageRegion', 'fountainMeshRegion', 'Titan_lfMeshRegion', 1, 'b'),
 )
 
 # titancpu sharebuf (ctr_renderer_sharebuf.inc, compiled in the helper pass only when CTRPORT_SHAREBUF is on): the
@@ -114,6 +122,22 @@ def route_tshare(extra):
     return extra[:found[0].start()] + body + extra[found[0].end():]
 
 
+# titancpu L-F (DELTARUNE New): Titan_lfMeshRegion's own calls go where the renderer's do. Its inlined
+# reserveVertices calls reserveBatch, which every renderer call reaches through Vine_wrap_reserveBatch (INTERNAL_NEW);
+# route that one call the same way, and check that the copy calls no other routed entry.
+def route_lf(extra):
+    found = list(re.finditer(r'(?ms)^Titan_lfMeshRegion:\r?\n.*?^\s*\.size\s+Titan_lfMeshRegion,\s*\.-Titan_lfMeshRegion\s*$', extra))
+    assert len(found) == 1, 'L-F: Titan_lfMeshRegion'
+    body, counts = found[0][0], {}
+    for name in parent.INTERNAL:
+        target = parent.TARGETS.get(name, 'Vine_wrap_' + name)
+        pattern = r'(?m)^([ \t]+b(?:l)?' + parent.extract.CONDITION + r'[ \t]+)' + re.escape(name) + r'(\(PLT\))?([ \t]*(?:@[^\n]*)?)$'
+        body, counts[name] = re.subn(pattern, lambda m: m[1] + target + (m[2] or '') + m[3], body)
+        assert not re.search(r'(?m)^[ \t]+\.word[ \t]+' + re.escape(name) + r'[ \t]*$', body), ('L-F: pointer', name)
+    assert counts['reserveBatch'] == 1 and sum(counts.values()) == 1, ('L-F: routed calls', counts)
+    return extra[:found[0].start()] + body + extra[found[0].end():]
+
+
 def main():
     if '-DENABLE_WAD16' in sys.argv:
         import utwindow_compile
@@ -135,7 +159,7 @@ def main():
         ('drawSurfaceQuad', 'replayRecorded', 'Drpix_replay', 1, 'b'),
         ('drawSurfaceQuad', 'pillarSurfaceQuad.isra.0', 'Drpix_surfaceQuad', 1, 'b'),
     )
-    return parent.main(retain_oomport_slots if internal is INTERNAL else route_tshare)
+    return parent.main(retain_oomport_slots if internal is INTERNAL else (lambda extra: route_lf(route_tshare(extra))))
 
 
 if __name__ == '__main__':

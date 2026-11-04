@@ -150,9 +150,10 @@ def source_wanted(relative, game=None):
         return parts[2] in ("base64", "bzip2", "md5", "miniz", "sha1", "stb")
     if parts[:2] == ["tools", "aot"]:
         if parts[2] == "selection":
-            # The other game's lists: <game>*, typed-<game>.txt and typed-priority-<game>-<target>.txt.
+            # The other game's lists: <game>*, typed-<game>.txt, typed-<game>-<target>.txt and
+            # typed-priority-<game>-<target>.txt.
             other = "deltarune" if game == "undertale" else "undertale"
-            return game is None or not (parts[-1].startswith((other, "typed-priority-" + other + "-")) or
+            return game is None or not (parts[-1].startswith((other, "typed-priority-" + other + "-", "typed-" + other + "-")) or
                                         parts[-1] == "typed-" + other + ".txt")
         # loadscreen_art.py: the loading screen art (build.sh runs it for both games). escape.py: gmlaot.py's
         # escape elision (G9), imported for WAD 17 only but part of gmlaot.py's import closure. stpack.py and
@@ -166,7 +167,7 @@ def source_wanted(relative, game=None):
             "builtin_audit.py", "btnprompt.py", "corpus.py", "data_versions.py", "escape.py", "fontverdict.py",
             "gmlaot.py", "itemverdict.py", "prepare.py", "padrefs.py", "aot_select.py", "typed.py", "typed_priority.py",
             "loadscreen_art.py", "late_numeric.py",
-            "symverdict.py", "stglyphs.py", "stpack.py", "stasrtext.py", "credits.py")
+            "symverdict.py", "stglyphs.py", "stpack.py", "stasrtext.py", "credits.py", "weirdshd.py")
             # dskip.py: UNDERTALE Old's covered-star key (build.sh runs it for UNDERTALE only).
             or (parts[-1] in ("pixgrid.py", "btnprompt_build.py", "stmenu.py", "dskip.py") and game != "deltarune")
             or (parts[-1] in ("gog_smart.py", "gog-smart-1.08.json") and game != "deltarune")

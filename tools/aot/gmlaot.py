@@ -240,6 +240,23 @@ TYPED = None
 TARGET = None
 # (code entry, aotf number, region function text, straight region, bytecode start) of this run
 TYPED_TEXTS = []
+
+
+def typed_math_wrappers():
+    """name -> (parameters, arguments) of vm_aot_typed_runtime.c's aotTypedMath<name> wrappers (compact_math)."""
+    path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "engine", "src", "vm_aot_typed_runtime.c")
+    text = open(path, encoding="utf-8").read()
+    return {m.group(1): (m.group(2), m.group(3)) for m in
+            re.finditer(r"AOT_TYPED_TEXT GMLReal aotTypedMath(\w+)\(([^)]*)\) \{ return aotMath\1\(([^)]*)\); \}", text)}
+
+
+def compact_math(k, text, used):
+    """A compact function's region text calling its own copies of the math wrappers (aotm_<k>_<name>, in the function's
+    section, gmlaot main): vm_aot_typed_runtime.c's are in .text.late.typed3, late bytes UNDERTALE Old hasn't got."""
+    def sub(m):
+        used.add(m.group(1))
+        return "aotm_%d_%s(" % (k, m.group(1))
+    return re.sub(r"\baotTypedMath(\w+)\(", sub, text)
 # --typed all: (aotf number, inline bindings text) of this run, for aot_typed_bind.c
 TYPED_BIND = []
 # --typed all: about this much C text in each aot_typed_<n>.c, so that a module too big for its region can be linked
@@ -841,6 +858,9 @@ class Emitter:
         self.cur_in = frozenset()
         self.typed = {}           # --typed: address of a region's call (its head, or the branch above it) -> typed.Region
         self.typed_exits = set()  # --typed: the addresses its regions leave for (an aoty_<address> label each)
+        self.compact = set()      # --typed list option "compact": the first addresses of the straight regions whose generated code is left out (gen)
+        self.local_math = False   # a per-target typed list's entry: its regions call their own math wrappers (compact_math)
+        self.compact_keep = []    # compact: the AOT_PUSH_VAR lines left out, for aotk_<k> (compact_skip)
         self.board = None         # BOARD_NATIVE: board_site's dict
 
     def L(self, addr):
@@ -1320,10 +1340,27 @@ class Emitter:
             return [ins.addr, n]
         return None
 
+    def compact_skip(self, ins):
+        """An instruction of a compact region, left out (gen): the edge lookups on its edges are not needed, since
+        nothing runs it here (the region's exits do their own, typed.call_site).
+
+        A Push.v left out still has its AOT_PUSH_VAR line made, for aotk_<k>: GCC clones a helper for a constant
+        argument (ipa-cp) by how many calls pass it, so leaving the calls out changed aotPushVarFast's clones and with
+        them other functions' code in the file (creddodge lever 2: aot_gen_2.o, 11 functions 8-48 bytes longer)."""
+        if ins.op == OP_PUSH and ins.t1 not in (T_INT16, T_INT32, T_DOUBLE, T_FLOAT, T_INT64, T_BOOL, T_STRING):
+            lines, self.lines = self.lines, []
+            self.gen_push_var(ins, self.fn.depth[ins.addr], "0x%08Xu" % ins.word, self.fn.after[ins.addr])
+            lines, self.lines = self.lines, lines
+            self.compact_keep += [line.strip() for line in lines if "AOT_PUSH_VAR(" in line]
+        for (a, t) in self.slot_fix:
+            if a == ins.addr:
+                self.fix_done.update(((a, t, "fall"), (a, t, "jump")))
+
     def gen(self):
         fn = self.fn
         self.analyse_slots()
         covered = set()   # instructions emitted together with an earlier one
+        compact_hi = None   # in a compact region (typed list option): its end
         for addr in sorted(fn.instrs):
             if addr not in fn.depth:
                 continue
@@ -1331,6 +1368,9 @@ class Emitter:
             d = fn.depth[addr]
             self.cur_in = self.slot_in.get(addr, frozenset())
             typed_r = self.typed.get(addr) if self.typed else None
+            if compact_hi is not None and addr >= compact_hi:
+                compact_hi = None
+            compact_head = typed_r is not None and typed_r.straight and typed_r.lo in self.compact
             if self.typed_exits and addr in self.typed_exits:
                 self.lines.append("aoty_%04X: ;" % addr)
             if typed_r is not None and typed_r.site == typed_r.lo and not typed_r.straight:   # before the head, where the code above falls in
@@ -1338,12 +1378,25 @@ class Emitter:
             if addr in fn.labels:
                 # BOARD_NATIVE's call (before the loop's head) and exit label share the label's line: a line more would
                 # move the __LINE__ of every later function in the file.
-                self.lines.append(board_line(self, addr) + "%s:" % self.L(addr) + board_after(self, addr))
+                # In a compact region a label's jumps may all be left out with the code around them: unused then.
+                unused = " __attribute__((unused));" if compact_head or compact_hi is not None else ""
+                self.lines.append(board_line(self, addr) + "%s:" % self.L(addr) + unused + board_after(self, addr))
                 self.emit("AOT_BLOCK(%d, 0x%X);" % (d, addr))
             if typed_r is not None and typed_r.straight and addr in covered:
                 raise Reject("internal: the typed region at %#x is emitted with the instruction before it" % addr)
             if typed_r is not None and (typed_r.site != typed_r.lo or typed_r.straight):   # before the branch into the loop, or a straight region's first instruction
                 self.lines.extend(typed_mod.call_site(self, typed_r))
+                if compact_head:
+                    # The region didn't run (a guard failed, before anything happened): the interpreter takes it from here.
+                    self.emit("AOT_DEOPT(%d, 0x%X);   /* compact region %04X-%04X */" % (d, addr, typed_r.lo, typed_r.hi))
+                    compact_hi = typed_r.hi
+                    self.compact_skip(ins)
+                    continue
+            if compact_hi is not None:
+                if addr in fn.labels or addr in self.typed_exits:   # a jump into the region from outside it hands over
+                    self.emit("AOT_DEOPT(%d, 0x%X);" % (d, addr))
+                self.compact_skip(ins)
+                continue
             if addr in covered or (addr - 4 in fn.fused_cmp and addr - 4 not in covered
                                    and fn.instrs.get(addr - 4) is not None and fn.instrs[addr - 4].next == addr):
                 pass   # emitted with the instruction before it
@@ -2625,6 +2678,9 @@ def generate_function(dw, name, k, report):
             regions = typed_mod.select_regions(em, report, name)
             em.typed = {r.site: r for r in regions}
             em.typed_exits = set(t for r in regions for t in r.exits)
+            opt = typed_mod.options(getattr(dw, "folder", ""), name)
+            em.compact = set(r.lo for r in regions if typed_mod.compact(opt, r))
+            em.local_math = opt is not None
         esc = escape_plan(dw, fn, k, name, em, report)
         if esc is not None:
             em = esc
@@ -2662,6 +2718,7 @@ def generate_function(dw, name, k, report):
     # reference, null when it was (typed_mod.call_site), and the inline bindings stay with the function, in
     # aot_typed_bind.c. A typed list: the regions and bindings together in aot_typed.c, called directly.
     split = bool(typed_regions) and TYPED == typed_mod.ALL
+    math_used = set()   # compact: the math wrappers its regions call (compact_math)
     if split and inline_text:
         TYPED_BIND.append((k, inline_text))
     for r in typed_regions:
@@ -2672,6 +2729,12 @@ def generate_function(dw, name, k, report):
             out.append(typed_mod.prototype(r) + ";")
             text = ((inline_text + "\n\n" if r is typed_regions[0] and inline_text else "")
                     + typed_mod.function_text(r, name))
+            if em.local_math:
+                used = set()
+                text = compact_math(k, text, used)
+                math_used |= used
+                wrappers = typed_math_wrappers()
+                text = "".join("GMLReal aotm_%d_%s(%s);\n" % (k, n, wrappers[n][0]) for n in sorted(used)) + text
         TYPED_TEXTS.append((name, k, text, r.straight, r.lo, getattr(dw, "folder", None)))
     nloc = len(em.locals)
     if nloc:
@@ -2697,6 +2760,25 @@ def generate_function(dw, name, k, report):
             out.append("    RValue %s;" % ", ".join("*%s = nullptr" % p for p in names[i:i + 8]))
     out.extend(body)
     out += ["    AOT_EPILOGUE();"] + tail + ["}"]
+    if math_used:
+        wrappers = typed_math_wrappers()
+        out[-1] += "".join(' GMLReal aotm_%d_%s(%s); __attribute__((section(".text.aotf_%d"), noinline)) GMLReal aotm_%d_%s(%s)'
+                           ' { return aotMath%s(%s); }' % (k, n, wrappers[n][0], k, k, n, wrappers[n][0], n, wrappers[n][1])
+                           for n in sorted(math_used))
+    opt = typed_mod.options(getattr(dw, "folder", ""), name) if TYPED is not None and TYPED != typed_mod.ALL else None
+    if opt is not None and opt["pad"]:
+        # Typed list option pad=N: N bytes after the function in its own section (a naked function GCC puts there,
+        # after it: a top-level asm would come first and make the section the file's first), so that the section keeps
+        # the size it had without the option and nothing linked after it moves. ropad=N: N bytes of .rodata from the
+        # same asm, which GCC puts after the function's own constants (its switch tables) and before the next one's.
+        ro = '\\n\\t.pushsection .rodata\\n\\t.space %d\\n\\t.popsection' % opt["ropad"] if opt["ropad"] else ""
+        out[-1] += (' __attribute__((section(".text.aotf_%d"), naked, used)) static void aotq_%d(void) { __asm__(".space %d%s"); }'
+                    % (k, k, opt["pad"], ro))
+    if em.compact_keep:
+        # compact (compact_skip): the calls left out, in a function nothing calls (--gc-sections drops it), on one line
+        # so that later functions' __LINE__ moves no further.
+        out.append("RValue aotk_%d(VMContext* ctx); RValue aotk_%d(VMContext* ctx) { AOT_PROLOGUE(); %s AOT_EPILOGUE(); }"
+                   % (k, k, " ".join(em.compact_keep)))
     variant = utflames_native(dw, blob, entry, k) if UTFLAMES and dw.wad == 16 else None
     if variant is not None:
         report.append("utflames %s: aotu_%d calls %s" % (name, k, variant[1]))
@@ -2705,6 +2787,11 @@ def generate_function(dw, name, k, report):
         report.append("utflowey %s: %s" % (name, "aotu_%d calls UtFlowey_pipeDraw" % k if variant is not None
                                            else "digest matches but the operands don't: generated code"))
     out.append("#undef AOT_K")
+    if variant is None:
+        import weirdshd
+        variant = weirdshd.variant(dw, name, k)
+        if variant is not None:
+            report.append("pinwheel event scope %s: aotu_%d" % (name, k))
     if nloc:
         out.append("#undef AOT_LS")
     vars_sorted = sorted(em.vars)
@@ -2787,6 +2874,8 @@ def main(argv):
     late_entries = []  # explicit --late-numeric only; original warm bodies stay in funcs_out
     for gi, g in enumerate(groups):
         dw = DataWin(g["data_win"])
+        import weirdshd
+        weirdshd.validate(dw, BOARD_TARGET, os.path.basename(os.path.dirname(g["data_win"])))
         sources.append(os.path.basename(os.path.dirname(g["data_win"])) + "/" + os.path.basename(g["data_win"]))
         if dw.wad < 16:
             report.append("skip %s: WAD %d bytecode (only WAD 16 and 17 are supported)" % (g["data_win"], dw.wad))

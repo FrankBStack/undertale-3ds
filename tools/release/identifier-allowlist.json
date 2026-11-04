@@ -34,6 +34,12 @@
       "justification": "Names-only selection keys for compiling the players own code."
     },
     {
+      "member": "tools/aot/selection/typed-undertale-o3ds.txt",
+      "class": "aot-selection",
+      "sha256": "1b08adc125ab303689057f8c7131ca7c1f2eb6a4d0e1857b458647c020ae8239",
+      "justification": "Names-only typed-region keys (one code entry name, its bytecode range, compact range and pad size) for compiling the player's own UNDERTALE Old code; build.sh uses it in place of typed-undertale.txt for that target (creddodge lever 2, c26rev R162 F1)."
+    },
+    {
       "member": "tools/aot/selection/undertale-o3ds-padrefs.txt",
       "class": "aot-selection",
       "sha256": "ee542a14bd7cd3f9b8d5a12166e88c28696db1537243b4838781186c6e866f21",
@@ -114,7 +120,7 @@
     {
       "member": "engine/src/runner.c",
       "class": "engine-lookups",
-      "sha256": "38e509482069ea2ad8c806701cb71f06074afcaf47d7dd52b534fffc1f18e6bc",
+      "sha256": "c2b53bb483a1a014b3912487cc4312cc8e9af3fcca6c934e94fbf9aa88291d08",
       "justification": "Object and variable lookup examples explain runner initialization and dispatch.",
       "evidence_sha256": [
         "e21b4a0970f25e43698b263730323baeaa930e9907f1661a433985a117c25dc1"
@@ -177,7 +183,7 @@
     {
       "member": "platform/3ds/source/ctr_renderer.c",
       "class": "engine-lookups",
-      "sha256": "a990ca66b6f3a0191b64a2fc99451e1ea2490fe5e25f7c528dcb409ab82ee655",
+      "sha256": "2ff1e7ef09e71abdf96ae882911be533fe01fa546c7d97cfd07784f007fa3939",
       "justification": "Shader, object and sprite lookup names select renderer compatibility paths.",
       "evidence_sha256": [
         "b47ae0eeb50b4a01adfe2722ac27cb04c8fa69e3e88b357925af0ed56f2163c2"
@@ -204,7 +210,7 @@
     {
       "member": "platform/3ds/source/main.c",
       "class": "engine-lookups",
-      "sha256": "a7c8829207aed65867bd8080a0cc8acf8202ae0648705a1d06865139cf21ab89",
+      "sha256": "5ede9da31e11420e87672b6b78e4f1b884fc4b20ebf690c6d3c455f87da52cfc",
       "justification": "Intro and title room names select startup rooms in player data.",
       "evidence_sha256": [
         "beff7c970aaeadca3f94aedfe4901d446f31340c60d5b22c361461f1f3cc2cdc"
@@ -456,7 +462,7 @@
     {
       "member": "tools/aot/typed.py",
       "class": "engine-symbols",
-      "sha256": "78a9b808aa87e96eeacf869197e3746d8ae12af297c4b1f866225e35b5032cb3",
+      "sha256": "844d70a48e404f486c097cfa8c6fb63d1c42a1cd9fcf054a66db9c78a3f83816",
       "justification": "Reviewed parser limits, format fields, settings or upstream APIs; prefix overlap is not a game asset.",
       "evidence_sha256": [
         "51c9dd43dc11e9049fb863de83ba823301dd555bf882dc29e5025d2b3b86f50a"
@@ -827,7 +833,7 @@
     {
       "member": "tools/aot/gmlaot.py",
       "class": "engine-lookups",
-      "sha256": "aeeeb409712b0e00fba3b05c72c0d07a73b76930ea9c883b33252bd6c7d25181",
+      "sha256": "92b760c2693969eca9704075390a95d8031ddc52a78845a4135cd2b35c6b9753",
       "justification": "One lava script lookup selects an audited generic sprite-part builtin redirect. No game body, game instruction sequences or generated code from them, resource IDs, assets or text are embedded: the native bodies (UTF_NATIVE) and the text front (GETTEXT_FAST) are matched by SHA-256 or FNV digests computed from the player's data.win at build time; the only instruction words left are the VM's generic opcode encodings the compiler decodes.",
       "evidence_sha256": [
         "ec6d5c493df4c8b53e57dd4a2ce27ce563d52ee9ccf95083c9135cec002574aa"
@@ -840,7 +846,7 @@
       "evidence_sha256": [
         "ec6d5c493df4c8b53e57dd4a2ce27ce563d52ee9ccf95083c9135cec002574aa"
       ],
-      "sha256": "af6dda605ed2db0a34c7c5445be466001ed38b48f91dd935fb6118ab0bce95d7"
+      "sha256": "217c29ae8be80f9f73aa45c681cc21b0516fdb401bbaa052344d98013cd1d18d"
     },
     {
       "member": "tools/aot/stpack.py",
@@ -893,7 +899,7 @@
     {
       "member": "engine/src/z_utkill_swarm.c",
       "class": "engine-lookups",
-      "sha256": "57e6bc72592ba12d9ce0df1a3a074b17e740d59bdf1d93e1f8d3c22d56683953",
+      "sha256": "9e1e6f854fd8df257d2af2825a8493c7f94395c61ed6ec7dd98ad2023d36f3c1",
       "justification": "Object and event code lookup names bind the dust swarm and its strips to the player's own objects and events (UNDERTALE only, utkill SW9 94d1151fd, v3 B'' 84f1c4c25).",
       "evidence_sha256": [
         "04e0d9b1d21635c257c3ba01585294e181e63e3d3906fb10c8b3148346e555a9"
@@ -1028,6 +1034,24 @@
       "justification": "Lead 2026-11-02 (titancpu unit 3 option 2): the typed priority list applies only to the chapter data.win it was measured on (whole-file SHA-256), else rank order; no game content.",
       "evidence_sha256": [
         "1d8d0ed9be5dc9dfe3a4ff9735374a6070a724066b99f0626be8eca272139403"
+      ]
+    },
+    {
+      "member": "platform/3ds/source/ctr_pinwheel.inc",
+      "class": "engine-lookups",
+      "sha256": "83445c80d42bcf010773dfbd45cf71df707f3643d664c3b25ad8f127feeb91a8",
+      "justification": "The shader-name lookup selects the existing unsupported shader ID for the DR New pinwheel renderer (on by default for admitted DR New chapter builds via build.sh; other targets do not compile it). No shader source, player assets, game text or resource indices are embedded.",
+      "evidence_sha256": [
+        "ab0ce2939ef4e1311c56225d2ebd4ff71dc5c587f1d6ad2417af4ca43b8b4c8f"
+      ]
+    },
+    {
+      "member": "tools/aot/weirdshd.py",
+      "class": "engine-lookups",
+      "sha256": "d12cb67dc5c8f277de0fe775e1efde1d2b8a3e5301424085c1186c998f04332d",
+      "justification": "Two code-entry lookup keys select player-owned Create/Draw bodies for builder-generated event wrappers. Original game bodies stay in private generated modules. Only the measured revision from the pinned public registry enables wrappers; an unknown revision or metadata mismatch leaves the effect off. No duplicate player-data digest or game instruction sequence is embedded.",
+      "evidence_sha256": [
+        "f5e69ec4d8582c3d80b8a89977da23fd875b39b91efd6b2901ef8b5c46a72c61"
       ]
     }
   ],

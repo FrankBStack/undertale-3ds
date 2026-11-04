@@ -2482,3 +2482,61 @@ static TS_CODE void tsFrame(CtrRenderer* r) {
     ts.ready = ready;
 }
 #endif
+
+/* vrgen (flowerhw, 2026-11-03): the renderer goes (game_change, exit), and everything here that names it forgets it.
+ *
+ * The tower code told a new renderer from the old one by its address: vrFind (vrOwner), vdOwn (vd.owner, with its
+ * content serial), the vertex ring (vrRing.r) and dqInstall (dq.r). After a game_change the next renderer can be
+ * allocated where the last one was (heap layout decides; runs of one binary differ), so vrFind took it for the old one,
+ * found its content serial (starting again at about 1) below vrSerial and switched retention off for the rest of the run
+ * (vrDisabled is never cleared): Flowery's tower then drew whole, about 70 ms of GPU a frame (knightgpu, DR44 11-03:
+ * off at ch2_berdly, ch5_flowcut 221 draws / 22,352 vertices against 175 / 1,564). dqInstall's early return (a
+ * data.win without the decorations' sprites) leaves dq.r on a renderer with no destroy hook to forget it, so a later
+ * renderer at that address would never get the decorations' table.
+ *
+ * screensDestroy's tail call of pillarDestroy (every renderer's destroy, at the bottom of the vtable chain) comes here
+ * instead (vine_old_observer_compile.py's routing, so ctr_renderer.c's code is compiled as before). The next renderer,
+ * at whatever address, is then new to all four as one at another address always was: vrFind resets the slots and
+ * vrSerial, vdOwn drops the layers and plain copies and starts again, the ring has no last frame, dqInstall looks
+ * again. Retention starts on again with each renderer. In its own section, last in late text (late_reserve.ld).
+ *
+ * rev 2 (c26rev R160 F1): a slot's stash (a face's band list put off while its repeated clear waits) holds references
+ * on the going renderer's layers. vrFind's reset for a new owner leaves it, and the next repeated clear released it
+ * with the NEW renderer (vrReleaseList), whose layer of that id then lost a reference it never had from the list: a
+ * layer could be bound and changed past flushLazyUsing's barrier with a deferred reader still on it. Here, while the
+ * going renderer's surfaces still exist (ctrDestroy runs after pillarDestroy), each stash gives its references back
+ * to that renderer when it is the slots' owner (only then are the ids its own), and is freed either way; every slot is
+ * invalidated. The loop is vrReleaseList's, written out so that function's other callers compile as before. */
+#define VRGEN_CODE __attribute__((noinline, used, optimize("Os"), section(".text_flowerhw_vrgen")))
+VRGEN_CODE void Vine_rendererGone(Renderer* renderer) {
+    CtrRenderer* r = (CtrRenderer*) renderer;
+    for (int32_t k = 0; VR_SLOTS > k; k++) {
+        VrSlot* slot = &vrSlots[k];
+        CtrLazyDraw* list = slot->stash;
+        if (list != nullptr) {
+            for (ptrdiff_t i = 0; vrOwner == r && arrlen(list) > i; i++) {
+                int32_t id = list[i].layer;
+                if (0 > id || (uint32_t) id >= r->surfaceCount) continue;
+                CtrSurface* layer = &r->surfaces[id];
+                if (layer->used && layer->lazyRefs != 0) layer->lazyRefs--;
+            }
+            arrfree(list);
+            slot->stash = nullptr;
+        }
+        slot->used = false;
+        slot->recording = false;
+        slot->deferring = false;
+        slot->count = 0;
+        slot->idx = 0;
+    }
+    vrOwner = nullptr;
+    vrDisabled = false;
+    vd.owner = nullptr;
+    vrRing.r = nullptr;
+    if ((CtrRenderer*) renderer == dq.r) {
+        Vine_dqState[0] = 0;
+        dq.n = 0;
+        dq.r = nullptr;
+    }
+    VR_CALL(pillarDestroy)(renderer);
+}

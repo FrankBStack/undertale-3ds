@@ -634,6 +634,7 @@ tools/aot/prepare.py
 tools/aot/padrefs.py
 tools/aot/selection/undertale-o3ds-padrefs.txt
 tools/aot/selection/typed-undertale.txt
+tools/aot/selection/typed-undertale-o3ds.txt
 tools/aot/selection/undertale-hints.txt
 tools/aot/selection/undertale-n3ds.txt
 tools/aot/selection/undertale-o3ds-pad.txt
@@ -1010,14 +1011,24 @@ tools/release/test_export_scrub.py
 # hand-off splits the renderer includes, and the Titan CPU recorder (titandiag builds only, compiled out of releases)
 tools/aot/typed_priority.py
 platform/3ds/source/vine_titancpu.inc
+platform/3ds/source/vine_titancpu_lf.inc
 platform/3ds/source/z_titandiag.c
 
 # omegaflowey ofloader (UNDERTALE): the audio loader's kept-open files (empty in DELTARUNE builds)
 platform/3ds/source/z_ofloader.c
 tools/release/builder/updates.py
 tools/release/test_builder_updates.py
+platform/3ds/source/z_spdmemo.c
 
 # drhitbox (DELTARUNE collision corrections; the UNDERTALE build excludes the object): its source, compiler launcher and test
 engine/src/z_drhitbox.c
 tools/buildcache/drhitbox_compile.py
 tools/buildcache/test_drhitbox_compile.py
+
+platform/3ds/pinwheel.cmake
+platform/3ds/source/ctr_pinwheel.inc
+tools/aot/weirdshd.py
+platform/3ds/source/ctr_pinwheel_fast.inc
+# utlife: UT Outside Room compatibility bounds; shared runner header is required in both kits
+engine/src/z_utlife.c
+engine/src/z_utlife.h
