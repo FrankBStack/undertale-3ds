@@ -39,11 +39,84 @@ static const char okMode[] __attribute__((section(".rodata.offkill_in_text"))) =
 bool CtrOffdraw_offkillOff(void);
 #endif
 
+// Inactive for good (omegaflowey, GO 11-02, "Omega Flowey after the
+// 2nd SOUL"). Some bullets save their state and load it back later; one that went inactive and invisible in between
+// stays an instance with its own "active" variable 0 until the end of the phase, and every frame it still runs the
+// collision pass against the heart (its event does nothing while inactive). The builder lists the objects whose PC
+// code proves that such an instance can never be active again (tools/aot/offkill.py) in romfs:/offdoom.bin: per entry
+// the object index and the variable ids of its active flag, its saved flag and its saved copy of the active flag. At
+// the end of each frame an active, invisible instance of a listed object whose active variable is 0 and whose saved
+// flag or saved active flag is 0 (each a number, exactly 0) is destroyed without its Destroy event, as offkill's
+// own entries (RULES.md, "Early destroy"). Without the file, nothing. Its own sections, last in late_reserve.ld, so
+// no earlier late code moves; OffKill_roomChange reaches it through the call it made to CtrBench_handleRoomChange.
+#define OD_TEXT __attribute__((noinline, noipa, optimize("Os"), section(".omegaflowey_ifg")))
+#define OD_RO __attribute__((aligned(4), section(".omegaflowey_ifg_ro")))
+#define OD_BSS __attribute__((section(".bss_omegaflowey_ifg,\"aw\",%nobits @")))
+#define OD_MAX 4
+
+// One entry of romfs:/offdoom.bin (8 bytes, little-endian).
+typedef struct {
+    int16_t object;
+    int16_t active;
+    int16_t saved;
+    int16_t savedActive;
+} OffDoomRule;
+
+static OffDoomRule odRules[OD_MAX] OD_BSS;
+// 0: the file not read yet; -1: no file or no entries; otherwise the number of entries.
+static int32_t odCount OD_BSS;
+// Instances destroyed (the proof count, logged at 1, 2, 4, 8, ...).
+static uint32_t odKilled OD_BSS;
+static const char odPath[] OD_RO = "romfs:/offdoom.bin";
+static const char odLog[] OD_RO = "[offkill] %lu inactive destroyed\n";
+
+// Whether the instance's variable holds a real, int32 or bool that is exactly 0 (missing or any other type: no, so
+// the instance stays). Flattened: the header's lookup is inlined here, not copied out into z_offkill.o's .text.
+static bool odZero(Instance* inst, int32_t var) OD_TEXT __attribute__((flatten));
+static bool odZero(Instance* inst, int32_t var) {
+    RValue* v = IntRValueHashMap_findSlot(&inst->selfVars, var);
+    if (v == nullptr) return false;
+    if (v->type == RVALUE_REAL) return v->real == 0.0;
+    // RVALUE_INT32 (2) or RVALUE_BOOL (4), without a jump table in .rodata
+    return (((uint32_t) v->type - 2u) & ~2u) == 0 && v->int32 == 0;
+}
+
+void OffKill_doomed(Runner* runner) OD_TEXT;
+
+// OffKill_roomChange calls this in place of CtrBench_handleRoomChange.
+void OffKill_doomed(Runner* runner) {
+    CtrBench_handleRoomChange(runner);
+    if (odCount == 0) {
+        odCount = -1;
+        FILE* f = fopen(odPath, okMode);
+        if (f == nullptr) return;
+        size_t n = fread(odRules, sizeof(OffDoomRule), OD_MAX, f);
+        fclose(f);
+        if (n != 0) odCount = (int32_t) n;
+    }
+    // A frame that changes room ends its instances as the game does.
+    if (0 >= odCount || runner->pendingRoom != -1 || runner->currentRoom == nullptr) return;
+    for (int32_t k = 0; odCount > k; k++) {
+        const OffDoomRule* rule = &odRules[k];
+        // rule->object indexes this data.win's objects, the variables its VARI ids: the builder wrote only what it
+        // resolved there. A destroy changes no list (see OffKill_roomChange).
+        Instance** list = runner->instancesByExactObject[rule->object];
+        for (int32_t i = 0, n = (int32_t) arrlen(list); n > i; i++) {
+            Instance* inst = list[i];
+            if (inst->destroyed || !inst->active || inst->visible || !odZero(inst, rule->active)) continue;
+            if (!odZero(inst, rule->saved) && !odZero(inst, rule->savedActive)) continue;
+            Runner_destroyInstance(runner, inst, false);
+            odKilled++;
+            if ((odKilled & (odKilled - 1)) == 0) logInfo(odLog, (unsigned long) odKilled);
+        }
+    }
+}
+
 void OffKill_roomChange(Runner* runner) OK_TEXT;
 
 // Utsw_handleRoomChange calls this in place of CtrBench_handleRoomChange.
 void OffKill_roomChange(Runner* runner) {
-    CtrBench_handleRoomChange(runner);
+    OffKill_doomed(runner);
     if (okCount == 0) {
         okCount = -1;
         FILE* f = fopen(okPath, okMode);

@@ -30,7 +30,16 @@
 #define REPACK_MAX_FILE (1024u * 1024u)
 #define REPACK_TILE 256
 
+#ifdef CTRPORT_REPACK_TEST
+// Test builds read only repack.tst (diag/ctr_repack_test.c installs it), never repack.bin, the name a build without
+// repacktest reads (argrepacka F4.1: a test row's file in the shared cache folder turned repack on in other tests'
+// rows, 10-28). The same length as repack.bin, so a test build's late code keeps every address (repacka, 11-02).
+static const char repackFile[] REPACK_RO = "repack.tst";
+#else
+#line 33
 static const char repackFile[] REPACK_RO = "repack.bin";
+#endif
+#line 34
 static const char repackRb[] REPACK_RO = "rb";
 static const char repackLogOn[] REPACK_RO = "Repack: %u extra pages, %u rooms, %u remapped tiles\n";
 static const char repackLogOff[] REPACK_RO = "Repack: repack.bin not used (out of memory or damaged)\n";
@@ -249,76 +258,29 @@ REPACK_TEXT static void repackKeep(DataWin* dw, uint32_t page, int32_t x0, int32
 }
 
 #ifdef CTRPORT_REPACK_TEST
-#include <dirent.h>
-// Test builds only (build.sh repacktest=<folder>): the build carries a chapter's repack files in its RomFS
-// (romfs:/repack/<data.win folder>/) and puts them in the cache folder before they are read, so a hardware row needs
-// no SD step. A file already there with the same bytes is left alone; any other is deleted first (the SD's game
-// files can be read-only hard links). The donor check (repackDonorsMatch) still decides whether they are used.
-static const char repackRomfsMount[] REPACK_RO = "romfs";
-static const char repackRomfsDir[] REPACK_RO = "romfs:/repack/%s";
-static const char repackWb[] REPACK_RO = "wb";
-static const char repackLogInstall[] REPACK_RO = "Repack: test file %s from the RomFS: %s (%ld B)\n";
-static const char repackLogSame[] REPACK_RO = "already in the cache";
-static const char repackLogCopied[] REPACK_RO = "copied";
-static const char repackLogFailed[] REPACK_RO = "NOT copied";
-
-REPACK_TEXT static uint8_t* repackSlurp(const char* path, long* size) {
-    FILE* f = fopen(path, repackRb);
-    if (f == nullptr) return nullptr;
-    long n = CtrPack_fileSize(f);
-    uint8_t* data = n > 0 && 16L * 1024 * 1024 >= n ? malloc((size_t) n) : nullptr;
-    if (data != nullptr && fread(data, 1, (size_t) n, f) != (size_t) n) {
-        free(data);
-        data = nullptr;
-    }
-    fclose(f);
-    *size = n;
-    return data;
-}
-
-REPACK_TEXT static void repackInstall(void) {
-    char folder[64], dirPath[96];
-    if (!CtrPack_romfsName(folder, sizeof(folder)) || R_FAILED(CtrRomfs_init(repackRomfsMount))) return;
-    snprintf(dirPath, sizeof(dirPath), repackRomfsDir, folder);
-    DIR* dir = opendir(dirPath);
-    if (dir == nullptr) return;
-    for (struct dirent* d; (d = readdir(dir)) != nullptr;) {
-        if (d->d_name[0] == '.') continue;
-        char from[CTR_PACK_PATH_MAX], to[CTR_PACK_PATH_MAX];
-        snprintf(from, sizeof(from), "%s/%s", dirPath, d->d_name);
-        CtrPack_cachePath(to, sizeof(to), d->d_name);
-        long size = 0, haveSize = 0;
-        uint8_t* data = repackSlurp(from, &size);
-        if (data == nullptr) continue;
-        uint8_t* have = repackSlurp(to, &haveSize);
-        bool same = have != nullptr && haveSize == size && memcmp(have, data, (size_t) size) == 0;
-        free(have);
-        bool copied = same;
-        if (!same) {
-            remove(to);
-            FILE* f = fopen(to, repackWb);
-            copied = f != nullptr && fwrite(data, 1, (size_t) size, f) == (size_t) size;
-            if (f != nullptr && fclose(f) != 0) copied = false;
-            if (!copied) remove(to);
-        }
-        free(data);
-        logInfo(repackLogInstall, d->d_name, same ? repackLogSame : copied ? repackLogCopied : repackLogFailed, size);
-    }
-    closedir(dir);
-}
+// Test builds only (build.sh repacktest=<folder>): diag/ctr_repack_test.c runs the real CtrTextures_init, then puts
+// the build's RomFS repack files in the cache folder (repack.bin as repack.tst) before repackRead reads them. It is
+// called in __real_CtrTextures_init's place below and lives at the end of the late code, so this file keeps its size
+// and every late function its address; only that call's target differs from a release build (repacka, 11-02).
+void RepackTest_texturesInit(CtrTextureCache* cache, DataWin* dataWin, FileSystem* fileSystem, uint32_t budgetBytes);
 #endif
+#line 310
 
 void Repack_texturesInit(CtrTextureCache* cache, DataWin* dataWin, FileSystem* fileSystem, uint32_t budgetBytes);
 
 // pixpress's CtrTextures_init wrapper (ctr_pixfix_press.c) calls this in the real one's place.
 REPACK_TEXT __attribute__((noipa)) void Repack_texturesInit(CtrTextureCache* cache, DataWin* dw, FileSystem* fileSystem, uint32_t budgetBytes) {
+#ifdef CTRPORT_REPACK_TEST
+    RepackTest_texturesInit(cache, dw, fileSystem, budgetBytes);
+#else
+#line 315
     __real_CtrTextures_init(cache, dw, fileSystem, budgetBytes);
+#endif
+#line 316
     repackForget();
     uint8_t* data;
     long size;
-#ifdef CTRPORT_REPACK_TEST
-    repackInstall();
-#endif
+#line 322
     if (!CtrPack_lossy() || !repackRead(cache, dw, &data, &size)) return;
     uint32_t count = dw->txtr.count;
     uint32_t vpages = repackLoad32(data + 32), roomCount = repackLoad32(data + 36), entryCount = repackLoad32(data + 40);

@@ -2371,7 +2371,7 @@ static VR_CODE void dqInstall(CtrRenderer* r) {
     dq.lastLog = r->frame;
 #endif
 #endif
-    rr->vtable = &dq.outer;
+    CTR_VTCHAIN_NOTE(rr, &dq.outer, rr->vtable, tower) rr->vtable = &dq.outer;
     logInfo(dqFmtOn, (int) lo, (int) hi, (int) shader);
 }
 

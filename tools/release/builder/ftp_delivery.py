@@ -333,8 +333,9 @@ class Transfer:
         percent = self.work_progress.advance(checking, count, wire) if phase != 'Finished' else 100.0
         self.progress(Progress(phase, path, self.done, self.total, speed, None, percent))
 
-    def mkdirs(self, path):
-        parts = PurePosixPath(path).parent.parts[1:]
+    def mkdirs(self, path, *, directory=False):
+        target = PurePosixPath(path)
+        parts = (target if directory else target.parent).parts[1:]
         for i in range(1, len(parts)+1):
             folder = '/' + '/'.join(parts[:i])
             if folder not in self.folders:
@@ -485,6 +486,13 @@ class Transfer:
                     2 if name == 'complete' else 0 if name == 'data.win' else 1,
                     it.dst)
         items.sort(key=order)
+        # Empty caches must precede every upload too; file enumeration loses empty directories.
+        if self.install:
+            for item in items:
+                path = PurePosixPath(remote_path(item.dst))
+                if path.name.casefold() == 'data.win':
+                    check_cancel(self.cancelled)
+                    self.mkdirs(str(path.parent / 'cache'), directory=True)
         self.total = sum(it.size * (2 if it.size <= SMALL or PurePosixPath(it.dst).suffix.casefold() in ('.3dsx', '.cia', '.dtsp')
                                     or PurePosixPath(it.dst).name.casefold() in ('data.win', 'install.json')
                                     else 1) for it in items)

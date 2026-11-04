@@ -174,13 +174,16 @@ def source_wanted(relative, game=None):
             or (parts[-1] == "offkill.py" and game != "deltarune")
             # textcase.py: the dialogue script's case table (build.sh runs it; UNDERTALE Old only).
             or (parts[-1] == "textcase.py" and game != "deltarune")
-            or (parts[-1] == "chapter_manifest.py" and game != "undertale"))
+            or (parts[-1] == "chapter_manifest.py" and game != "undertale")
+            # check_dspe_gate.py: knightgpu dspe's room gate check (build.sh runs it; DELTARUNE New only).
+            or (parts[-1] == "check_dspe_gate.py" and game != "undertale"))
     if parts[:2] == ["tools", "analysis"]:
         # The renderer launcher's helpers (SOURCE_FILES too), and UNDERTALE's half-resolution art packer with its list
         # of sprite name hashes (build.sh halfart, products.HALFART).
         # flowervramg_palette_retry.py: vine_old_parent.py imports it, and CMake makes ctr_renderer.c depend on it.
         if parts[2:] in (["vine_extract.py"], ["vine_old_observer_compile.py"], ["vine_old_parent.py"],
-                         ["flowervramg_palette_retry.py"], ["utwindow_compile.py"]):
+                         ["flowervramg_palette_retry.py"], ["utwindow_compile.py"],
+                         ["cheaplevers_kick_compile.py"]):  # the GPU kick's launcher (DELTARUNE New CMake)
             return True
         return game != "deltarune" and parts[2:] in (["halfart_pack.py"], ["halfart", "undertale.txt"])
     if parts[:3] == ["tools", "deps", "openh264"]:
@@ -210,6 +213,11 @@ def source_wanted(relative, game=None):
         # build_flowcode.py: build.sh's flowcode step (flowfull's chapter-5 code plan, DELTARUNE New, default off).
         if len(parts) == 3 and parts[-1] == "build_flowcode.py":
             return game != "undertale"
+        # sharebuf: build.sh's shared-surface list (change titancpu, DELTARUNE New) and its reviewed record.
+        if len(parts) == 3 and parts[-1] == "build_sharebuf.py":
+            return game != "undertale"
+        if parts[2] == "sharebuf" and len(parts) == 4:
+            return parts[-1] == "deltarune.json" and game != "undertale"
         return len(parts) == 3 and parts[-1] in ("build_phases.py", "build_plan.py", "build_sfxplan.py", "closure.py", "codeclose.py", "dwinfo.py",
                                                  "records.py",
                                                  "source_plan.py")

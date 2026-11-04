@@ -448,7 +448,7 @@ LATE static void showOptions(CtrMenu* menu) {
 CtrMenuAction __real_CtrMenu_update(CtrMenu* menu, u32 down);
 void __real_CtrMenu_open(CtrMenu* menu, PrintConsole* console, const CtrDisplaySettings* settings, CtrDisplayCaps caps);
 void __wrap_CtrMenu_open(CtrMenu* menu, PrintConsole* console, const CtrDisplaySettings* settings, CtrDisplayCaps caps);
-CtrMenuAction __wrap_CtrMenu_update(CtrMenu* menu, u32 down);
+CtrMenuAction __wrap_CtrMenu_update(CtrMenu* menu, u32 down); void CtrCtrlui_openPage(CtrMenu* menu);
 
 LATE void __wrap_CtrMenu_open(CtrMenu* menu, PrintConsole* console, const CtrDisplaySettings* settings, CtrDisplayCaps caps) {
     __asm__ volatile("" : : "r"(__real_CtrMenu_open)); // keeps main's linked where it was (saveEdits says why)
@@ -467,7 +467,7 @@ LATE void __wrap_CtrMenu_open(CtrMenu* menu, PrintConsole* console, const CtrDis
     menu->edited = false;
     menu->console = console;
     CtrScreens_gameAtOpen = CtrScreens_game;
-    showOptions(menu);
+    CtrCtrlui_openPage(menu); // not showOptions: optmenu draws the page (ctr_ctrlui.c says why)
 }
 
 // The real CtrMenu_update's Controls page, with main's cursor value for the Controls row while it runs (its options

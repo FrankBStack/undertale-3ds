@@ -32,6 +32,13 @@ room gets a scene of them with sub STREAM_SUB (entries u16 sound, u16 0), which 
 change to have them stream for the room (z_utsfx.c's usPreloadOld) instead of taking a linear cache copy. Scene
 lookups for a battle group never match that sub, so other runtimes skip the scene.
 
+Warm sounds (change omegaflowey W1, --streams: UNDERTALE Old builds): the sound record's "warm" list
+(stream_records.py --warm, from our playthrough logs) names, per room, the short embedded Ogg sound effects whose plays
+opened a stream over and over before their background decode came in (Omega Flowey's flame loop: one restart per
+flame, about every 67 ms, for the 1.7 s the Old models took to decode it). Each comes first in the room's scene (its
+decoded size from the Ogg headers, inside `first`), so the room change's preload asks for its decode then
+(ctr_audio_system.c's flamePreload) and flowend keeps the copy for the room.
+
 Exit status: 0 written, 3 no game data or no record for it (the build goes on without a plan), 2 an error.
 """
 import argparse
@@ -126,9 +133,29 @@ def wav_copy_bytes(w):
     return frames * out_ch * bps
 
 
+WARM_MAX = 256 * 1024         # a warm sound's decoded copy at most (flowhitch's floor: bigger ones are shed for good)
+
+
+def ogg_copy_bytes(b):
+    """The bytes of the cache copy the 3DS decodes an Ogg Vorbis blob into (16-bit, its channels: total frames from
+    the last page's granule position), or None if it isn't a mono or stereo Ogg Vorbis file."""
+    if len(b) < 58 or b[:4] != b'OggS':
+        return None
+    p = 27 + b[26]
+    if b[p:p + 7] != b'\x01vorbis' or p + 12 > len(b):
+        return None
+    ch = b[p + 11]
+    last = b.rfind(b'OggS')
+    if ch not in (1, 2) or last + 14 > len(b):
+        return None
+    frames = struct.unpack_from('<q', b, last + 6)[0]
+    return frames * ch * 2 if frames > 0 else None
+
+
 def read_sounds(path):
-    """Per SOND index: {'name', 'copy'} where copy is the bytes the 3DS copies into its sound cache at the first play
-    (None: not a sound the plan can take)."""
+    """Per SOND index: {'name', 'copy', 'warm'} where copy is the bytes the 3DS copies into its sound cache at the
+    first play (None: not a sound the plan can take), and warm the bytes of the decoded copy of a compressed sound
+    in AUDO (an Ogg under SECTION_MIN, decoded to at most WARM_MAX; else None)."""
     with open(path, 'rb') as f:
         d = f.read()
     ch = chunks(d)
@@ -152,7 +179,7 @@ def read_sounds(path):
         af = struct.unpack_from('<i', d, p + 32)[0]
         regular = (flags & FLAG_REGULAR) == FLAG_REGULAR
         in_audo = not regular or (flags & (FLAG_EMBEDDED | FLAG_COMPRESSED)) != 0
-        copy = None
+        copy = warm = None
         if in_audo and group == 0 and 0 <= af < na:
             q = aptrs[af]
             size = struct.unpack_from('<I', d, q)[0]
@@ -160,7 +187,10 @@ def read_sounds(path):
             bound = (aptrs[af + 1] if af + 1 < na else aend) - q - 4
             if 0 < size and max(size, bound) < SECTION_MIN:
                 copy = wav_copy_bytes(d[q + 4:q + 4 + size])
-        out.append({'name': name, 'copy': copy})
+                if flags & FLAG_COMPRESSED:
+                    warm = ogg_copy_bytes(d[q + 4:q + 4 + size])
+                    warm = warm if warm is not None and warm <= WARM_MAX else None
+        out.append({'name': name, 'copy': copy, 'warm': warm})
     return out
 
 
@@ -252,15 +282,24 @@ def with_battle_sounds(record_scenes, sounds, hurt=None):
 
 def build(info, sounds, record, hurt=None, streams=False):
     """The plan's bytes. info: dwinfo.DataWinInfo; sounds: read_sounds(); record: a sound record for this data.win;
-    hurt: hurt_sounds() or None; streams: add the record's stream scenes (UNDERTALE Old)."""
+    hurt: hurt_sounds() or None; streams: add the record's stream scenes and warm sounds (UNDERTALE Old)."""
+    warm = {}
+    for w in (record.get('warm', []) if streams else []):
+        ks = [k for k in w['sounds'] if 0 <= k < len(sounds) and sounds[k].get('warm')]
+        if ks and 0 <= w['room'] < info.room_count:
+            warm[w['room']] = ks
     scenes = []
-    for s in with_battle_sounds(record['scenes'], sounds, hurt):
+    rooms = with_battle_sounds(record['scenes'], sounds, hurt)
+    rooms += [{'room': r, 'sub': -1, 'sounds': []} for r in sorted(warm) if not any(s['room'] == r and s['sub'] < 0 for s in rooms)]
+    for s in rooms:
         room, sub = s['room'], s['sub']
         if not 0 <= room < info.room_count:
             continue
-        entries = []
-        total = 0
-        first = 0
+        # The room's warm sounds first, all in its first frames (preloadSfx asks for their decode at the room change).
+        ks = warm.get(room, []) if sub < 0 else []
+        entries = [(k, (sounds[k]['warm'] + 1023) // 1024) for k in ks]
+        total = sum(sounds[k]['warm'] for k in ks)
+        first = len(entries)
         for df, k in s['sounds']:
             copy = sounds[k]['copy'] if 0 <= k < len(sounds) else None
             if copy is None or total + copy > SCENE_BYTES:

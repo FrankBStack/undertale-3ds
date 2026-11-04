@@ -25414,6 +25414,12 @@ bool Titan_scalarSurfacePartIsBuiltin(BuiltinFunc bound) {
 // top, w, h, x, y, 1, 1, 0, 0xFFFFFFFF, alpha) does. Any other region passes nullptr.
 void Titan_stripDraw(Renderer* renderer, uint32_t* session, int32_t surfaceId, int32_t left, int32_t top, int32_t w, int32_t h, float x, float y,
                      float alpha);
+#ifdef CTRPORT_KNIGHTGPU_DSPE_SESSION
+// knightgpu dspe: its Titan_stripDraw (vine_titancpu.inc's end), with 75zq's left in place unused.
+void Titan_stripDrawDspe(Renderer* renderer, uint32_t* session, int32_t surfaceId, int32_t left, int32_t top, int32_t w, int32_t h, float x,
+                         float y, float alpha);
+#define Titan_stripDraw Titan_stripDrawDspe
+#endif
 
 __attribute__((noinline, used, section(".text.late.titancpu")))
 RValue Titan_scalarSurfacePart(VMContext* ctx, uint32_t* session, GMLReal surface, GMLReal left_, GMLReal top_, GMLReal w_,
@@ -25433,6 +25439,59 @@ RValue Titan_scalarSurfacePart(VMContext* ctx, uint32_t* session, GMLReal surfac
         } else {
             runner->renderer->vtable->drawSurface(runner->renderer, surfaceId, (int32_t) left, (int32_t) top, (int32_t) w, (int32_t) h, x, y, 1.0, 1.0, 0.0, 0xFFFFFFFF, runner->renderer->drawAlpha);
         }
+    }
+    return (RValue) {.type = RVALUE_UNDEFINED, .gmlStackType = GML_TYPE_VARIABLE}; // RValue_makeUndefined()
+}
+#endif
+
+// ---[ knightgpu dspe: draw_surface_part_ext with real arguments, for typed AOT regions (DELTARUNE New 3DS, late code) ]---
+// As titancpu L3 and lever 1 above, for draw_surface_part_ext: a typed region's call whose 11 arguments are numbers
+// calls Knight_scalarSurfacePartExt with them as reals (tools/aot/typed.py, scalar_surface_ext) instead of boxing them
+// for the bound builtin. It converts and draws as builtin_draw_surface_part_ext does (RValue_toReal of a number is that
+// number as a real; the colour goes through RValue_toColour of that real) and returns what it returns. With a session
+// (a region whose builtin calls are these draws and pure queries), vine_titancpu.inc's Knight_stripDrawExt draws.
+// The region's entry checks the bound builtin is builtin_draw_surface_part_ext (Knight_scalarSurfacePartExtIsBuiltin),
+// named through its assembler name so that no existing static of this file gains a reference or a call edge.
+#if defined(__3DS__) && defined(ENABLE_WAD17) && defined(CTRPORT_TARGET_N3DS) && defined(CTRPORT_AOT) && defined(CTRPORT_KNIGHTGPU_DSPE)
+RValue knDspeBound(VMContext* ctx, RValue* args, int32_t argCount) __asm__("builtin_draw_surface_part_ext");
+
+__attribute__((noinline, used, section(".text.late.knightgpu_dspe")))
+bool Knight_scalarSurfacePartExtIsBuiltin(BuiltinFunc bound) {
+    BuiltinFunc builtin = knDspeBound;
+    __asm__("" : "+r"(builtin));
+    return bound == builtin;
+}
+
+void Knight_stripDrawExt(Renderer* renderer, uint32_t* session, int32_t surfaceId, int32_t left, int32_t top, int32_t w, int32_t h, float x,
+                         float y, float xscale, float yscale, uint32_t color, float alpha);
+
+__attribute__((noinline, used, section(".text.late.knightgpu_dspe")))
+RValue Knight_scalarSurfacePartExt(VMContext* ctx, uint32_t* session, GMLReal surface, GMLReal left_, GMLReal top_, GMLReal w_,
+                                   GMLReal h_, GMLReal x_, GMLReal y_, GMLReal xscale_, GMLReal yscale_, GMLReal color_,
+                                   GMLReal alpha_) {
+    int32_t surfaceId = (int32_t) surface;
+    float left = (float) left_;
+    float top = (float) top_;
+    float w = (float) w_;
+    float h = (float) h_;
+    float x = (float) x_;
+    float y = (float) y_;
+    float xscale = (float) xscale_;
+    float yscale = (float) yscale_;
+    uint32_t color = RValue_toColour(RValue_makeReal(color_));
+    float alpha = (float) alpha_;
+    Runner* runner = ctx->runner;
+    if (runner->renderer != nullptr) {
+#ifdef CTRPORT_KNIGHTGPU_DSPE_SESSION
+        if (session != nullptr) {
+            Knight_stripDrawExt(runner->renderer, session, surfaceId, (int32_t) left, (int32_t) top, (int32_t) w, (int32_t) h, x, y,
+                                xscale, yscale, color, alpha);
+            return (RValue) {.type = RVALUE_UNDEFINED, .gmlStackType = GML_TYPE_VARIABLE};
+        }
+#else
+        (void) session;
+#endif
+        runner->renderer->vtable->drawSurface(runner->renderer, surfaceId, (int32_t) left, (int32_t) top, (int32_t) w, (int32_t) h, x, y, xscale, yscale, 0.0, color, alpha);
     }
     return (RValue) {.type = RVALUE_UNDEFINED, .gmlStackType = GML_TYPE_VARIABLE}; // RValue_makeUndefined()
 }

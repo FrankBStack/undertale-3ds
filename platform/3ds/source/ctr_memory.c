@@ -58,6 +58,13 @@
 #define CTRPORT_CTR_MEMORY_IMPLEMENTATION
 #include "ctr_memory.h"
 #include "ctr_memory_lock.h"
+#ifdef CTR_GPU_KICK
+#include "ctr_gpu_kick.h"
+#define CtrGpu_busy CtrKick_retirementBusy
+#define CtrGpu_completionDue CtrKick_retirementDue
+#define svcSleepThread CtrKick_pressureWait
+#endif
+#line 61
 #define noRelief ctrMemoryNoRelief
 
 // newlib's malloc hands the top of the heap back to sbrk once 128 KB of it is

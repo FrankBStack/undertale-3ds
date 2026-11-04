@@ -1644,3 +1644,11 @@ uint32_t CtrGpu_drawCompletions(void) {
     return n;
 }
 #endif
+
+#if defined(CTR_GPU_KICK) && defined(CTR_KICK_REV5)
+// KM rev 5 (change pacer, 75zq append-only port): the kick launcher's second helper pass only; its first pass
+// keeps KM rev 4.1 (below) in place (tools/analysis/cheaplevers_kick_compile.py).
+#include "ctr_gpu_kick5.inc"
+#elif defined(CTR_GPU_KICK)
+#include "ctr_gpu_kick.inc"
+#endif

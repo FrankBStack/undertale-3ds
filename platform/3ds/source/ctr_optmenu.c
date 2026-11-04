@@ -897,12 +897,12 @@ OPT_CODE void __wrap_CtrArgui_menuOpen(CtrMenu* menu, PrintConsole* console, con
     optPlace(menu); // before the screens' open prints its page, so that it prints off screen
 #ifdef CTRPORT_PLAYER_SHOTS
     uint64_t t0 = svcGetSystemTick(), shownAt = 0;
-    if (!opt.legacy && !CtrLegal_shown()) {
+    bool early = !opt.legacy && !CtrLegal_shown(); if (early) {
 #else
-    if (!CtrLegal_shown()) { // (the legal page left open last time: the screens' open closes it, then the page shows)
+    bool early = !CtrLegal_shown(); if (early) { // (legal page left open last time: the screens' open closes it first)
 #endif
-    // The page shown first (the screens' open holds the audio: its CtrLegal_close is menupause's hook, a 35 ms fade on
-    // this thread, so it isn't called here): the settings as the screens' open takes them, the main page, drawn and
+    // The page shown first (before the screens' open, whose CtrLegal_close is menupause's hook that holds the audio,
+    // once a 35 ms fade on this thread): the settings as the screens' open takes them, the main page, drawn and
     // copied to the shown buffer; then that screen lit, if Other screen Off had darkened it (the renderer's next screen
     // set-up would light it a frame later; the top screen's is optLive's).
     CtrLog_setConsoleEnabled(false); // as the screens' open does first: no log line over the page
@@ -931,7 +931,7 @@ OPT_CODE void __wrap_CtrArgui_menuOpen(CtrMenu* menu, PrintConsole* console, con
     gHintSeen = g.menuIsOpen = 1;
     opt.page = OPT_PAGE_MAIN;
     memset(opt.cur, 0, sizeof(opt.cur));
-    opt.dirty = true;
+    opt.dirty = !early; __asm__ volatile("nop"); // drawn above, and not printed over now (nop: 75zo's size)
     optLive();
     fpsboxMenuFlush(menu);
     optSound(false);
@@ -1484,3 +1484,15 @@ FPS75_CODE void CtrFpsbox_drawDigits(int32_t x, int32_t y, const char* text, uin
         }
     }
 }
+
+// main.c's SAVE FAILED line (its saveFailureWarning, row 24 of the menu console), printed only while the menu is
+// closed. With the menu open that console is the page's: the main page redraws it whole before each copy (optCompose,
+// so the line never showed there), but the Controls and legal pages print through it and are shown every frame
+// (optFlush), the line then over one of their rows (chg-savefail-optpage). Late text, last, so no earlier late code
+// moves.
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wformat-security"
+__attribute__((noinline, noipa, used, section(".text.savewarn_late"))) void CtrOptmenu_saveWarn(const char* line) {
+    if (opt.menu == nullptr) printf(line);
+}
+#pragma GCC diagnostic pop

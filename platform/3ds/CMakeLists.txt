@@ -19,6 +19,9 @@ set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
     "${CMAKE_CURRENT_SOURCE_DIR}/../../docs/release/build-contract.json"
     "${CMAKE_CURRENT_SOURCE_DIR}/../../${RELEASE_version_file}")
 project(ctrport VERSION ${RELEASE_NUMERIC_VERSION} LANGUAGES C ASM)
+# Keep the ordered object list in a response file: long checkout paths exceed
+# the Windows process command-line limit even with short individual paths.
+set(CMAKE_C_USE_RESPONSE_FILE_FOR_OBJECTS 1)
 include("${CMAKE_CURRENT_SOURCE_DIR}/compiler_policy.cmake")
 release_compiler_policy("${CMAKE_CURRENT_SOURCE_DIR}/../../docs/release/build-contract.json")
 
@@ -149,6 +152,8 @@ add_custom_target(ctrport_build_id
 
 # ===[ Engine core ]===
 file(GLOB ENGINE_SOURCES "${ENGINE_DIR}/src/*.c")
+# drhitbox is appended explicitly, on the proved DR path only.
+list(REMOVE_ITEM ENGINE_SOURCES "${ENGINE_DIR}/src/z_drhitbox.c")
 list(REMOVE_ITEM ENGINE_SOURCES "${ENGINE_DIR}/src/z_colexact.c")
 # loop.c is the desktop main loop; source/main.c replaces it.
 list(REMOVE_ITEM ENGINE_SOURCES "${ENGINE_DIR}/src/loop.c")
@@ -614,6 +619,8 @@ dkp_add_embedded_binary_library(drawskip_data "${CMAKE_CURRENT_BINARY_DIR}/draws
 list(REMOVE_ITEM PLATFORM_SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/source/ctr_legal_romfs.c")
 # The test-only counter probe (CTRPORT_ASG_PROBE, below) is compiled only in its own build.
 list(REMOVE_ITEM PLATFORM_SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/source/ctr_asgprobe.c")
+# The test-only renderer table chain check (CTRPORT_VTCHAIN_CHECK, below) only in its own build.
+list(REMOVE_ITEM PLATFORM_SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/source/ctr_vtchain.c")
 # The test-only half-resolution census and art (CTRPORT_HALF_CENSUS, CTRPORT_HALFART, below) only in their own builds.
 list(REMOVE_ITEM PLATFORM_SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/source/ctr_halfcensus.c"
     "${CMAKE_CURRENT_SOURCE_DIR}/source/ctr_halfart.c")
@@ -747,6 +754,21 @@ endif()
 # (linear -20 KB).
 # Then one more late-constants page, 0x4000 (lead 2026-11-02): about 950 B would be left after FC2, KM and titan75, with
 # kolp's constants unpriced. Only DELTARUNE New's .data, .bss and TLS move, by one whole page (linear -4 KB).
+# 75zq unit 15 (review decision 2026-11-03, integrate21's 75zq ledger): DELTARUNE New three more pages, 0x5C000. zq11 left
+# 7,828 B against 14,730 B of pending units: gsfix rev 3 2,439, flowerhw lever 294, the no-move dspe port ~4,108,
+# titancpu sharebuf 4,976, pacer KM5 2,912 and repacka F2 1. Two pages cover them (~1,290 B left); the third is the
+# spare page. Text and the 4 KiB set phase do not move; only DELTARUNE New's .rodata, .data, .bss and TLS move, by three
+# whole pages (linear -12 KB).
+# 75zq unit 22 (lead decision 2026-11-03, freebytes design b3f7153a1): DELTARUNE New two more pages, 0x5E000. zq18 left
+# 9,336 B against 12,224 B of firm pending units: knightgpu B'' trim 2,608, titancpu G2 rev 2 2,580, flowerhw entry
+# ~1,044, pacer KM5 5,992 and repacka F2 320; with repacka L1 + L2 1,759 and the titancpu composite ~600 about 2.6 KB
+# are left. Late constants keep their page (~3.5 KB left after them). Text and the 4 KiB set phase do not move; only
+# DELTARUNE New's .rodata, .data, .bss and TLS move, by two whole pages (linear -8 KB).
+# 75zq unit 28 (review decision 2026-11-03, freebytes trigger f108cae26): DELTARUNE Old one more page, 0x44000. dofl2
+# (unit 27, 1,599 B on both DELTARUNE targets) left 104 B, and repacka's padded F2 needs 256 B (proved on o3DS:
+# DR Old Flowery worst frames 13-70 ms lower). Text and the 4 KiB set phase do not move; only DELTARUNE Old's
+# .rodata, .data, .bss and TLS move, by one whole page. DR Old's linear memory is at its 32 MB cap, so the 4 KiB
+# comes off the heap (.3dsx 25,536 -> 25,532 KB; installed 80 MB CIA about 39,880 -> 39,876 KB).
 # bubblecheck test builds (CTRPORT_BUBBLE_CHECK, never Release): four more pages for the checker, which is late code
 # with the rest of z_smalltext.c. Added ahead of the game's own value below, which then replaces the placeholder.
 if(CTRPORT_BUBBLE_CHECK)
@@ -754,10 +776,10 @@ if(CTRPORT_BUBBLE_CHECK)
            CTRPORT_LATE_LD_TEXT "${CTRPORT_LATE_LD_TEXT}")
 endif()
 if(CTRPORT_GAME STREQUAL "deltarune" AND CTRPORT_TARGET STREQUAL "o3ds")
-    string(REPLACE "/* LATE_TEXT_RESERVE */ 0x30000" "0x43000"
+    string(REPLACE "/* LATE_TEXT_RESERVE */ 0x30000" "0x44000"
            CTRPORT_LATE_LD_TEXT "${CTRPORT_LATE_LD_TEXT}")
 elseif(CTRPORT_GAME STREQUAL "deltarune")
-    string(REPLACE "/* LATE_TEXT_RESERVE */ 0x30000" "0x59000"
+    string(REPLACE "/* LATE_TEXT_RESERVE */ 0x30000" "0x5E000"
            CTRPORT_LATE_LD_TEXT "${CTRPORT_LATE_LD_TEXT}")
     string(REPLACE "/* TEST_RODATA_RESERVE */ 0x2000" "0x4000"
            CTRPORT_LATE_LD_TEXT "${CTRPORT_LATE_LD_TEXT}")
@@ -829,9 +851,17 @@ else()
     # variant and cpugen (~1 KB). The same whole-page move. Old's heap stays 20 MiB (DEFAULT_HEAP_MIN_MB); its linear
     # memory, the rest under the 38 MiB cap, drops 8 KiB with the late-constants page below (37.72 MiB, memcap 59,104;
     # the Omega Flowey set evicted at 36). New's linear 4 KiB less.
+    # Old page 12 (review decision 2026-11-03, freebytes zq ledger): loadgame 1,336 + omegaflowey W2 2,010 + pacer C/A
+    # against 1,391 B left. The same whole-page move; Old's linear memory 4 KiB less (memcap 59,100).
+    # Old pages 13 + 14 (review decision 2026-11-03, 75zq unit 32): pcorder 1,076 + arena ~1,720 + thinart 1,460 +
+    # loadgame <=700 (+ creddodge textfast ~4.6 KB if its rows show value) against 3,422 B left. The same whole-page
+    # move; Old's linear memory 8 KiB less (memcap 59,092). CONSTRAINT: at the Omega Flowey scene's entry, Old sits
+    # within about 4-8 KiB of the linear floor that sheds sound effects and tiles. At 59,092 that shed evicts one more
+    # tile (0.1 MB) than at 59,100 (UT10 capped twins; the tile is not loaded again in that session). Each further Old
+    # page costs a tile there unless linear memory grows (memsplit's 19 / 39 split is the clean fix).
     set(ctrport_ut_late 0x69000)
     if(CTRPORT_TARGET STREQUAL "o3ds")
-        set(ctrport_ut_late 0x73000)
+        set(ctrport_ut_late 0x76000)
     endif()
     if(CTRPORT_GOG_COMPAT)
         # Ruling, gogut round 17: GOG UT alone needs two more 4 KiB pages over Steam (integrate22: over
@@ -1967,7 +1997,17 @@ if(CTRPORT_ASG_PROBE)
     endif()
 endif()
 
-# Test only (flowhalf): the largest scale each texture page item is drawn at in one room (source/ctr_halfcensus.c,
+# Test only (change flowerhw, 2026-11-03): each table put in front of the renderer's notes itself (CTR_VTCHAIN_NOTE,
+# ctr_renderer.h) and source/ctr_vtchain.c stops the run when one goes on in front of a chain that already holds it (a
+# copy calling back into its own table loops: smalltext over the tower decorations). build.sh never sets it: a test
+# build directory's cache does, and a release never carries it (the notes are no tokens without it; the run logs a
+# "vtchain:" line at each install with it).
+option(CTRPORT_VTCHAIN_CHECK "Test only: stop the run when a renderer table goes on in front of a chain holding it" OFF)
+if(CTRPORT_VTCHAIN_CHECK)
+    target_compile_definitions(ctrport PRIVATE CTRPORT_VTCHAIN_CHECK)
+    target_sources(ctrport PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/source/ctr_vtchain.c")
+endif()
+# Test only (change flowhalf): the largest scale each texture page item is drawn at in one room (source/ctr_halfcensus.c,
 # all late code). The link sends main.c's Runner_drawViews call to its wrapper.
 option(CTRPORT_HALF_CENSUS "Compile in the half-resolution draw-scale census" OFF)
 if(CTRPORT_HALF_CENSUS)
@@ -2392,7 +2432,8 @@ if(CTRPORT_GAME STREQUAL "deltarune" AND CTRPORT_TARGET STREQUAL "n3ds")
     target_link_options(ctrport PRIVATE -Wl,--wrap=CtrTextures_roomLoadFinish)
 endif()
 # Test builds (build.sh repacktest=<folder>): repack's files (tools/repack/repack.py, made from the player's own cache)
-# go into romfs/repack/<data.win folder>/, and ctr_repack.inc copies them into the cache folder at startup, so a
+# go into romfs/repack/<data.win folder>/, and diag/ctr_repack_test.c copies them into the cache folder at startup
+# (repack.bin as repack.tst, the name test builds read; its sections are last in late text), so a
 # hardware row needs no SD step. Never in a release build; built from files outside the repository.
 set(CTRPORT_REPACK_TEST_DIR "" CACHE PATH "Folder of <data.win folder>/ repack files for a test build's RomFS (build.sh repacktest=)")
 file(REMOVE_RECURSE "${CTRPORT_ROMFS_DIR}/repack")
@@ -2408,6 +2449,8 @@ if(CTRPORT_REPACK_TEST_DIR)
     endforeach()
     add_custom_command(OUTPUT "${CTRPORT_3DSX_OUTPUT}" APPEND DEPENDS ${REPACK_TEST_ROMFS_FILES})
     set_property(SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/source/ctr_renderer.c" APPEND PROPERTY COMPILE_DEFINITIONS CTRPORT_REPACK_TEST=1)
+    target_sources(ctrport PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/diag/ctr_repack_test.c")
+    set_property(SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/diag/ctr_repack_test.c" APPEND PROPERTY COMPILE_DEFINITIONS CTRPORT_REPACK_TEST=1)
 endif()
 add_custom_command(OUTPUT "${CTRPORT_3DSX_OUTPUT}" APPEND DEPENDS ${RELEASE_LEGAL_FILES})
 # The font and item verdict tables (romfs/fonts/*.dtfv, *.dtiv): build.sh writes them after configuring, with
@@ -2429,7 +2472,8 @@ set(CIA_RSF "${CMAKE_CURRENT_SOURCE_DIR}/cia/${CTRPORT_TARGET}.rsf")
 set(CIA_EXTRA_DEPENDS "")
 # Use the same sorted payload as the 3dsx, wrapped in an IVFC hash tree.
 set(CIA_EXTRA_DEPENDS ${CTRPORT_AOT_MODULE_FILES} "${CTRPORT_ROMFS_DIR}/bench_scenes.txt"
-    "${COVERAGE_ROMFS_FILE}" ${BTNPROMPT_ROMFS_FILES} ${LOADSCREEN_ROMFS_FILES} "${CTRPORT_FONT_TABLES_STAMP}")
+    "${COVERAGE_ROMFS_FILE}" ${BTNPROMPT_ROMFS_FILES} ${LOADSCREEN_ROMFS_FILES} "${CTRPORT_FONT_TABLES_STAMP}"
+    ${REPACK_TEST_ROMFS_FILES})
 set(CIA_OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/${RELEASE_PACKAGE_STEM}.cia")
 
 if(MAKEROM_EXE)
@@ -2590,6 +2634,16 @@ endif()
 # compiles drresid empty). Late code only; UNDERTALE and the Old models compile it empty.
 if(CTRPORT_GAME STREQUAL "deltarune" AND CTRPORT_TARGET STREQUAL "n3ds" AND NOT CTRPORT_ROOMPLAN_RECORDER)
     target_link_options(ctrport PRIVATE -Wl,--wrap=CtrTextures_beginFrame)
+endif()
+# flowerhw cold (DELTARUNE New; review decision 2026-11-03): on the first room after a front-end or game-over room (a save,
+# chapter or retry load) the room load runs once more with up to 1 s more (z_drresid.c wraps CtrRoomload_prefetchRoom,
+# which nothing else wraps there; the flowcode probe build does, so it goes without). OFF builds without it (an A arm).
+option(CTRPORT_FLOWERHW_COLD "Finish the first room's seed after a save or chapter load, on DELTARUNE New" ON)
+if(CTRPORT_FLOWERHW_COLD AND NOT CTRPORT_FLOWCODE AND CTRPORT_GAME STREQUAL "deltarune" AND CTRPORT_TARGET STREQUAL "n3ds"
+   AND NOT CTRPORT_ROOMPLAN_RECORDER)
+    set_property(SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/source/z_drresid.c" APPEND PROPERTY
+        COMPILE_DEFINITIONS CTRPORT_FLOWERHW_COLD)
+    target_link_options(ctrport PRIVATE -Wl,--wrap=CtrRoomload_prefetchRoom)
 endif()
 # flowstream (UNDERTALE Old): source/z_flowstream.c, the background refill of plan tiles evicted in play (late code
 # only; every other build compiles it empty). Small rather than fast: once a frame, and on the reader once a refill read.
@@ -3049,6 +3103,17 @@ if(CTRPORT_KNIGHTGPU_LAZY AND CTRPORT_GAME STREQUAL "deltarune" AND CTRPORT_TARG
         target_link_options(ctrport PRIVATE -Wl,--wrap=Crispart_drawTexture)
     endif()
 endif()
+# knightgpu dspe (DELTARUNE New): typed regions' draw_surface_part_ext calls with real arguments
+# (Knight_scalarSurfacePartExt, vm_builtins.c's end); SESSION adds their draw session (vine_titancpu.inc's
+# Knight_stripDrawExt). build.sh turns on both this and the generator's side (CTRPORT_AOT_DSPE for tools/aot/typed.py).
+set(CTRPORT_KNIGHTGPU_DSPE "OFF" CACHE STRING "draw_surface_part_ext in typed AOT regions: OFF, SCALAR or SESSION (build.sh: SESSION in DELTARUNE New)")
+if(NOT CTRPORT_KNIGHTGPU_DSPE STREQUAL "OFF" AND CTRPORT_GAME STREQUAL "deltarune" AND CTRPORT_TARGET STREQUAL "n3ds")
+    set_property(SOURCE "${ENGINE_DIR}/src/vm_builtins.c" APPEND PROPERTY COMPILE_DEFINITIONS CTRPORT_KNIGHTGPU_DSPE)
+    if(CTRPORT_KNIGHTGPU_DSPE STREQUAL "SESSION")
+        set_property(SOURCE "${ENGINE_DIR}/src/vm_builtins.c" "${CMAKE_CURRENT_SOURCE_DIR}/source/ctr_renderer.c"
+                     APPEND PROPERTY COMPILE_DEFINITIONS CTRPORT_KNIGHTGPU_DSPE_SESSION)
+    endif()
+endif()
 # flowend (both games): the audio loader thread's decode reads into the SFX cache go in pieces with every queued sound
 # read done between them (ctr_audio_system.c's end). Wrapped, so runPrepDecode, utaDecRead and the stream decode
 # keep their code; only their call target changes, and other threads' reads pass straight through.
@@ -3063,6 +3128,20 @@ endif()
 # note (ctr_audio_system.c's end). Wrapped, so openStream and the opener keep their code.
 if(CTRPORT_USE_TREMOR AND TREMOR_INCLUDE_DIR AND TREMOR_LIBRARY AND OGG_LIBRARY) # the code needs Tremor's state
     target_link_options(ctrport PRIVATE -Wl,--wrap=CtrDecoder_openFile,--wrap=CtrWatchdog_note)
+    # pacer C3 (UNDERTALE Old 3DS): streams with the same codebooks share one decoded set (ctr_audio_system.c's end).
+    # Only vorbisfile.o calls these two, so only its call targets change. The code reads Tremor's private set-up
+    # (codec_setup_info: books +0x1c, book_param +0x820, fullbooks +0xc20; codebook 0x34 B), which no installed header
+    # declares, so it is on only for the libvorbisidec.a whose layout was checked (3ds-libvorbisidec 1.2.1, disassembly
+    # of block.o / info.o / sharedbook.o). Any other build of the library: C3 compiles out and Tremor's own path runs.
+    if(CTRPORT_GAME STREQUAL "undertale" AND CTRPORT_TARGET STREQUAL "o3ds" AND NOT CTRPORT_AUDIO_METRICS)
+        file(SHA256 "${TREMOR_LIBRARY}" ctrport_tremor_sha256)
+        if(ctrport_tremor_sha256 STREQUAL "8b40b8425702d85fe5bc4249204069184da6c5293817a950ffee8be55d6c7b23")
+            target_compile_definitions(ctrport PRIVATE CTRPORT_PACER_SHARE)
+            target_link_options(ctrport PRIVATE -Wl,--wrap=vorbis_synthesis_init,--wrap=vorbis_info_clear)
+        else()
+            message(STATUS "Vorbis codebook share off: ${TREMOR_LIBRARY} is not the checked Tremor build")
+        endif()
+    endif()
 endif()
 
 # utold Continue transition: registration is cold and all new storage is late.
@@ -3139,6 +3218,40 @@ if(CTRPORT_KNSURF AND CTRPORT_GAME STREQUAL "deltarune" AND CTRPORT_TARGET STREQ
         COMPILE_DEFINITIONS CTRPORT_KNSURF)
 endif()
 
+# sharebuf (change titancpu): surfaces made by the objects the builder lists (romfs:/roomplan/sharebuf.dtp,
+# tools/roomplan/build_sharebuf.py) share one buffer. ctr_renderer_sharebuf.inc is compiled in the vine helper pass
+# only (the original pass, and so the file's own code, never sees it); vine_old_observer_compile.py routes the calls
+# to it in the assembly, and its sections are linked last. Off (build.sh sharebuf=off) compiles none of it;
+# build.sh sharebuf=test forces one violation, to show its log fires. G2 (ctr_renderer_sharebuf_g2.inc, appended
+# after G1 in sections of its own) is on with sharebuf; sharebuf=g1 leaves it out (the base of its layout check),
+# and sharebuf=fulltest fills every whole clear of a shared scratch whole and checks the rows G2 would have filled
+# (SHAREBUF BOX MISS), a test build.
+option(CTRPORT_SHAREBUF "Let listed objects' surfaces share one buffer on DELTARUNE New" ON)
+option(CTRPORT_SHAREBUF_TEST "Force one sharebuf violation (test builds only)" OFF)
+option(CTRPORT_SHAREBUF_G2 "Sharebuf G2: whole clears of shared scratches fill only the rows drawn on" ON)
+option(CTRPORT_SHAREBUF_FULLTEST "Fill shared scratches whole and check G2's rows (test builds only)" OFF)
+if(CTRPORT_SHAREBUF AND CTRPORT_GAME STREQUAL "deltarune" AND CTRPORT_TARGET STREQUAL "n3ds")
+    set_property(SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/source/ctr_renderer.c" APPEND PROPERTY
+        COMPILE_DEFINITIONS CTRPORT_SHAREBUF)
+    # The helper pass's include is in no dependency file the original pass writes.
+    set_property(SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/source/ctr_renderer.c" APPEND PROPERTY OBJECT_DEPENDS
+        "${CMAKE_CURRENT_SOURCE_DIR}/source/ctr_renderer_sharebuf.inc" "${CMAKE_CURRENT_SOURCE_DIR}/../../tools/analysis/vine_extract.py")
+    if(CTRPORT_SHAREBUF_G2)
+        set_property(SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/source/ctr_renderer.c" APPEND PROPERTY
+            COMPILE_DEFINITIONS CTRPORT_SHAREBUF_G2)
+        set_property(SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/source/ctr_renderer.c" APPEND PROPERTY OBJECT_DEPENDS
+            "${CMAKE_CURRENT_SOURCE_DIR}/source/ctr_renderer_sharebuf_g2.inc")
+    endif()
+    if(CTRPORT_SHAREBUF_TEST)
+        set_property(SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/source/ctr_renderer.c" APPEND PROPERTY
+            COMPILE_DEFINITIONS CTRPORT_SHAREBUF_TEST)
+    endif()
+    if(CTRPORT_SHAREBUF_G2 AND CTRPORT_SHAREBUF_FULLTEST)
+        set_property(SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/source/ctr_renderer.c" APPEND PROPERTY
+            COMPILE_DEFINITIONS CTRPORT_SHAREBUF_FULLTEST)
+    endif()
+endif()
+
 # redpix: preserve the original packing callback's section position after its cold call is retargeted.
 if(CTRPORT_GAME STREQUAL "undertale" AND CMAKE_BUILD_TYPE STREQUAL "Release")
     get_target_property(redpix_delegate ctrport C_COMPILER_LAUNCHER)
@@ -3173,4 +3286,95 @@ if(CTRPORT_GAME STREQUAL "deltarune" AND CTRPORT_TARGET STREQUAL "n3ds")
         set_property(SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/source/z_phaseplan.c" APPEND PROPERTY
             COMPILE_DEFINITIONS CTRPORT_PPFORCE)
     endif()
+endif()
+
+# GPU kick (pacer, 2026-10-31; cheaplevers' guard20 kick, ef31f2fbd): while a DELTARUNE New frame still
+# records, an existing split hands the GPU the commands recorded so far (ctr_gpu_kick.inc, included at the end of
+# ctr_gpu_queue.c). build.sh's gpukick words; default ON in DELTARUNE New in multi mode with the rev3 gate, and
+# "gpukick=off" is the control: then no object or link command changes. Policy E: the flags and hooks never reach
+# UNDERTALE or DELTARUNE Old. The launcher compiles each ordinary body without the kick and
+# appends only the kick's late sections; z_knightnew_history.c's wrappers and benchfix's draw wait keep their bodies,
+# with only their downstream calls routed (tools/analysis/cheaplevers_kick_compile.py). Mode: single (one prefix per
+# recording, history guard), multi (a prefix at each later split once the last is off the GPU, series-time guard) or
+# multi-force (every recording; Azahar identity diagnostic only, never a console or release package).
+# Rev2 (lead 2026-11-01): no prefix in a frame that loads or sync-copies textures, or right after one that loaded
+# (C3D_SyncTextureCopy is wrapped to count them), and a per-frame kick trace for slow frames in the log.
+# Rev3 (lead 2026-11-02, Knight kfinal lever 1): multi kicks only after 3 frames in a row whose main + GPU passed the
+# slot while each fit it (ctr_gpu_kick.inc's gate), and logs each turn of the gate.
+# KM rev 5 (change pacer, c26rev R123/R131; 75zq append-only port): a bounded chain of 8 KB ranges, the gate on the
+# late-serial shape, no frame-end self-joins (ctr_gpu_kick5.inc). The launcher's first helper pass still builds rev 4.1
+# (ctr_gpu_kick.inc) in place, its exports branching to rev 5, whose code, constants and state are appended in their
+# own late sections (.pacer_km5_late), so no existing address moves. Multi only (the single prefix is gone).
+option(CTRPORT_GPU_KICK "Submit flushed command prefixes while recording (DR New)" ON)
+set(CTRPORT_GPU_KICK_MODE "multi" CACHE STRING "GPU kick mode: multi or multi-force (identity diagnostic)")
+# R123's compact per-frame trace (KT lines between bench windows, a 1024-record ring): OFF for release (R131 F3);
+# console row builds turn it on (build.sh gpukick-trace).
+option(CTRPORT_GPU_KICK_TRACE "GPU kick per-frame trace between bench windows (KM rev 5; row builds only)" OFF)
+if(CTRPORT_GAME STREQUAL "deltarune" AND CTRPORT_TARGET STREQUAL "n3ds" AND CTRPORT_GPU_KICK)
+    set(kick_sources "${CMAKE_CURRENT_SOURCE_DIR}/source/ctr_gpu_queue.c"
+                     "${CMAKE_CURRENT_SOURCE_DIR}/source/ctr_renderer.c"
+                     "${CMAKE_CURRENT_SOURCE_DIR}/source/ctr_memory.c"
+                     "${CMAKE_CURRENT_SOURCE_DIR}/source/ctr_benchmark.c")
+    if(CTRPORT_KNIGHTNEW_HISTORY)
+        list(APPEND kick_sources "${CMAKE_CURRENT_SOURCE_DIR}/source/z_knightnew_history.c")
+    endif()
+    set_property(SOURCE ${kick_sources} APPEND PROPERTY COMPILE_DEFINITIONS CTR_GPU_KICK)
+    if(CTRPORT_GPU_KICK_MODE STREQUAL "multi")
+        set_property(SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/source/ctr_gpu_queue.c" APPEND PROPERTY
+            COMPILE_DEFINITIONS CTR_KICK_MULTI)
+    elseif(CTRPORT_GPU_KICK_MODE STREQUAL "multi-force")
+        set_property(SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/source/ctr_gpu_queue.c" APPEND PROPERTY
+            COMPILE_DEFINITIONS CTR_KICK_MULTI CTR_KICK_FORCE)
+    else()
+        # KM rev 5's chain is the multi kick only; the single prefix (cheaplevers) is gone.
+        message(FATAL_ERROR "CTRPORT_GPU_KICK_MODE must be multi or multi-force")
+    endif()
+    get_target_property(kick_delegate ctrport C_COMPILER_LAUNCHER)
+    set_property(TARGET ctrport PROPERTY C_COMPILER_LAUNCHER
+        "${CTRPORT_PYTHON_EXECUTABLE};-I;${CMAKE_CURRENT_SOURCE_DIR}/../../tools/analysis/cheaplevers_kick_compile.py;${kick_delegate};--kick-cc--")
+    set_property(SOURCE ${kick_sources} APPEND PROPERTY OBJECT_DEPENDS
+        "${CMAKE_CURRENT_SOURCE_DIR}/source/ctr_gpu_kick.h"
+        "${CMAKE_CURRENT_SOURCE_DIR}/source/ctr_gpu_kick.inc"
+        "${CMAKE_CURRENT_SOURCE_DIR}/source/ctr_gpu_kick_renderer.inc"
+        "${CMAKE_CURRENT_SOURCE_DIR}/source/ctr_gpu_kick5.inc"
+        "${CMAKE_CURRENT_SOURCE_DIR}/source/ctr_gpu_kick5_renderer.inc"
+        "${CMAKE_CURRENT_SOURCE_DIR}/source/ctr_gpu_kick_chain.h"
+        "${CMAKE_CURRENT_SOURCE_DIR}/../../tools/analysis/cheaplevers_kick_compile.py")
+    # The same link options as cheaplevers' release31 kick (waitDraws, beginFrame and endFrame are wrapped already
+    # in DELTARUNE New: benchfix and Knight GPU-1; the launcher renames the kick's own links into those chains).
+    target_link_options(ctrport PRIVATE
+        -Wl,--wrap=C3D_FrameSplit,--wrap=C3D_FrameEnd,--wrap=CtrGpu_frameEndBehind
+        -Wl,--wrap=CtrGpu_waitIdle,--wrap=CtrGpu_waitDraws,--wrap=CtrGpu_busy
+        -Wl,--wrap=CtrGpu_wrapCommandBuffer,--wrap=CtrGpu_cancelCopy,--wrap=CtrRenderer_beginFrame
+        -Wl,--wrap=CtrRenderer_endFrame,--wrap=CtrRenderer_stopBackgroundWork,--wrap=C3D_SyncTextureCopy
+        -Wl,--wrap=gxCmdQueueRun,--wrap=CtrPacer_stressStep
+        -Wl,-u,C3D_FrameSplit,-u,C3D_FrameEnd,-u,CtrGpu_frameEndBehind
+        -Wl,-u,CtrGpu_waitIdle,-u,CtrGpu_waitDraws,-u,CtrGpu_busy
+        -Wl,-u,CtrGpu_wrapCommandBuffer,-u,CtrGpu_cancelCopy,-u,CtrRenderer_beginFrame,-u,C3D_SyncTextureCopy)
+    # KM rev 4.1: the totals are bench-only output, printed as a test run ends (main.c's CtrBench_takeFinished call).
+    # frametrace wraps that call itself (a symbol is wrapped once): with it on, KM prints no totals.
+    if(NOT CTRPORT_FRAMETRACE)
+        set_property(SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/source/ctr_gpu_queue.c" APPEND PROPERTY
+            COMPILE_DEFINITIONS CTR_KICK_BENCH_TOTALS)
+        target_link_options(ctrport PRIVATE -Wl,--wrap=CtrBench_takeFinished)
+        if(CTRPORT_GPU_KICK_TRACE)
+            # Read only by rev 5's helper pass (the launcher drops it from the ordinary and rev 4.1 passes).
+            set_property(SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/source/ctr_gpu_queue.c" APPEND PROPERTY
+                COMPILE_DEFINITIONS CTR_KICK_FRAME_TRACE)
+        endif()
+    endif()
+endif()
+
+# drhitbox: append-only WAD17 / GM 2022.9 legacy collision correction.
+# Do not add this object, adapter, or wraps to UNDERTALE.
+if(CTRPORT_GAME STREQUAL "deltarune")
+    target_sources(ctrport PRIVATE "${ENGINE_DIR}/src/z_drhitbox.c")
+    set_source_files_properties("${ENGINE_DIR}/src/z_drhitbox.c" PROPERTIES
+        COMPILE_OPTIONS "-Os;-fno-merge-constants;-fno-tree-switch-conversion;-fno-jump-tables")
+    get_target_property(drhitbox_delegate ctrport C_COMPILER_LAUNCHER)
+    set_property(TARGET ctrport PROPERTY C_COMPILER_LAUNCHER
+        "${CTRPORT_PYTHON_EXECUTABLE};-I;${CMAKE_CURRENT_SOURCE_DIR}/../../tools/buildcache/drhitbox_compile.py;${drhitbox_delegate};--drhitbox-compiler")
+    set_property(SOURCE "${ENGINE_DIR}/src/collision_compat.c" "${ENGINE_DIR}/src/runner.c"
+        APPEND PROPERTY OBJECT_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/../../tools/buildcache/drhitbox_compile.py")
+    target_link_options(ctrport PRIVATE -Wl,--wrap=Colflip_registerAll,--wrap=Colflip14_scanPixels)
 endif()

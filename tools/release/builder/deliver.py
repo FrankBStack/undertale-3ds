@@ -273,6 +273,21 @@ def copy_items(sd_root, items, progress=None, cancelled=lambda: False):
     return copied, skipped, done
 
 
+def make_cache_folders_first(sd_root, product, folder, parts=None):
+    """Makes each delivered data.win's cache/ folder before any game file is copied, so on a fresh install it is the
+    first entry of its folder. The 3DS finds every name on a path by reading that folder's entries in order, and an
+    entry stays where it was made: made after the copy, cache/ sits behind the chapter's 13-34 files (UNDERTALE: behind
+    ~210), and every page open in play pays for reading past them (~0.8 ms an entry on the lab n3ds;
+    docs/3ds-hardware.md, the PC-fold entry). Names, contents and format are unchanged; an existing folder keeps its
+    order. A manual copy can reorder entries; use the builder for that order. The console's own preparation makes the same folder, so an empty one is never a problem."""
+    import texcache
+    if folder is None or not os.path.isdir(folder):
+        return
+    for _data_win, rel in texcache.data_wins(product, folder, parts):
+        os.makedirs(install_record.target(sd_root, texcache.sd_cache_dir(product, rel)), exist_ok=True)
+
+
+
 def _copy_payload(sd_root, items, product, folder, work, parts=None, progress=None, cancelled=lambda: False,
                   log=lambda s: None, textures=True, tool=None, data_version=True, prepared=None):
     """copy_items, then the texture cache folders prepared on the PC (texcache.py). Returns (copied, skipped, bytes,
@@ -284,6 +299,7 @@ def _copy_payload(sd_root, items, product, folder, work, parts=None, progress=No
     try:
         if cancelled():
             raise InterruptedError("cancelled")
+        make_cache_folders_first(sd_root, product, folder, parts)
         install_record.invalidate(sd_root, product)
         copied, skipped, nbytes = copy_items(sd_root, items, progress, cancelled)
         if textures:
@@ -349,6 +365,10 @@ def copy_with_textures(sd_root, items, product, folder, work, parts=None, progre
             else:
                 copied += 1
                 nbytes += it.size
+        if cancelled():
+            raise InterruptedError('cancelled')
+        # Staging is private: make the final directories first too, including empty caches.
+        make_cache_folders_first(sd_root, product, folder, parts)
         transaction.publish(removals, cancelled)
         return copied, skipped, nbytes, result[3]
     except (OSError, ValueError, KeyError, TypeError, DeliverError) as error:

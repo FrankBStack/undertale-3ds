@@ -45,11 +45,18 @@ tier can't follow ends one span and starts the next after it. A span shorter tha
 worth its guards and stays generated code. In a script, argumentN reads (AOT_PUSH_ARG) are variables of the region
 too: read only, guarded like the others, absent (nullptr, the guard fails) when the call passed fewer arguments.
 """
+import os
 import re
 import struct
 import sys
 
 G = None   # the gmlaot module (bind)
+
+# knightgpu dspe (DELTARUNE New; build.sh's knightgpu-dspe word sets CTRPORT_AOT_DSPE): a typed region's
+# draw_surface_part_ext call with 11 number arguments calls Knight_scalarSurfacePartExt (engine/src/vm_builtins.c's
+# end) with them as reals. "session": regions whose builtin calls are those draws and pure queries pass a session
+# (scalar_session_ext); "scalar": every such call passes nullptr. Empty: generated as before.
+DSPE = os.environ.get("CTRPORT_AOT_DSPE", "")
 
 # Experimental, explicitly enabled by the utold object probe only. Normal
 # generation (including --typed all and every WAD17 build) stays unchanged.
@@ -59,6 +66,7 @@ NUMERIC_SPRITE_LOOPS = False
 
 # A Titan_scalarSurfacePart call's session argument until function_text knows the whole region (scalar_session).
 SESSION = "@titan_session@"
+SESSION_EXT = "@knight_session@"   # knightgpu dspe: Knight_scalarSurfacePartExt's (scalar_session_ext)
 
 
 def scalar_session(r):
@@ -67,6 +75,18 @@ def scalar_session(r):
     they share a session (titancpu lever 1: the renderer repeats the last draw's tests only when they can have changed;
     vine_titancpu.inc's Titan_stripDraw). Any other region passes nullptr: each draw goes the renderer's whole way."""
     return bool(r.scalar_surface) and set(r.builtins) == r.scalar_surface and set(r.builtins.values()) == {'draw_surface_part'}
+
+
+def scalar_session_ext(r):
+    """knightgpu dspe: True when the region's draw_surface_part_ext calls are all Knight_scalarSurfacePartExt calls and
+    every other builtin it calls is a pure one (EFFECTS: the call changes nothing, the renderer included): between two
+    of those draws nothing but numeric code, pure queries and those draws runs, so they share a session as
+    scalar_session's draws do (vine_titancpu.inc's Knight_stripDrawExt). Regions with draw_surface_part draws keep
+    scalar_session's rule."""
+    ext = getattr(r, "scalar_ext", set())
+    return (DSPE == "session" and bool(ext) and not r.scalar_surface
+            and all(i in ext if n == 'draw_surface_part_ext' else EFFECTS.get(n, ("",))[0] == "pure"
+                    for i, n in r.builtins.items()))
 
 
 def scalar_surface(em):
@@ -1201,15 +1221,22 @@ class Gen:
                        and all(v.num() for v in args))
         surface_part = (not scalar_part and name == 'draw_surface_part' and argc == 7 and scalar_surface(em)
                         and all(v.num() for v in args))
+        surface_ext = (not scalar_part and not surface_part and DSPE and name == 'draw_surface_part_ext' and argc == 11
+                       and scalar_surface(em) and all(v.num() for v in args))
         if surface_part:
             r.__dict__.setdefault("scalar_surface", set()).add(idx)
             scalar_part = True   # no RValue arguments, nothing to free
+        if surface_ext:
+            r.__dict__.setdefault("scalar_ext", set()).add(idx)
+            scalar_part = True
         if argc and not scalar_part:
             block.append("RValue a_[%d] = { %s };" % (argc, ", ".join(as_rv(v) for v in args)))
         block.append("ctx->ip = 0x%X;" % ((self.inl[0] if self.inl is not None else a) + 8))
         call = "%s(ctx, %s, %d)" % (fv, "a_" if argc else "nullptr", argc)
         free = ["if (a_[%d].ownsReference) RValue_free(&a_[%d]);" % (i, i) for i, v in enumerate(args) if v.k == "v" and v.t is None]
-        if scalar_part:
+        if surface_ext:
+            call = "Knight_scalarSurfacePartExt(ctx, %s)" % ", ".join([SESSION_EXT] + [as_num(v) for v in args])
+        elif scalar_part:
             call = "%s(ctx, %s)" % ("Titan_scalarSurfacePart" if surface_part else "Utold_scalarPart",
                                     ", ".join(([SESSION] if surface_part else []) + [as_num(v) for v in args]))
             free = []
@@ -1554,10 +1581,13 @@ def inline_bindings(em, regions):
 
 def function_text(r, code_name):
     r.scalar_surface = set()   # the builtin cache slots of the region's Titan_scalarSurfacePart calls (Gen.builtin)
+    r.scalar_ext = set()   # knightgpu dspe: those of its Knight_scalarSurfacePartExt calls
     g = Gen(r, dict(r.states), True)
     g.run(r.states[r.lo])
-    session = scalar_session(r)
-    body = [l.replace(SESSION, "tss_" if session else "nullptr") for l in g.lines]
+    session_ext = scalar_session_ext(r)
+    session = scalar_session(r) or session_ext
+    body = [l.replace(SESSION, "tss_" if session else "nullptr").replace(SESSION_EXT, "tss_" if session_ext else "nullptr")
+            for l in g.lines]
     # Labels are "%04X": an address past 0xFFFF has five or more digits.
     used = set(re.findall(r"goto ([TX]_[0-9A-F]{4,});", "\n".join(body)))
     body = [l for l in body if not (re.match(r"^T_[0-9A-F]{4,}: ;$", l) and l.split(":")[0] not in used)]
@@ -1570,6 +1600,10 @@ def function_text(r, code_name):
         out[:0] = ["extern bool Titan_scalarSurfacePartIsBuiltin(BuiltinFunc);",
                    "extern RValue Titan_scalarSurfacePart(VMContext*, uint32_t*, GMLReal, GMLReal, GMLReal, GMLReal, GMLReal,"
                    " GMLReal, GMLReal);"]
+    if r.scalar_ext:
+        out[:0] = ["extern bool Knight_scalarSurfacePartExtIsBuiltin(BuiltinFunc);",
+                   "extern RValue Knight_scalarSurfacePartExt(VMContext*, uint32_t*, GMLReal, GMLReal, GMLReal, GMLReal, GMLReal,"
+                   " GMLReal, GMLReal, GMLReal, GMLReal, GMLReal, GMLReal);"]
     if r.scripts:
         # Check before preloading any callee reference (especially a builtin cache entry). Changed definitions can
         # include smaller VARI/FUNC tables. Once the region starts, no audited operation can rebind the context.
@@ -1597,6 +1631,9 @@ def function_text(r, code_name):
             out.append("    if (!Utold_scalarPartIsBuiltin(fb%d)) TYPED_FAIL();" % idx)
         if idx in r.scalar_surface:   # a memory region's missing slot hands over at the call (fb == nullptr)
             out.append("    if (%sTitan_scalarSurfacePartIsBuiltin(fb%d)) TYPED_FAIL();"
+                       % ("fb%d != nullptr && !" % idx if r.memory else "!", idx))
+        if idx in r.scalar_ext:
+            out.append("    if (%sKnight_scalarSurfacePartExtIsBuiltin(fb%d)) TYPED_FAIL();"
                        % ("fb%d != nullptr && !" % idx if r.memory else "!", idx))
     for idx in sorted(r.scripts):   # where aotCallScript would call the script inlined: see Gen.inline
         if not r.memory:
@@ -1639,7 +1676,7 @@ def function_text(r, code_name):
         out.append("    return 0x%Xu;" % ((t << 1) | 1))
     out += ["#undef aottag_", "}"]
     text = "\n".join(out)
-    if SESSION in text:
+    if SESSION in text or SESSION_EXT in text:
         raise AssertionError("a session argument outside the region's body")
     return text
 

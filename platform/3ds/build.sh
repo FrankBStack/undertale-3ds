@@ -39,12 +39,23 @@
 #                              [knightnew-history|knightnew-history=off] (Knight GPU-1: trims the Knight afterimage spill
 #                              copies' unused columns; ON by default in DELTARUNE New, a no-op in other builds; "=off" builds
 #                              without it in its own build directory)
+#                              [gpukick=off|gpukick|gpukick=multi|gpukick=multi-force] (DELTARUNE New, change pacer: hand
+#                              the GPU the commands recorded so far while the frame still records. Default multi with
+#                              the rev3 gate: only after 3 frames in a row whose main + GPU passed the slot while each
+#                              fit it; off = the control without it; gpukick (single prefix) is gone since KM rev 5; multi-force =
+#                              every frame, Azahar identity diagnostic only; a no-op in other builds)
+#                              [gpukick-trace] (DELTARUNE New, KM rev 5: the per-frame KT trace between bench windows,
+#                              for console row builds; off by default and in release)
 #                              [knightgpu-texenv=off] (knightgpu T1, cheaper blend and fog switches: ON in DELTARUNE
 #                              New, a no-op elsewhere; "=off" builds O9 alone in its own build directory, the forced-off
 #                              control)
 #                              [knightgpu-compact=off|force] (knightgpu A, VRAM compaction for hot spilled surfaces: ON in
 #                              DELTARUNE New, a no-op elsewhere; "=off" builds without it and "=force" the forced control
 #                              (moves every few frames; tests only), each in its own build directory)
+#                              [knightgpu-dspe=on|scalar|off] (knightgpu dspe, typed regions' draw_surface_part_ext with
+#                              real arguments and a draw session: ON in DELTARUNE New, OFF elsewhere ("=on" and "=scalar"
+#                              are for DELTARUNE New only; "=scalar" without the session); "=off" and "=scalar" share the
+#                              ON build's directories)
 #                              [layout=<audited absolute linker-script path>]
 #                              [inputperiod=<0|8|16>] [inputstall=<ms>] (input sampler diagnostics; separate build directory)
 #                              [spikerec] (spike recorder for playtests: every frame that misses its slot, written to
@@ -172,9 +183,17 @@ halfart=        # point, box or balanced: the half-resolution art prototype (flo
 natsurf6wide=OFF
 cia80=OFF
 knightnew_history=   # ON, OFF, or empty: the default (ON in DELTARUNE New, no effect elsewhere)
+gpu_kick=ON   # gpukick words: takes effect in DELTARUNE New only; gpu_kick_mode single, multi or multi-force
+gpu_kick_mode=multi
+gpu_kick_trace=OFF   # gpukick-trace: KM rev 5's per-frame trace (row builds)
 knightgpu_texenv=ON
 knightgpu_compact=ON
 knightgpu_compact_force=OFF
+sharebuf=ON        # sharebuf=off: no shared surface buffers (DELTARUNE New only)
+sharebuf_test=OFF  # sharebuf=test: force one sharebuf violation (a test build)
+sharebuf_fulltest=OFF # sharebuf=fulltest: every whole clear of a shared scratch fills it all, each cut checked (a test build)
+sharebuf_g2=ON     # sharebuf=g1: sharebuf without G2 (the base of check_sharebuf_layout.py --g2)
+knightgpu_dspe=   # SESSION, SCALAR, OFF, or empty: the default (SESSION in DELTARUNE New, OFF elsewhere)
 smalltext=     # ON, OFF, or empty: the game's default (UNDERTALE and DELTARUNE New ON, DELTARUNE Old OFF)
 aot_mode=      # off, auto (the "aot" argument) or a directory; empty: the game and target's default
 data_dir=
@@ -218,6 +237,7 @@ titandiag=OFF
 exittrail=OFF
 writerfront=ON
 repack_test= # test builds: a folder of <data.win folder>/ repack files for the RomFS (ctr_repack.inc)
+repack_plans=OFF # repackplans: with repacktest, the plans leave out the tiles repack remaps (measured option A)
 towerprof=OFF
 towerforce=0
 ppl2=ON
@@ -267,9 +287,21 @@ for arg in "$@"; do
         cia80) cia80=ON ;;
         knightnew-history) knightnew_history=ON ;;
         knightnew-history=off) knightnew_history=OFF ;;
+        gpukick) gpu_kick=ON; gpu_kick_mode=single ;;
+        gpukick=multi) gpu_kick=ON; gpu_kick_mode=multi ;;
+        gpukick=multi-force) gpu_kick=ON; gpu_kick_mode=multi-force ;;
+        gpukick=off) gpu_kick=OFF; gpu_kick_mode=multi ;;
+        gpukick-trace) gpu_kick_trace=ON ;;
         knightgpu-texenv=off) knightgpu_texenv=OFF ;;
         knightgpu-compact=off) knightgpu_compact=OFF ;;
         knightgpu-compact=force) knightgpu_compact_force=ON ;;
+        sharebuf=off) sharebuf=OFF ;;
+        sharebuf=test) sharebuf=ON; sharebuf_test=ON ;;
+        sharebuf=fulltest) sharebuf=ON; sharebuf_fulltest=ON ;;
+        sharebuf=g1) sharebuf=ON; sharebuf_g2=OFF ;;
+        knightgpu-dspe=on) knightgpu_dspe=SESSION ;;
+        knightgpu-dspe=scalar) knightgpu_dspe=SCALAR ;;
+        knightgpu-dspe=off) knightgpu_dspe=OFF ;;
         aot|aot=auto) aot_mode=auto ;;
         aot=chapters) aot_mode=chapters ;;
         aot=single) aot_mode=single ;;
@@ -324,6 +356,7 @@ for arg in "$@"; do
         late-numeric=*) late_numeric_entry=${arg#late-numeric=} ;;
         aot-region=*) aot_region=${arg#aot-region=} ;;
         repacktest=*) repack_test=${arg#repacktest=} ;;
+        repackplans) repack_plans=ON ;;
         *)
             echo "unknown argument '$arg'" >&2
             echo "usage: $0 [undertale|deltarune] [n3ds|o3ds] [Release|RelWithDebInfo|Debug|MinSizeRel] [profile] [heap] [aot|aot=chapters|aot=single|aot=off|aot=<dir>] [data=<game folder>] [aot-stress] [memcap=<KB>] [openh264=off] [reachgate] [shots] [layout=<script>] [typed|typed=off|typed=all|typed=<list>] [typed-stats] [typed-stress=<n>]" >&2
@@ -544,6 +577,18 @@ if [ "$knightgpu_compact" = OFF ] && [ "$game" = deltarune ] && [ "$target" = n3
 elif [ "$knightgpu_compact_force" = ON ] && [ "$game" = deltarune ] && [ "$target" = n3ds ]; then
     build="$build-kgcforce"
 fi
+if [ "$game" = deltarune ] && [ "$target" = n3ds ]; then
+    if [ "$sharebuf" = OFF ]; then build="$build-nosb"; elif [ "$sharebuf_test" = ON ]; then build="$build-sbtest"; elif [ "$sharebuf_fulltest" = ON ]; then build="$build-sbfull"; elif [ "$sharebuf_g2" = OFF ]; then build="$build-sbg1"; fi
+fi
+# knightgpu-dspe=off/scalar share the build and generated-code directories with the ON build (an A/B that differs
+# only by the draw_surface_part_ext path); switching regenerates the AOT code.
+if [ -n "$knightgpu_dspe" ] && [ "$knightgpu_dspe" != OFF ] && { [ "$game" != deltarune ] || [ "$target" != n3ds ]; }; then
+    echo "knightgpu-dspe=on|scalar is for DELTARUNE New" >&2
+    exit 2
+fi
+if [ -z "$knightgpu_dspe" ]; then
+    if [ "$game" = deltarune ] && [ "$target" = n3ds ]; then knightgpu_dspe=SESSION; else knightgpu_dspe=OFF; fi
+fi
 if [ -n "$memcap" ]; then
     build="$build-cap$memcap"
 fi
@@ -668,6 +713,27 @@ fi
 if [ "$aot_mode" = auto ]; then
     echo "AOT: using ${python[*]} ($(command -v "${python[0]}"))"
     gen="$repo/build/aot-$game-$target${chapters:+-chapters}$typed_suffix$late_numeric_suffix"
+    # knightgpu dspe: tools/aot/typed.py's draw_surface_part_ext calls (DELTARUNE New); prepare.py's fingerprint counts it.
+    case "$knightgpu_dspe" in
+        SESSION) export CTRPORT_AOT_DSPE=session ;;
+        SCALAR) export CTRPORT_AOT_DSPE=scalar ;;
+        *) unset CTRPORT_AOT_DSPE ;;
+    esac
+    # knightgpu dspe's room gate: every room hash in vine_titancpu.inc's knGate must name its intended room in this game
+    # data (tools/aot/check_dspe_gate.py), so a wrong constant fails the build; exit 3 (no game data) goes on.
+    if [ "$knightgpu_dspe" = SESSION ]; then
+        gate_args=(--source "$(native_path "$here/source/vine_titancpu.inc")")
+        if [ -n "$data_dir" ]; then gate_args+=(--data "$(native_path "$data_dir")"); fi
+        set +e
+        "${python[@]}" -I "$(native_path "$repo/tools/aot/check_dspe_gate.py")" "${gate_args[@]}"
+        rc=$?
+        set -e
+        if [ "$rc" = 2 ]; then
+            echo "dspe gate: tools/aot/check_dspe_gate.py failed" >&2
+            exit 2
+        fi
+        rc=0
+    fi
     prep_args=(--game "$game" --target "$target" --out "$(native_path "$gen")" ${chapters:+--chapters})
     if [ -n "$late_numeric_entry" ]; then prep_args+=(--late-numeric "$late_numeric_entry"); fi
     if [ "$typed" = ON ]; then
@@ -820,6 +886,9 @@ if [ "$roomplan" = ON ] && [ -n "${python:-}" ]; then
         if [ "$target" = n3ds ] && [ "$roomplan_rec" != ON ]; then
             track_args=(--out "$(native_path "$plan_out")")
             if [ -n "$data_dir" ]; then track_args+=(--data "$(native_path "$data_dir")"); fi
+            # repacktest + repackplans: the tracks leave out the tiles repack draws from new tiles in its rooms
+            # (build_tracks.py). Without repackplans they stay as today (repacka: identity-exact, 10-28).
+            if [ -n "$repack_test" ] && [ "$repack_plans" = ON ]; then track_args+=(--repack "$(native_path "$repack_test")"); fi
             set +e
             "${python[@]}" -I "$(native_path "$repo/tools/roomplan/build_tracks.py")" "${track_args[@]}"
             rc=$?
@@ -829,6 +898,21 @@ if [ "$roomplan" = ON ] && [ -n "${python:-}" ]; then
                 exit 2
             fi
             rc=0
+            # sharebuf: the objects whose surfaces share one buffer (tools/roomplan/build_sharebuf.py), for the exact
+            # data.win their code was read on; exit 3 builds without a list (nothing shares).
+            if [ "$sharebuf" = ON ]; then
+                share_args=(--out "$(native_path "$plan_out")")
+                if [ -n "$data_dir" ]; then share_args+=(--data "$(native_path "$data_dir")"); fi
+                set +e
+                "${python[@]}" -I "$(native_path "$repo/tools/roomplan/build_sharebuf.py")" "${share_args[@]}"
+                rc=$?
+                set -e
+                if [ "$rc" = 2 ]; then
+                    echo "Shared surfaces: tools/roomplan/build_sharebuf.py failed" >&2
+                    exit 2
+                fi
+                rc=0
+            fi
         fi
     elif [ "$rc" = 0 ]; then
         roomplan_file=$plan_out  # CMake (msys) takes the POSIX path
@@ -843,12 +927,16 @@ fi
 # The phase plan (phaseplan; tools/roomplan/build_phases.py): a long room's tiles in phases, from the committed phase
 # records (tools/roomplan/phases/) resolved against the game data, one table per data.win with a record, in
 # romfs:/roomplan/phases.dtph. Exit 3: no game data or no record for it; the build goes on without one. "roomplan=off"
-# leaves it out too. DELTARUNE only (ruling, 2026-10-25).
+# leaves it out too. DELTARUNE only (review decision, 2026-10-25). A file per target: a room's record may be for one model
+# only (build_phases.py --model).
 phaseplan_file=
 if [ "$game" = deltarune ] && [ "$roomplan" = ON ] && [ -n "${python:-}" ]; then
-    phase_out="$repo/build/roomplan-$game/phases.dtph"
-    phase_args=(--game "$game" --out "$(native_path "$phase_out")")
+    phase_out="$repo/build/roomplan-$game/phases-$target.dtph"
+    phase_args=(--game "$game" --model "$target" --out "$(native_path "$phase_out")")
     if [ -n "$data_dir" ]; then phase_args+=(--data "$(native_path "$data_dir")"); fi
+    # repacktest + repackplans: the phases leave out the tiles repack draws from new tiles in its rooms
+    # (build_phases.py).
+    if [ -n "$repack_test" ] && [ "$repack_plans" = ON ]; then phase_args+=(--repack "$(native_path "$repack_test")"); fi
     set +e
     "${python[@]}" -I "$(native_path "$repo/tools/roomplan/build_phases.py")" "${phase_args[@]}"
     rc=$?
@@ -1025,8 +1113,11 @@ cmake -S "$here" -B "$build" -G "Unix Makefiles" \
     -DCTRPORT_PKLIN_DIAG="$pklindiag" -DCTRPORT_PKLIN_STRESS="$pklinstress" \
     -DCTRPORT_NATSURF6_WIDE="$natsurf6wide" \
     -DCTRPORT_KNIGHTNEW_HISTORY="$knightnew_history" \
+    -DCTRPORT_GPU_KICK="$gpu_kick" -DCTRPORT_GPU_KICK_MODE="$gpu_kick_mode" -DCTRPORT_GPU_KICK_TRACE="$gpu_kick_trace" \
     -DCTRPORT_KNIGHTGPU_TEXENV="$knightgpu_texenv" \
     -DCTRPORT_KNIGHTGPU_COMPACT="$knightgpu_compact" -DCTRPORT_KNIGHTGPU_COMPACT_FORCE="$knightgpu_compact_force" \
+    -DCTRPORT_SHAREBUF="$sharebuf" -DCTRPORT_SHAREBUF_TEST="$sharebuf_test" -DCTRPORT_SHAREBUF_FULLTEST="$sharebuf_fulltest" -DCTRPORT_SHAREBUF_G2="$sharebuf_g2" \
+    -DCTRPORT_KNIGHTGPU_DSPE="$knightgpu_dspe" \
     -DCTRPORT_REPACK_TEST_DIR="$repack_test" \
     -DCTRPORT_HEAP_PROFILE="$heap" \
     -DCTRPORT_MEMORY_CAP_KB="$memcap" \

@@ -351,8 +351,8 @@ class ReleaseGateTests(unittest.TestCase):
                     gate.read_identifier_policy(path)
         policy = gate.read_identifier_policy(gate.ROOT / 'tools/release/identifier-allowlist.json')
         records = {e['member'] for e in policy['entries'] if e['class'] == 'roomplan-record'}
-        self.assertEqual(len(records), 11)  # 9 room plan records (2 GOG), 1 phase record (phaseplan, DELTARUNE),
-        # 1 track record (drresid, DELTARUNE New)
+        self.assertEqual(len(records), 12)  # 9 room plan records (2 GOG), 1 phase record (phaseplan, DELTARUNE),
+        # 1 track record (drresid, DELTARUNE New), 1 shared-surface record (sharebuf, DELTARUNE New)
         for game, filename in (('undertale', 'manifest-ut.txt'), ('deltarune', 'manifest-dr.txt')):
             manifest = set((gate.ROOT / 'tools/release' / filename).read_text().splitlines())
             required = {record for record in records

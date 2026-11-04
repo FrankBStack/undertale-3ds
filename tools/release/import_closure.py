@@ -28,6 +28,10 @@ GAME_ONLY = {'tools/aot/pixgrid.py': 'undertale', 'tools/aot/btnprompt_build.py'
              'tools/roomplan/build_tracks.py': 'deltarune', 'tools/roomplan/build_phases.py': 'deltarune', 'tools/aot/stmenu.py': 'undertale',
              # flowfull's chapter-5 code plan (build.sh flowcode, DELTARUNE New only).
              'tools/roomplan/build_flowcode.py': 'deltarune',
+             # sharebuf's list (build.sh sharebuf, DELTARUNE New only).
+             'tools/roomplan/build_sharebuf.py': 'deltarune',
+             # knightgpu dspe's room gate check (build.sh, DELTARUNE New dspe session builds only).
+             'tools/aot/check_dspe_gate.py': 'deltarune',
              # offkill's early-destroy entries (build.sh runs it for UNDERTALE only; pipeline.py's source_wanted agrees).
              'tools/aot/offkill.py': 'undertale',
              # the dialogue script's case table (build.sh runs it for UNDERTALE Old only; pipeline.py's source_wanted agrees).

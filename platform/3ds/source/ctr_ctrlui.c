@@ -28,6 +28,7 @@
 #include <string.h>
 
 #include "ctr_input_map.h"
+#include "ctr_log.h"
 #include "ctr_menu.h"
 #ifdef CTRPORT_PLAYER_SHOTS
 #include "log.h"
@@ -251,4 +252,18 @@ CTL_CODE CtrMenuAction CtrCtrlui_update(CtrMenu* menu, u32 down) {
     menu->edited = true;
     ctlDraw(menu);
     return MENU_ACTION_CHANGED;
+}
+
+// ctr_screens.c's open (__wrap_CtrMenu_open) ends here instead of in its showOptions, which cleared the menu's
+// console (libctru's consoleClear prints all 1,200 cells as spaces) and printed the screens' own options page (about
+// 900 characters) into the spare buffer, which optmenu's page then covered whole: never shown, and about 30 ms of the
+// open's frame on an Old 3DS (o3dsxl, 11-02). What showOptions also did stays: the options page, and stdout on the
+// menu's console. (Nothing prints there before clearing it: the legal summary and the close clear it first.)
+// Its own section, which late_reserve.ld places after the Controls page's code and constants, so neither moves (75zp
+// froze them; c26rev R119).
+__attribute__((noinline, section(".text.ctrlui_open"))) void CtrCtrlui_openPage(CtrMenu* menu) {
+    menu->page = MENU_PAGE_OPTIONS;
+    CtrLog_beginConsole();
+    consoleSelect(menu->console);
+    CtrLog_endConsole();
 }

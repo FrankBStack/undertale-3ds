@@ -90,6 +90,22 @@ def read_logs(paths, counts=None):
     return visits
 
 
+def check_data_pages(tiles, page_count, source):
+    """Refuses recorder tiles (P lines) on a page past the data.win's own (page >= page_count).
+
+    Those pages are a repack's extra pages (platform/3ds/source/ctr_repack.inc): the run had a repack.bin in its
+    cache folder, so it drew remapped art from new tiles instead of the original ones, and no player's console does
+    (the release builder makes no repack files). Tracks or repack records made from such a run name tiles that
+    don't exist on a console, and miss the original tiles their draws stand for (flowerhw 8zo: 191 of room 195's
+    247 tiles). tiles: (page, tile) pairs; source: the log, for the message. Raises SystemExit."""
+    bad = sorted({(int(p), int(t)) for p, t in tiles if int(p) >= page_count})
+    if bad:
+        raise SystemExit("%s: %d tiles on pages past the data.win's %d (first: page %d tile %d), so the run had a "
+                         "repack.bin in its cache folder. Delete repack.bin and the page files numbered %d and up from "
+                         "the SD's cache folder, then record again." % (source, len(bad), page_count, bad[0][0],
+                                                                         bad[0][1], page_count))
+
+
 def build_record(info, room_names, game, visits, store, version, sources):
     battle = {i for i, n in enumerate(room_names) if n in BATTLE_ROOMS.get(game, ())}
     scenes = {}

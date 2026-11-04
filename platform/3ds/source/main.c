@@ -386,8 +386,8 @@ static void saveFailureWarning(bool fullScreen) {
                "This warning stays until you quit.\n\n"
                "SELECT: options  SELECT+START: quit\n");
     } else {
-        // Keep the warning visible while options or benchmark UI owns the rest.
-        printf("\x1b[24;1H\x1b[1;31mSAVE FAILED: check SD card/free space\x1b[0m\x1b[K");
+        void CtrOptmenu_saveWarn(const char* line); // printf, but not while the options menu is open (ctr_optmenu.c)
+        CtrOptmenu_saveWarn("\x1b[24;1H\x1b[1;31mSAVE FAILED: check SD card/free space\x1b[0m\x1b[K");
     }
     fflush(stdout);
     consoleSelect(&logConsole);
@@ -2273,3 +2273,32 @@ __attribute__((noinline, section(".text.freewins_late"))) struct mallinfo CtrSta
     if (statsHeapCalls == 0 || CtrLog_consoleEnabled()) statsHeap = mallinfo();
     return statsHeap;
 }
+
+#ifdef ENABLE_WAD17
+// gsfix (ctr_renderer.c's end, c26rev R130 F1): a borrow of the bottom screen refused for want of VRAM leaves the game
+// there, and the menu console printing for the borrower (a failed save's warning, a test's screens) into the top
+// screen's spare buffer, unseen. `on`: it prints into the shown one instead, in the middle 320 columns as the options
+// page does (ctr_optmenu.c's optPlace); off: back into the spare one. The screen is cleared either way, so gsfix calls
+// this only while the options menu is closed (its page would be cleared, c26rev R133 F1). While the borrow lasts the
+// consoles' write-back (flushBottomScreen, z_pacerflush.c) writes the shown buffer back each frame.
+// Placed with gsfix, last in the late text; it calls none of this file's functions, so GCC's order for them stays.
+void CtrScreens_menuOnShown(bool on);
+__attribute__((noinline, noipa, used, section(".text.gsfix_late"))) void CtrScreens_menuOnShown(bool on) {
+    PrintConsole* menu = &menuConsole;
+    PrintConsole* stats = &statsConsole;
+    const bool* top = &CtrScreens_consolesOnTop;
+    if (!*top) return;
+    u16* shown = stats->frameBuffer;
+    if (shown == nullptr) return;
+    u16* middle = shown + 40u * 240u;
+    if (on) {
+        menu->frameBuffer = middle;
+    } else if (menu->frameBuffer == middle) {
+        menu->frameBuffer = (u16*) CtrPacer_backFramebuffer(GFX_TOP, GFX_LEFT);
+    }
+    CtrLog_beginConsole();
+    memset(shown, 0, (size_t) GSP_SCREEN_WIDTH * GSP_SCREEN_HEIGHT_TOP * 2u);
+    GSPGPU_FlushDataCache(shown, (u32) GSP_SCREEN_WIDTH * GSP_SCREEN_HEIGHT_TOP * 2u);
+    CtrLog_endConsole();
+}
+#endif

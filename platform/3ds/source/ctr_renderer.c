@@ -9928,7 +9928,7 @@ static void fps75Configure(CtrRenderer* r);
 #line 9789
 WAD17_ONLY(static void screensConfigure(CtrRenderer* r);)
 static void __attribute__((noinline)) configureScreens(CtrRenderer* r) {
-    __asm__ volatile("b 1f\n\t.space 700\n1:");
+    __asm__ volatile("push {r0, r1, r2, r3, ip, lr}\n\tbl CtrGsfix_preConfigure\n\tpop {r0, r1, r2, r3, ip, lr}\n\tb 1f\n\t.space 688\n1:"); // gsfix (file end): r0 = r
     fps75Configure(r);
 }
 
@@ -22885,7 +22885,7 @@ SCREENS_LATE void __wrap_CtrRenderer_setDisplay(Renderer* renderer, const CtrDis
 // written back for the LCD here too (main.c's flushBottomScreen writes back the bottom screen's).
 SCREENS_LATE __attribute__((optimize("Os"))) void __wrap_CtrRenderer_yieldBottomScreen(Renderer* renderer, bool yield) {
     CtrRenderer* r = (CtrRenderer*) renderer;
-    uint32_t onTop; __asm__ volatile("ldr %0, 2f\n\tb 1f\n2:\t.word CtrOptmenu_onTop\n\t.space 4\n1:\tldrb %0, [%0]" : "=r"(onTop)); if (onTop) CtrScreens_otherOff = yield = false; __real_CtrRenderer_yieldBottomScreen(renderer, yield); // optmenu: the menu on the top screen, the game kept on the bottom one, Off held off (restored before the next setDisplay)
+    uint32_t onTop; __asm__ volatile("ldr %0, 2f\n\tb 1f\n2:\t.word CtrOptmenu_onTop\n\t.space 4\n1:\tldrb %0, [%0]" : "=r"(onTop)); if (onTop) CtrScreens_otherOff = yield = false; void gsfixYield(Renderer*, bool) __asm__("CtrGsfix_yieldAlias"); gsfixYield(renderer, yield); // gsfix (file end): __real_ first; optmenu: the menu on the top screen, the game kept on the bottom one, Off held off (restored before the next setDisplay)
     bool below = CtrScreens_game == 1 && CtrScreens_gameBelow();
     if (!r->inFrame && (below && !r->bottomYielded) != CtrScreens_onBottom) screensConfigureKeepBottom(r);
     if (CtrScreens_noticeShown) CtrScreens_screenshotNotice(true);
@@ -29045,4 +29045,348 @@ void kgfcBeginFrame(Renderer* renderer) {
         kgfc.made++;
     }
 }
+#endif
+
+#if defined(CTR_GPU_KICK) && defined(CTR_KICK_REV5)
+// KM rev 5 (change pacer, 75zq append-only port): the kick launcher's second helper pass only.
+#include "ctr_gpu_kick5_renderer.inc"
+#elif defined(CTR_GPU_KICK)
+#include "ctr_gpu_kick_renderer.inc"
+#endif
+#line 29053
+
+// ===[ gsfix: moving the game between the screens never aborts for want of VRAM (knightgpu, 11-02) ]===
+//
+// screensConfigureKeepBottom deletes the game's screen target and makes the one for its new screen, and aborted when
+// VRAM had no block for it. Free VRAM in all is no guide: a block lies in one 3 MB bank, in one piece. In DELTARUNE
+// Chapter 3's Knight scenes on the New 3DS with the game on the bottom screen, the move to the top (400x240, 375 KB) at
+// a test's end found 560 KB free and no block for it (knightgpu dspq rows kspitfb-A1 and -B1). Playing reaches the
+// same move: the options menu's Game screen row moves the game at once (the yield below), and a failed save or a test
+// borrowing the bottom screen moves it to the top.
+//
+// Before a move (the yield wrapper, once a frame) and before every configureScreens, this works out whether the target
+// will be made again and whether a block would hold it once the old target (and the bottom one, when the game goes
+// there) is gone. If not, VRAM is made in the renderer's usual exact ways, each tried only while still short: the
+// GPU's finished frees and surface sprites to linear memory (reclaimVram, the shrink's strip kept: freed, the frame
+// would show without the shrink's detail for up to SHRINK_RETRY_FRAMES), every scratch but the bound one
+// (releaseIdleScratches), idle surfaces to linear memory, then busy ones (demoteSurfaces). A moved surface keeps its
+// pixels and gets VRAM again when next drawn on, as when a surface finds VRAM full. If even that leaves no block, the
+// game stays on its screen, with a warning in the log:
+// - a switch by hand (the options menu's Game screen row) goes back, and is not tried again until it is chosen again;
+// - a failed save or a test borrowing the bottom screen doesn't get it for as long as it borrows (a failed save, until
+//   the game is quit), and is tried again at the next borrow or if the Game screen row is set to the top meanwhile.
+//   What main prints for it through the menu console (the failed save's warning, a test's screens) shows on the top
+//   screen meanwhile, lit, in the middle 320 columns as the options page does (main.c's CtrScreens_menuOnShown); the
+//   menu itself already follows the game (optPlace). The held borrow doesn't reach the real yield, so it changes
+//   nothing a frame: no configureScreens, no scan. While the options menu is open, its page keeps the top screen: the
+//   borrow's console is placed or given back only once it closes, and Other screen Off doesn't clear the page.
+// The scan and the steps cost something only at a move (reclaimVram's GPU wait is about 15 ms on the New 3DS); between
+// moves the yield wrapper's few compares run at every yield, and nothing scans VRAM. With no target yet (the first
+// configureScreens) there is nothing to keep: a target that finds no block even after the steps aborts, as before.
+// During play the yield comes inside a frame, and the move (and this check) at the next frame's configureScreens.
+//
+// No function GCC already emitted gains a C caller: configureScreens calls CtrGsfix_preConfigure from its padding's asm
+// and the yield wrapper calls CtrGsfix_yield by an asm alias, and these call the renderer's static functions through
+// addresses read in asm. GCC orders a file's functions by its call graph (docs/3ds-hardware.md, "Appending functions
+// to a source file reorders the ones GCC already emitted there").
+//
+// UNDERTALE builds keep only the two entry points, doing what was done before gsfix (review decision 11-03): its screen
+// moves have not been seen short of a block, and the guard costs about 1.6 KB of late text and 2 KB of bss (the
+// UT census of the largest block at a move, by knightgpu, says how near they come).
+#define GSF_ENTRY __attribute__((noinline, noipa, used, section(".text.gsfix_late")))
+void __real_CtrRenderer_yieldBottomScreen(Renderer* renderer, bool yield);
+void CtrGsfix_preConfigure(CtrRenderer* r);
+void CtrGsfix_yield(Renderer* renderer, bool yield);
+#ifdef ENABLE_WAD17
+#define GSF_CODE __attribute__((noinline, noipa, section(".text.gsfix_late")))
+#define GSF_RO __attribute__((section(".rodata.gsfix_in_text")))
+#define GSF_BSS __attribute__((section(".bss.gsfix_late")))
+#define GSF_ADDR(var, sym) __asm__ volatile("ldr %0, 2f\n\tb 1f\n2:\t.word " #sym "\n1:" : "=r"(var))
+static CtrVramBlock gsfBlocks[256] GSF_BSS;
+static uint32_t gsfShortLogged GSF_BSS;
+static uint32_t gsfHeld GSF_BSS;          // a refused borrow, held until it ends
+static uint32_t gsfShowing GSF_BSS;       // the menu console on the top screen's shown buffer (CtrScreens_menuOnShown)
+static const char gsfWhy[] GSF_RO = "no block for the game's screen target";
+static const char gsfMade[] GSF_RO = "Renderer: made VRAM room for a %dx240 screen target in %d steps (%.0f KB free before, %.0f KB now)\n";
+static const char gsfShort[] GSF_RO =
+    "Renderer: no VRAM block for a %dx240 screen target (%.0f KB free) even after moving surfaces; the game stays on its screen\n";
+
+// vramFits, without a call to it.
+GSF_CODE static bool gsfVramFits(size_t need) {
+    void* probe = vramAlloc(need);
+    if (probe == nullptr) return false;
+    vramFree(probe);
+    return true;
+}
+
+// Whether a block of `need` bytes would be free in one bank with the game's target gone, and the bottom target too
+// when `bottomGoes`. Blocks start at 128-byte boundaries (vramAlloc). Without the allocator's list, what vramAlloc says.
+GSF_CODE static bool gsfFits(const CtrRenderer* r, size_t need, bool bottomGoes) {
+    int32_t n = CtrMemory_vramBlocks(gsfBlocks, 256);
+    if (0 > n) return gsfVramFits(need);
+    // (No value-context ?: or &&, no read of a global's value and no conversion of a named local in this code: each
+    // makes GCC's gimplifier name a temporary from a shared counter that also numbers the file's CSWTCH tables.)
+    uintptr_t gone0 = 0, gone1 = 0;
+    if (r->topTarget != nullptr) gone0 = (uintptr_t) r->topTarget->frameBuf.colorBuf;
+    if (bottomGoes) {
+        if (r->bottomTarget != nullptr) gone1 = (uintptr_t) r->bottomTarget->frameBuf.colorBuf;
+    }
+    uintptr_t bankBytes = (uintptr_t) OS_VRAM_SIZE / 2u;
+    for (uintptr_t bank = 0; 2u > bank; bank++) {
+        uintptr_t lo = (uintptr_t) OS_VRAM_VADDR + bank * bankBytes, hi = lo + bankBytes, start = lo;
+        for (int32_t k = 0; n > k; k++) {
+            uintptr_t addr = gsfBlocks[k].addr;
+            if (lo > addr || addr >= hi || addr == gone0 || addr == gone1) continue;
+            uintptr_t from = (start + 127u) & ~(uintptr_t) 127u;
+            if (addr >= from && addr - from >= need) return true;
+            if (addr + gsfBlocks[k].size > start) start = addr + gsfBlocks[k].size;
+        }
+        uintptr_t from = (start + 127u) & ~(uintptr_t) 127u;
+        if (hi >= from && hi - from >= need) return true;
+    }
+    return false;
+}
+
+// Whether the game's screen target would be made again (its screen or width changes, or it is missing) and has a
+// block, after making room if not. Must run outside a frame, as screensConfigure does.
+GSF_CODE static bool gsfRoom(CtrRenderer* r, bool onBottom) {
+    const CtrDisplaySettings* d = &r->display;
+    const bool* onb;
+    GSF_ADDR(onb, CtrScreens_onBottom);
+    uint32_t* logged = &gsfShortLogged;
+    // Wide falls back to Standard there, so Standard's block (w) is the one that must be had.
+    int32_t topW = TOP_SCREEN_W, w = TOP_SCREEN_W;
+    size_t need = (size_t) TOP_SCREEN_H * (size_t) TOP_SCREEN_W * 4u;
+    if (onBottom) {
+        topW = BOTTOM_SCREEN_W;
+        w = BOTTOM_SCREEN_W;
+        need = (size_t) TOP_SCREEN_H * (size_t) BOTTOM_SCREEN_W * 4u;
+    } else if (d->topMode == TOP_MODE_WIDE) {
+        if (r->displayCaps.wide) topW = TOP_SCREEN_WIDE_W;
+    }
+    if (r->topTarget != nullptr && topW == r->topW && onBottom == *onb) return true;
+    // As screensConfigure does first: the screens' VRAM comes before tiles' copies.
+    CtrTextures_releaseMirrors(&r->textures, true);
+    if (gsfFits(r, need, onBottom)) return true;
+    void (*census)(CtrRenderer*, const char*);
+    bool (*reclaim)(CtrRenderer*, size_t);
+    bool (*scratches)(CtrRenderer*, uint32_t);
+    bool (*demote)(CtrRenderer*, int32_t, size_t, bool);
+    GSF_ADDR(census, logVramCensus);
+    GSF_ADDR(reclaim, reclaimVram);
+    GSF_ADDR(scratches, releaseIdleScratches);
+    GSF_ADDR(demote, demoteSurfaces);
+    census(r, gsfWhy);
+    double before = (double) vramSpaceFree() / 1024.0;
+    int32_t steps = 1;
+    bool fits = false;
+    // Not the shrink's strip (c26rev R130 F2): reclaimVram tries it only while the shrink is ready.
+    bool ready = r->shrink.ready;
+    r->shrink.ready = false;
+    if (reclaim(r, need)) fits = gsfFits(r, need, onBottom);
+    r->shrink.ready = ready;
+    if (!fits) {
+        steps++;
+        if (scratches(r, 0)) fits = gsfFits(r, need, onBottom);
+    }
+    if (!fits) {
+        steps++;
+        if (demote(r, -1, need, false)) fits = gsfFits(r, need, onBottom);
+    }
+    if (!fits) {
+        steps++;
+        if (demote(r, -1, need, true)) fits = gsfFits(r, need, onBottom);
+    }
+    if (fits) {
+        logInfo(gsfMade, (int) w, (int) steps, before, (double) vramSpaceFree() / 1024.0);
+        return true;
+    }
+    if (8u > *logged) {
+        *logged += 1u;
+        logWarn(gsfShort, (int) w, (double) vramSpaceFree() / 1024.0);
+        census(r, gsfWhy);
+    }
+    return false;
+}
+
+// Keeps the game on the screen it is on: screensConfigure's onBottom (CtrScreens_gameBelow() && !r->bottomYielded)
+// made equal to CtrScreens_onBottom. On the bottom, the test or failed save doesn't get that screen, and a test that
+// would show the game on top shows it below (CtrScreens_gameGiven, written through an asm literal: no new C global).
+GSF_CODE static void gsfHold(CtrRenderer* r) {
+    const bool* onb;
+    GSF_ADDR(onb, CtrScreens_onBottom);
+    if (*onb) {
+        r->bottomYielded = false;
+        CtrScreens_game = 1;
+        if (!CtrScreens_gameBelow()) {
+            uint8_t* given;
+            GSF_ADDR(given, CtrScreens_gameGiven);
+            *given = 1;
+        }
+    } else {
+        CtrScreens_game = 0;
+    }
+}
+
+// The state is per renderer lifetime (c26rev R133 F2): a renderer without the game's screen target hasn't had its first
+// configureScreens, so it is a new one (each chapter makes one, and may be given a freed one's address), with no borrow
+// held and the consoles placed by its own first move. Once made, the target is only ever made again, never left out.
+GSF_CODE static void gsfOwn(const CtrRenderer* r) {
+    if (r->topTarget != nullptr) return;
+    gsfHeld = 0u;
+    gsfShowing = 0u;
+}
+
+// Whether the options menu is open: argui's state (ctr_argui.c's CtrArgui_state: cfg[3], then menuIsOpen).
+GSF_CODE static bool gsfOptions(void) {
+    const uint8_t* argui;
+    GSF_ADDR(argui, CtrArgui_state);
+    return 0u != argui[3];
+}
+
+// A refused borrow (c26rev R130 F1): what main prints for it goes to the top screen's shown buffer, once, and the top
+// screen is lit, at every held yield, as the configureScreens that refused it, or a display change's, puts it out under
+// Other screen Off.
+// The options menu open meanwhile (c26rev R133 F1) owns the top screen and the menu console: the menu's page (or the
+// Controls or legal page it prints) is what shows there, and the console is placed for the borrow once the menu has
+// closed (the menu gives back the console it took at its open: the shown buffer's, if the borrow had it then). Other
+// screen Off is held off for the next configureScreens (a HOME or sleep return, a display change, the refusal's own),
+// as the yield wrapper does for the menu on the top screen without a failed save: CtrOptmenu_onTop set, so that the
+// menu's next update sets Off again before main's CtrRenderer_setDisplay. Without it, that configureScreens would
+// clear both of the top screen's buffers and darken it, and the menu only draws its page again for a key.
+GSF_CODE static void gsfShow(void) {
+    uint32_t* showing = &gsfShowing;
+    bool* dark;
+    GSF_ADDR(dark, CtrScreens_topBacklightOff);
+    bool options = gsfOptions();
+    if (0u == *showing) {
+        if (!options) {
+            void (*place)(bool);
+            GSF_ADDR(place, CtrScreens_menuOnShown);
+            *showing = 1u;
+            place(true);
+        }
+    }
+    if (*dark) {
+        if (R_SUCCEEDED(gspLcdInit())) {
+            GSPLCD_PowerOnBacklight(GSPLCD_SCREEN_TOP);
+            gspLcdExit();
+            *dark = false;
+        }
+    }
+    if (options) {
+        uint8_t* onTop;
+        bool* off;
+        GSF_ADDR(onTop, CtrOptmenu_onTop);
+        GSF_ADDR(off, CtrScreens_otherOff);
+        *onTop = 1u;
+        *off = false;
+    }
+}
+
+// configureScreens, first (from its padding's asm; r0 = the renderer). During play the yield comes inside a frame, so a
+// borrow's move is made here, at the next frame's start.
+GSF_ENTRY void CtrGsfix_preConfigure(CtrRenderer* r) {
+    const bool* onb;
+    uint32_t* held = &gsfHeld;
+    uint32_t* showing = &gsfShowing;
+    GSF_ADDR(onb, CtrScreens_onBottom);
+    gsfOwn(r);
+    bool onBottom = false;
+    if (CtrScreens_gameBelow()) {
+        if (!r->bottomYielded) onBottom = true;
+    }
+    bool borrowed = r->bottomYielded;
+    bool moves = onBottom != *onb;
+    if (gsfRoom(r, onBottom)) {
+        // A move takes the consoles, the menu console's buffer copied to the bottom screen (CtrScreens_moveConsoles).
+        if (moves) *showing = 0u;
+        return;
+    }
+    if (r->topTarget == nullptr) return;
+    gsfHold(r);
+    if (borrowed) {
+        *held = 1u;
+        gsfShow();
+    }
+}
+
+// The yield wrapper's real call (main's CtrRenderer_yieldBottomScreen), then room for the move it is about to make.
+// While a refused borrow is held, the real call isn't made: bottomYielded stays false, and nothing changes a frame.
+GSF_ENTRY void CtrGsfix_yield(Renderer* renderer, bool yield) {
+    CtrRenderer* r = (CtrRenderer*) renderer;
+    const bool* onb;
+    const uint8_t* game;
+    uint32_t* held = &gsfHeld;
+    uint32_t* showing = &gsfShowing;
+    GSF_ADDR(onb, CtrScreens_onBottom);
+    GSF_ADDR(game, CtrScreens_game);
+    gsfOwn(r);
+    if (yield) {
+        if (0u != *held) {
+            // Still held while the game is to be on the bottom screen; set to the top by hand, the move is tried.
+            if (*game == 1) {
+                if (CtrScreens_gameBelow()) {
+                    gsfShow();
+                    return;
+                }
+            }
+            *held = 0u;
+        }
+    } else {
+        // The borrow has ended: the menu console goes back to the spare buffer, and configureScreens applies Other
+        // screen Off's backlight again. Not while the options menu is open (c26rev R133 F1): it has the console, and
+        // its page is on the shown buffer; the console it gives back at its close is then given back here.
+        *held = 0u;
+        if (0u != *showing) {
+            if (!gsfOptions()) {
+                void (*place)(bool);
+                GSF_ADDR(place, CtrScreens_menuOnShown);
+                *showing = 0u;
+                place(false);
+                r->displayDirty = true;
+            }
+        }
+    }
+    bool dirty = r->displayDirty;
+    __real_CtrRenderer_yieldBottomScreen(renderer, yield);
+    bool onBottom = false;
+    if (*game == 1) {
+        if (CtrScreens_gameBelow()) {
+            if (!r->bottomYielded) onBottom = true;
+        }
+    }
+    if (r->inFrame) return;
+    if (onBottom == *onb) return;
+    if (r->topTarget == nullptr) return;
+    bool borrowed = r->bottomYielded;
+    if (gsfRoom(r, onBottom)) {
+        *showing = 0u;
+        return;
+    }
+    gsfHold(r);
+    if (borrowed) {
+        // The real call's displayDirty goes back with bottomYielded: no configureScreens for it.
+        *held = 1u;
+        r->displayDirty = dirty;
+        gsfShow();
+    }
+}
+#else
+GSF_ENTRY void CtrGsfix_preConfigure(CtrRenderer* r) {
+    (void) r;
+}
+
+GSF_ENTRY void CtrGsfix_yield(Renderer* renderer, bool yield) {
+    __real_CtrRenderer_yieldBottomScreen(renderer, yield);
+}
+#endif
+// The yield wrapper's name for CtrGsfix_yield (an extern to GCC there).
+__asm__("\t.globl CtrGsfix_yieldAlias\n\t.type CtrGsfix_yieldAlias, %function\n\t.set CtrGsfix_yieldAlias, CtrGsfix_yield\n");
+
+// Append only (sharebuf, change titancpu): compiled in the vine helper pass only, so this file's own code is compiled
+// exactly as without it; tools/analysis/vine_old_observer_compile.py routes the existing calls to it, and its sections
+// are linked last (late_reserve.ld).
+#if defined(CTRPORT_VINE_DIAGNOSTIC_HELPER) && defined(CTRPORT_SHAREBUF)
+#include "ctr_renderer_sharebuf.inc"
 #endif

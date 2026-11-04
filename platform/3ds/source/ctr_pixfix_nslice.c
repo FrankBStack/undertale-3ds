@@ -111,7 +111,7 @@ static PIXNS_TEXT void pixnsInstall(Renderer* renderer) {
     pixns.outer = *inner;
     pixns.outer.init = pixnsInit;
     pixns.outer.drawSpritePart = pixnsDrawSpritePart;
-    renderer->vtable = &pixns.outer;
+    CTR_VTCHAIN_NOTE(renderer, &pixns.outer, renderer->vtable, nslice) renderer->vtable = &pixns.outer;
 }
 
 void __real_CtrRenderer_setSurfaceReaders(Renderer* renderer, bool* readers, uint32_t count);

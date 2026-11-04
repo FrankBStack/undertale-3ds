@@ -342,4 +342,20 @@ void CtrSurfaceCensus_install(Renderer* renderer);
 #define KGL_DECLARE
 #endif
 
+// vtchain (flowerhw 11-03; test builds only, CMake CTRPORT_VTCHAIN_CHECK): each table put in front of the renderer's
+// notes itself and the table it went in front of (source/ctr_vtchain.c), which stops the run at once when that chain
+// already holds it: a table copied from one that calls back into it loops (smalltext over the tower decorations' table).
+// Release builds: no tokens at all (the note carries its own semicolon). `who` is a bare name, a number here (late
+// code may not reference string literals); ctr_vtchain.c names them.
+#ifdef CTRPORT_VTCHAIN_CHECK
+#define CTR_VTC_natsurf6 0
+#define CTR_VTC_nslice 1
+#define CTR_VTC_tower 2
+#define CTR_VTC_smalltext 3
+void CtrVtchain_note(const void* renderer, const void* outer, const void* under, int who);
+#define CTR_VTCHAIN_NOTE(renderer, outer, under, who) CtrVtchain_note((renderer), (outer), (under), CTR_VTC_##who);
+#else
+#define CTR_VTCHAIN_NOTE(renderer, outer, under, who)
+#endif
+
 #endif

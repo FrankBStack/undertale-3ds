@@ -214,6 +214,9 @@ def fingerprint(game, target, data, selection, chapters=False, runs=(), typed=No
     h.update(btnprompt.source_text().encode())
     # escape.py's CTRPORT_AOT_ESCAPE=0 (every elided site compiled to its generic code only) changes the code.
     h.update(("escape %s" % os.environ.get("CTRPORT_AOT_ESCAPE", "")).encode())
+    # typed.py's draw_surface_part_ext calls (knightgpu dspe; build.sh, DELTARUNE New) change the code.
+    if os.environ.get("CTRPORT_AOT_DSPE", ""):
+        h.update(("dspe %s" % os.environ["CTRPORT_AOT_DSPE"]).encode())
     for folder, args in runs:
         out = os.path.dirname(folder) if chapters else folder
         h.update(repr([a.replace(out, "<out>").replace(data, "<data>") if isinstance(a, str) else a

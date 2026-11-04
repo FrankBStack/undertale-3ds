@@ -20,27 +20,29 @@ The goal: every scene running at a locked 30 fps on every model.
 
 ```
 New 3DS / New 3DS XL / New 2DS XL   ███████████████████░   99%
-3DS                                 ███████████████████░   97%
-3DS XL                              ███████████████████░   95%
-2DS                                 ██████████████████░░   88%
-Overall                             ███████████████████░   94%
+3DS                                 ██████████████████░░   90%
+3DS XL                              ██████████████████░░   92%
+2DS                                 █████████████████░░░   86%
+Overall                             ██████████████████░░   92%
 ```
 
 A scene passes only when every single frame in play is ready in time, with no dropped frames. Most scenes that fail miss by a single frame here and there, which is hard to notice while playing. That's why the beta is judged by playing the worst scenes.
 
 New 3DS: 70 of 71 measured scenes pass.
 
-Older models: 70 of 72 measured scenes pass on a 3DS, 69 of 73 on a 3DS XL and 64 of 73 on a 2DS.
+Older models: 66 of 73 measured scenes pass on a 3DS, 67 of 73 on a 3DS XL and 63 of 73 on a 2DS.
 
 ## Known issues
 
-- On older models, some heavy battles and the ending credits can slow down.
-- On older models, some sounds can start late or briefly interrupt play; songs in Mettaton's opera can start about a fifth of a second late.
+- On older models, a few scenes can slow down: the Omega Flowey fight, Undyne's death when you kill her and the ending credits on every older model; one room in Hotland on a 3DS and a 3DS XL; the Knight Knight battle in the CORE on a 3DS; and on a 2DS also Asriel's fight, Asgore's fight, the walk out past the barrier at the end, and loading a save in Snowdin. On a New 3DS, only the Omega Flowey fight.
+- On older models, a few sounds can start a moment late, and the Omega Flowey fight can pause for a split second while a sound loads.
+- On older models, the music can cut out for a moment in the fight with Asriel and in the room before the barrier, and the rising hum near the end can stutter. This build should fix both; we haven't confirmed it on a console yet.
 - On older models, opening the Rosalina menu while the game runs can freeze the console. Save before using it.
-- Smart smoothing can lose fine lines in some large artwork, such as Mettaton NEO, Asriel's wings and Asgore's cape.
-- Opening Options lets the music fade out instead of stopping at once, and a sound that was playing can be cut off or play twice afterwards.
+- Some large artwork can lose fine lines, such as Mettaton NEO, Asriel's wings, Asgore's cape and the phone call speech bubble.
+- Rarely, opening Options while a lot of sounds are playing can cut one of them off.
+- In Options, START plays the menu sound but does nothing.
 - A few stray red pixels can appear around the last Froggit in the ending credits. This build should hide them; we haven't confirmed it on a console yet.
-- Rarely, an older model can crash when you press HOME, and a 2DS can freeze or crash around Asriel's fight or the ending credits. We're looking into it. Save first.
+- Rarely, an older model can crash when you press HOME, or freeze. We're looking into it. Save first.
 
 ## Supported consoles
 

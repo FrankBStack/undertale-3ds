@@ -34,7 +34,11 @@ function(aotm_compile_like_main target)
 endfunction()
 
 set(AOTM_OBJECT_LISTS "")
+set(AOTM_PART_TARGETS "")
 foreach(part IN LISTS AOTM_PARTS)
+    # Short object directories also keep native Windows binutils below MAX_PATH.
+    list(FIND AOTM_PARTS "${part}" part_index)
+    set(part_target "aotm_${part_index}")
     file(GLOB srcs CONFIGURE_DEPENDS "${CTRPORT_AOT_DIR}/${part}/aot_gen_*.c" "${CTRPORT_AOT_DIR}/${part}/aot_table.c")
     if(NOT EXISTS "${CTRPORT_AOT_DIR}/${part}/aot_table.c")
         message(FATAL_ERROR "${CTRPORT_AOT_DIR}/${part} has no aot_table.c: run tools/aot/prepare.py --chapters again")
@@ -51,26 +55,29 @@ foreach(part IN LISTS AOTM_PARTS)
         endif()
         list(APPEND srcs ${typed_srcs})
     endif()
-    add_library(aotm_${part} OBJECT ${srcs})
-    aotm_compile_like_main(aotm_${part})
-    target_compile_definitions(aotm_${part} PRIVATE CTR_AOT_MODULE)
+    add_library(${part_target} OBJECT ${srcs})
+    list(APPEND AOTM_PART_TARGETS ${part_target})
+    aotm_compile_like_main(${part_target})
+    target_compile_definitions(${part_target} PRIVATE CTR_AOT_MODULE)
     # As for code linked in (CMakeLists.txt): large generated functions build much faster without these.
     set_source_files_properties(${srcs} PROPERTIES COMPILE_OPTIONS "-fno-schedule-insns;-fno-var-tracking;-fno-var-tracking-assignments")
     if(typed_srcs)
         set_source_files_properties(${typed_srcs} PROPERTIES COMPILE_OPTIONS "${CTRPORT_TYPED_AOT_OPTIONS}"
                                     COMPILE_DEFINITIONS "${CTRPORT_TYPED_DEFS}")
     endif()
-    list(APPEND AOTM_OBJECT_LISTS "$<JOIN:$<TARGET_OBJECTS:aotm_${part}>,|>")
+    list(APPEND AOTM_OBJECT_LISTS "$<JOIN:$<TARGET_OBJECTS:${part_target}>,|>")
 endforeach()
 list(JOIN AOTM_OBJECT_LISTS "|" AOTM_ALL_OBJECTS)
-list(TRANSFORM AOTM_PARTS PREPEND "aotm_" OUTPUT_VARIABLE AOTM_PART_TARGETS)
 
 set(AOTM_HOSTSYMS "${AOTM_DIR}/aot_hostsyms.c" "${AOTM_DIR}/aot_hostsyms.h")
 # Run again whenever a module's objects change (regenerated code may use other symbols); aot_hostsyms.cmake rewrites
 # the files only when the list changes, so the stamp is what says it ran.
 set(AOTM_HOSTSYMS_OBJECTS "")
 foreach(part IN LISTS AOTM_PARTS)
-    list(APPEND AOTM_HOSTSYMS_OBJECTS "$<TARGET_OBJECTS:aotm_${part}>")
+    # Short object directories also keep native Windows binutils below MAX_PATH.
+    list(FIND AOTM_PARTS "${part}" part_index)
+    set(part_target "aotm_${part_index}")
+    list(APPEND AOTM_HOSTSYMS_OBJECTS "$<TARGET_OBJECTS:${part_target}>")
 endforeach()
 add_custom_command(OUTPUT "${AOTM_DIR}/aot_hostsyms.stamp"
     BYPRODUCTS ${AOTM_HOSTSYMS} "${AOTM_DIR}/aot_numeric_string.cmake"
@@ -113,17 +120,20 @@ set(AOTM_SIZE "${AOTM_BINUTILS_DIR}/${AOTM_SIZE_NAME}")
 # otherwise fit its region (the space for generated code), and says so.
 set(CTRPORT_AOT_MODULE_FILES "")
 foreach(part IN LISTS AOTM_PARTS)
+    # Short object directories also keep native Windows binutils below MAX_PATH.
+    list(FIND AOTM_PARTS "${part}" part_index)
+    set(part_target "aotm_${part_index}")
     set(elf "${AOTM_DIR}/${part}.elf")
     set(module "${CTRPORT_ROMFS_DIR}/aot/${part}.aotm")
     add_custom_command(OUTPUT "${module}"
         COMMAND "${CMAKE_COMMAND}" "-DCC=${CMAKE_C_COMPILER}" "-DARCH=${AOTM_ARCH_JOINED}"
                 "-DLDSCRIPT=${CMAKE_CURRENT_SOURCE_DIR}/aot/aot_module.ld" "-DREGION=${AOTM_REGION_BYTES}"
                 "-DMAIN_ELF=$<TARGET_FILE:ctrport>" "-DWRAPS=${AOTM_WRAPS_JOINED}" "-DMAP=${AOTM_DIR}/${part}.map"
-                "-DELF=${elf}" "-DMODULE=${module}" "-DOBJECTS=$<JOIN:$<TARGET_OBJECTS:aotm_${part}>,|>"
+                "-DELF=${elf}" "-DMODULE=${module}" "-DOBJECTS=$<JOIN:$<TARGET_OBJECTS:${part_target}>,|>"
                 "-DCOMMON=$<JOIN:$<TARGET_OBJECTS:aotm_common>,|>" "-DTABLE_C=${CTRPORT_AOT_DIR}/${part}/aot_table.c"
                 "-DNM=${CMAKE_NM}" "-DOBJCOPY=${CMAKE_OBJCOPY}" "-DSIZE=${AOTM_SIZE}" "-DPART=${part}"
                 -P "${CMAKE_CURRENT_SOURCE_DIR}/aot/aot_module_link.cmake"
-        DEPENDS ctrport aotm_${part} aotm_common $<TARGET_OBJECTS:aotm_${part}> $<TARGET_OBJECTS:aotm_common>
+        DEPENDS ctrport ${part_target} aotm_common $<TARGET_OBJECTS:${part_target}> $<TARGET_OBJECTS:aotm_common>
                 "${CMAKE_CURRENT_SOURCE_DIR}/aot/aot_module.ld" "${CMAKE_CURRENT_SOURCE_DIR}/aot/aot_module_link.cmake"
         COMMENT "Linking AOT module ${part}"
         VERBATIM)

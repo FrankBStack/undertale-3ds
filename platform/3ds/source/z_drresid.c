@@ -222,6 +222,19 @@ static DR_TEXT void drLookForTrack(CtrTextureCache* cache) {
     }
 }
 
+// A resident upcoming tile's stamp (sun5): its last use is moved up to the frame before this one, never back. The
+// phase plan (z_phaseplan.c, ppDrawn: used in the frame before) has looked at this frame already when this runs, and the
+// renderer's shortcuts (used in this frame: drawn already) look at this frame's draws, so neither reads it as a draw at
+// the next frame; to the eviction ages (DRRESID_RETIRE, ALLOC_IDLE_FRAMES, PHASEPLAN_PIN_AGE, CTR_THRASH_FRAMES) it is
+// one frame older than a stamp of this frame. A tile installed in this frame keeps its install stamp. Returns the stamp.
+// A draw in a scan's frame now differs from the scan's stamp, so drScan sees it at the next scan, as any other draw.
+static inline __attribute__((always_inline)) uint32_t drStamp(CtrTile* tile, uint32_t frame) {
+    // A tile's last use is never past this frame (only UNDERTALE's z_utstall.c stamps ahead), so this is the max of the two.
+    uint32_t stamp = tile->lastUsedFrame == frame ? frame : frame - 1u;
+    tile->lastUsedFrame = stamp;
+    return stamp;
+}
+
 // 2: the clock follows the tiles drawn; upcoming tiles marked or resident are stamped as used. Installing a tile
 // stamps it too (ctr_textures.c), so a marked tile's first stamp after it became resident is taken as its install
 // (DRRESID_INSTALLED, cleared when the tile is evicted, so that a tile filled in again doesn't read as drawn either),
@@ -239,17 +252,15 @@ static DR_TEXT void drScan(CtrTextureCache* cache) {
         }
         if (tile->lastUsedFrame > dr.activeFrame && tile->lastUsedFrame != (m & ~DRRESID_INSTALLED)) {
             if (m == 0 || (m & DRRESID_INSTALLED) != 0) {
-                if (dr.frames[i] > dr.clock && limit >= dr.frames[i]) dr.clock = dr.frames[i];
+                if (limit >= dr.frames[i] && dr.frames[i] > dr.clock) dr.clock = dr.frames[i];
                 dr.markFrame[i] = UINT32_MAX; // drawn: the cache's own recency rules it from now on
                 continue;
             }
             m |= DRRESID_INSTALLED;
         }
-        if (m != 0) {
-            tile->lastUsedFrame = cache->frame;
-            dr.markFrame[i] = cache->frame | (m & DRRESID_INSTALLED);
-        }
+        if (m != 0) dr.markFrame[i] = drStamp(tile, cache->frame) | (m & DRRESID_INSTALLED);
     }
+    __asm__ volatile("nop"); // layout pad (sun5): drScan keeps its 236 B, so the late code after it doesn't move
 }
 
 // 4: room for bytes more in the budget, by evicting tiles not drawn for DRRESID_RETIRE frames. Short of linear memory,
@@ -270,24 +281,21 @@ static DR_TEXT void drAdmit(CtrTextureCache* cache) {
     if (cache->fillPending) return; // the last batch is still being filled in
     uint32_t marks = 0;
     while (dr.count > dr.next && DRRESID_MARKS_PER_FRAME > marks && dr.clock + DRRESID_AHEAD >= dr.frames[dr.next]) {
-        uint32_t i = dr.next;
-        CtrPage* page = &cache->pages[0];
-        CtrTile* tile = drTile(cache, dr.entries[i], &page);
+        uint32_t i = dr.next, entry = dr.entries[i];
+        CtrPage* page; // drTile sets it when it finds the tile (sun5: entry and this save drStamp's 12 B below)
+        CtrTile* tile = drTile(cache, entry, &page);
         if (tile == nullptr) {
             // Its page's layout isn't known yet: learning it may read the cache file's header, once a frame at most.
             if (marks != 0) break;
-            CtrTextures_acquire(cache, dr.entries[i] >> 8);
-            tile = drTile(cache, dr.entries[i], &page);
+            CtrTextures_acquire(cache, entry >> 8);
+            tile = drTile(cache, entry, &page);
             if (tile == nullptr) {
                 dr.next++;
                 continue;
             }
         }
         if (dr.markFrame[i] == UINT32_MAX || tile->valid || (page->formatsKnown && tile->format == CTR_TILE_EMPTY)) {
-            if (tile->valid && dr.markFrame[i] != UINT32_MAX) {
-                tile->lastUsedFrame = cache->frame;
-                dr.markFrame[i] = cache->frame | DRRESID_INSTALLED;
-            }
+            if (tile->valid && dr.markFrame[i] != UINT32_MAX) dr.markFrame[i] = drStamp(tile, cache->frame) | DRRESID_INSTALLED;
             dr.next++;
             continue;
         }
@@ -327,4 +335,114 @@ DR_TEXT void __wrap_CtrTextures_beginFrame(CtrTextureCache* cache, uint32_t fram
     drAdmit(cache);
 }
 
+#ifdef CTRPORT_FLOWERHW_COLD
+// ===[ flowerhw cold: the first room after a save or chapter load finishes its seed in the room load ]===
+//
+// The room change's hidden load (z_roomload.c, 200 ms after marking) stops at its budget before the room's own
+// first-second tiles in every big DELTARUNE room (Titan climb, Knight's snow zone, flowerydash, Titan's battle room):
+// "tiles N first, 0 more; ... (budget reached)", then 5-17 tiles, 0.2-0.6 s of SD loads in the first 45 frames of play
+// (n3ds console logs; Azahar's instant SD never reaches the budget). On the first room after a front-end or game-over
+// room (a save load, a chapter load, a retry after a game over: what maintainer's playpack tests start with) the player is
+// already waiting through a load, so there the room load runs once more, with COLD_NANOS as its deadline: the same
+// CtrTextures_roomLoadFinish (no ctr_textures.c change), whose passes 1-2 never evict and stop at the cache's linear
+// floor (LINEAR_FLOOR_BYTES) and at the budget less its 4 MiB sprite headroom. The deadline is a budget, not a cap
+// (c26rev R140 F1): it is checked between page operations, so the page started before it runs to its end (an SD page
+// load or a wait on its read, 50-300 ms in n3ds logs); first-frame pages may still start up to ROOMLOAD_NOW_EXTRA_NANOS
+// (200 ms) past it and those already in RAM up to ROOMLOAD_RAM_EXTRA_NANOS (150 ms) more; pass 2 starts a cache-file
+// page only if its estimated cost ends before it. So at most about 1.35 s and one page operation more. All of it is
+// inside the room change: this runs from the room-change path (main.c ends that frame, its present suppressed, before
+// the prefetch), and the new room's first frame is drawn only after it returns: a longer transition, never a play frame. Only when linear memory has COLD_FLOOR
+// free (z_phaseplan.c's PHASEPLAN_FLOOR and 1 MiB). The front-end rooms are each chapter's list in tracks.dtp (a track
+// for room 0xFFFF with COLD_FRONT_END in its pad, room indices as its activation entries; tools/roomplan/build_tracks.py
+// writes it for the exact data.win only; drresid's own reading never matches room 0xFFFF). Warm room changes are as
+// before. review decision 2026-11-03 (L1-alt (b)). Only what loads when changes, never what is drawn.
+// It wraps CtrRoomload_prefetchRoom (ctr_argui.c's call), which nothing else wraps on DELTARUNE New (flowcode, a probe
+// build, does; CMakeLists.txt keeps the two apart). Its own sections, appended last (late_reserve.ld).
+#define COLD_TEXT __attribute__((noinline, section(".text_flowerhw_cold")))
+#define COLD_CONST __attribute__((aligned(4), section(".flowerhw_cold_ro")))
+#define COLD_BSS __attribute__((section(".bss_flowerhw_cold,\"aw\",%nobits @"))) // nobits, as z_phaseplan.c's L2 state
+#define COLD_NANOS (1000ull * 1000000ull)
+#define COLD_FLOOR (3u * 1024u * 1024u + 256u * 1024u + 1024u * 1024u)
+
+uint64_t nowNanos(void);
+void __real_CtrRoomload_prefetchRoom(CtrTextureCache* cache, Runner* runner);
+void __wrap_CtrRoomload_prefetchRoom(CtrTextureCache* cache, Runner* runner);
+void __real_CtrTextures_roomLoadFinish(CtrTextureCache* cache, uint64_t deadline, uint32_t* nowTiles, uint32_t* otherTiles);
+
+static COLD_BSS struct {
+    const DataWin* dataWin; // whose room the last room load was for
+    bool frontEnd;          // that room was a front-end or game-over room
+} cold;
+
+#define COLD_LIST_ROOM 0xFFFFu
+#define COLD_FRONT_END 1u // DrTrack.pad: the track lists the section's front-end rooms
+static const char coldLog[] COLD_CONST =
+    "Room load (cold): %s after a front-end room: %u first and %u more tiles in %.0f ms more; %u wanted left (%u read "
+    "ahead, %u in cache files, %u other); linear %u KB free\n";
+static const char coldSkipLog[] COLD_CONST = "Room load (cold): %s after a front-end room: skipped, linear %u KB free\n";
+
+// Whether room is in this cache's section's front-end list. Before drresid has read the file (the boot room's load) no
+// room is: a game room is always reached through a later front-end room.
+COLD_TEXT static bool coldFrontEnd(const CtrTextureCache* cache, int32_t room) {
+    if (dr.file == nullptr) return false;
+    uint32_t sections;
+    memcpy(&sections, dr.file + 8, 4);
+    size_t at = 12;
+    for (uint32_t s = 0; sections > s; s++) {
+        uint32_t sec[6];
+        memcpy(sec, dr.file + at, 24);
+        at += 24;
+        bool mine = sec[0] == cache->key.dataWinSize && sec[1] == cache->key.gameId &&
+                    ((uint64_t) sec[2] | (uint64_t) sec[3] << 32) == cache->key.timestamp && sec[4] == cache->roomCount;
+        for (uint32_t t = 0; sec[5] > t; t++) {
+            const DrTrack* track = (const DrTrack*) (dr.file + at);
+            if (mine && track->room == COLD_LIST_ROOM && (track->pad & COLD_FRONT_END) != 0) {
+                const uint32_t* list = (const uint32_t*) (dr.file + at + 8);
+                for (uint32_t i = 0; track->actCount > i; i++) {
+                    if (list[i] == (uint32_t) room) return true;
+                }
+            }
+            at += drTrackSize(track);
+        }
+        if (mine) return false;
+    }
+    return false;
+}
+
+COLD_TEXT void __wrap_CtrRoomload_prefetchRoom(CtrTextureCache* cache, Runner* runner) {
+    __real_CtrRoomload_prefetchRoom(cache, runner);
+    if (runner == nullptr || cache == nullptr || runner->currentRoom == nullptr) return;
+    bool after = cold.dataWin == runner->dataWin && cold.frontEnd;
+    cold.dataWin = runner->dataWin;
+    cold.frontEnd = coldFrontEnd(cache, runner->currentRoomIndex);
+    if (!after || cold.frontEnd || cache->pageCount == 0) return;
+    uint32_t linear = linearSpaceFree();
+    if (COLD_FLOOR > linear) {
+        logInfo(coldSkipLog, runner->currentRoom->name, (unsigned) (linear / 1024u));
+        return;
+    }
+    uint64_t start = nowNanos();
+    uint32_t nowTiles = 0, otherTiles = 0;
+    __real_CtrTextures_roomLoadFinish(cache, start + COLD_NANOS, &nowTiles, &otherTiles);
+    uint64_t took = nowNanos() - start;
+    // What the room still wants and lacks, by where it would come from (a console row's reading aid).
+    uint32_t left = 0, ahead = 0, files = 0;
+    for (uint32_t p = 0; cache->pageCount > p; p++) {
+        const CtrPage* page = &cache->pages[p];
+        if (!page->layoutKnown || page->tiles == nullptr) continue;
+        int32_t tiles = page->tilesX * page->tilesY;
+        for (int32_t t = 0; tiles > t; t++) {
+            const CtrTile* tile = &page->tiles[t];
+            if (!tile->wanted || tile->valid || (page->formatsKnown && tile->format == CTR_TILE_EMPTY)) continue;
+            left++;
+            if (page->read != nullptr || page->packed != nullptr) ahead++;
+            else if (page->cacheFile == CTR_CACHE_FILE_VALID) files++;
+        }
+    }
+    logInfo(coldLog, runner->currentRoom->name, (unsigned) nowTiles, (unsigned) otherTiles, (double) took / 1e6,
+            (unsigned) left, (unsigned) ahead, (unsigned) files, (unsigned) (left - ahead - files),
+            (unsigned) (linearSpaceFree() / 1024u));
+}
+
+#endif // CTRPORT_FLOWERHW_COLD
 #endif

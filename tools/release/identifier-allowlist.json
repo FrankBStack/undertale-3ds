@@ -177,7 +177,7 @@
     {
       "member": "platform/3ds/source/ctr_renderer.c",
       "class": "engine-lookups",
-      "sha256": "15f360fa4d39530dd6657966e84d9fcc498302ca07cae8d40312964879ca6245",
+      "sha256": "a990ca66b6f3a0191b64a2fc99451e1ea2490fe5e25f7c528dcb409ab82ee655",
       "justification": "Shader, object and sprite lookup names select renderer compatibility paths.",
       "evidence_sha256": [
         "b47ae0eeb50b4a01adfe2722ac27cb04c8fa69e3e88b357925af0ed56f2163c2"
@@ -204,10 +204,19 @@
     {
       "member": "platform/3ds/source/main.c",
       "class": "engine-lookups",
-      "sha256": "d8af04431c6f671d1413ad952041113776d79f9396ab6d2eb68260a1090aa151",
+      "sha256": "a7c8829207aed65867bd8080a0cc8acf8202ae0648705a1d06865139cf21ab89",
       "justification": "Intro and title room names select startup rooms in player data.",
       "evidence_sha256": [
         "beff7c970aaeadca3f94aedfe4901d446f31340c60d5b22c361461f1f3cc2cdc"
+      ]
+    },
+    {
+      "member": "tools/aot/check_dspe_gate.py",
+      "class": "engine-lookups",
+      "sha256": "ef36e9e5d37ba8ae66f8ff716912e9d05dd88ccd7d6e9ac5f9d4e884b529726c",
+      "justification": "Calls corpus room lookup to check the dspe gate hashes against player data; holds name hashes only.",
+      "evidence_sha256": [
+        "70c795baa9584964e02aa3b1d7dcb497efb6e77be7f592d44c26d70a28708216"
       ]
     },
     {
@@ -294,7 +303,7 @@
     {
       "member": "platform/3ds/source/ctr_pixfix_nslice.c",
       "class": "engine-lookups",
-      "sha256": "1d8db54136256b9a7a6d0752706e4768140b35b7552ce1fe49a1c5d112ed7f86",
+      "sha256": "2a4e2541860d5f5a344436bd23dec2ced3a534834b56fc176ecea7c426bca39e",
       "justification": "Sprite prefix lookups select nine-slice compatibility handling.",
       "evidence_sha256": [
         "7ada3bf342a2d7ce4b45ac56488b33600725515cbd30a33dfeacd9da3a321d9d"
@@ -447,7 +456,7 @@
     {
       "member": "tools/aot/typed.py",
       "class": "engine-symbols",
-      "sha256": "75af97c3e4f485eb64fe03ec063d79fa0449bfb2c4d179ec0a336cd4c7c25b8c",
+      "sha256": "78a9b808aa87e96eeacf869197e3746d8ae12af297c4b1f866225e35b5032cb3",
       "justification": "Reviewed parser limits, format fields, settings or upstream APIs; prefix overlap is not a game asset.",
       "evidence_sha256": [
         "51c9dd43dc11e9049fb863de83ba823301dd555bf882dc29e5025d2b3b86f50a"
@@ -465,7 +474,7 @@
     {
       "member": "tools/release/test_check_release.py",
       "class": "synthetic-fixture",
-      "sha256": "6ced5a0ba95933a4f4f6d7f07a1c96f3daf07785c9f9c88fe037e625dc881bce",
+      "sha256": "005181b665e0b6fd16946c6eb8e944550950f5bef9327d0deecb3e4c7e620e18",
       "justification": "Existing made-up detector probes; provenance assertions bind the unchanged PRESS source and its 10 B original glyph, reject source hash/size drift and never clear identifiers.",
       "evidence_sha256": [
         "4d20e7e76169194511c1fc489bbb9aa5753317c101b1fc7079ea64eaeb2c2d3c"
@@ -483,7 +492,7 @@
     {
       "member": "tools/roomplan/records.py",
       "class": "roomplan-tool",
-      "sha256": "5d1e7df417935754aeb5b08175e99219edbd1e9bd03607ec086130d66fd7fecc",
+      "sha256": "f23cd282c732e151f8a6d22de0f72536e3c149fe3e87c393a7fd541564726b22",
       "justification": "Roomplan schema fields, format limits and lookup names build hash-gated plans from player data.",
       "evidence_sha256": [
         "714972a7fa43d8174964730d7bbd4fe0c122ec016afdb52b64a28068ebb5f93e"
@@ -569,7 +578,7 @@
     {
       "member": "tools/roomplan/records/undertale-steam-1.08.json",
       "class": "roomplan-record",
-      "sha256": "99d291e49a37b96350b959bcb446bca1496d04568a1b275e07780044efc74557",
+      "sha256": "e2214a07f6b5003c3d82bf2a755dc729b5deeaf9670aa199a2305deacf17553e",
       "justification": "Owner-approved hash-gated indices and source rectangles recorded during our own playthroughs.",
       "evidence_sha256": [
         "dcf99176f5beeab6da7c76142996000867d039c9fffd11c97f64eb2640957c09",
@@ -579,7 +588,7 @@
     {
       "member": "tools/roomplan/build_phases.py",
       "class": "roomplan-tool",
-      "sha256": "60bf1166d87278d2d0dc118ac24e7611263ec692b31b46e243a4ebc6b096b9b9",
+      "sha256": "d1f2bfd587be057469a3a85ab6673461bd6dff05bd91933decb7b411b20414dd",
       "justification": "Roomplan schema fields, format limits and lookup names build hash-gated plans from player data.",
       "evidence_sha256": [
         "6955750dde82dd376341835b49ccfddc12b5789c39f68ae57e6c9a1461e9a310"
@@ -588,16 +597,25 @@
     {
       "member": "tools/roomplan/build_tracks.py",
       "class": "roomplan-tool",
-      "sha256": "a8b68727ab457e57284a1233ce46540fadb60c7caf8fbba57251c373120d3b49",
+      "sha256": "47a6da083fd7a461105fb27d3799b9bdf33acd23003e101dfc95537db880f7c6",
       "justification": "Roomplan schema fields, format limits and lookup names build hash-gated plans from player data.",
       "evidence_sha256": [
         "6955750dde82dd376341835b49ccfddc12b5789c39f68ae57e6c9a1461e9a310"
       ]
     },
     {
+      "member": "tools/roomplan/sharebuf/deltarune.json",
+      "class": "roomplan-record",
+      "sha256": "791653237ab19d46436eebdb64a51b0819febaa8e64127521c675e20f50769b1",
+      "justification": "Shared-surface record (sharebuf, lane titancpu, DELTARUNE New): object indices and the SHA-256 of each object's name for one exact data.win (SHA-256), as the track record; the name itself is read from the player's data.win at build time; no game body, names or assets. Approved by the lead 2026-11-03 (indices-only rule).",
+      "evidence_sha256": [
+        "4277eec54427f13307b691dd26d2d01de940993fad400c3e62969046b65a1488"
+      ]
+    },
+    {
       "member": "tools/roomplan/tracks/deltarune.json",
       "class": "roomplan-record",
-      "sha256": "6f86d7b1e179d6772596b854da6c58b3eaf086ee1b9a8b605a388439cf4795b0",
+      "sha256": "f853edfff2e2f24210728f726502569df8013d2442b444beb852241cfa695d20",
       "justification": "Track record (drresid): per-room texture page item numbers and frames for exact data.win files (SHA-256), as the room plan records; indices only, from our New 3DS recorder runs; no game body, names or assets.",
       "evidence_sha256": [
         "1d8d0ed9be5dc9dfe3a4ff9735374a6070a724066b99f0626be8eca272139403",
@@ -608,7 +626,7 @@
     {
       "member": "tools/roomplan/phases/deltarune-steam-0.0.253-chapter5.json",
       "class": "roomplan-record",
-      "sha256": "1c283caf546cde29679c7a2fb64d54637e0a3f202d1a91e4c2ac914f850c263c",
+      "sha256": "0521977f3438f809ccee1339360a3ddb7df1f05c1c550e2f3bb47dfaa2164baa",
       "justification": "Phase record: per-room texture page item numbers and first-use frames for one exact data.win, as the room plan records; no game body, names or assets.",
       "evidence_sha256": [
         "6955750dde82dd376341835b49ccfddc12b5789c39f68ae57e6c9a1461e9a310",
@@ -618,7 +636,7 @@
     {
       "member": "engine/src/vm_builtins.c",
       "class": "engine-symbols",
-      "sha256": "83144bbdb789a7cd4cfd87a13bea6b8ff1a7d574a05bdfbb1b669e4f6ddfb33a",
+      "sha256": "58954e22207e23e35fe9c6a6ba8f77aee231a6aeedca1caf0950786da9eb6bdc",
       "justification": "Generic GameMaker room API names and argument placeholders only; game-specific comment examples removed, with no native game bodies remaining.",
       "evidence_sha256": [
         "e4e79ad2fa93fd7259698723d25e590113b4ad6e849a82ee5240fc890c43d313"
@@ -750,7 +768,7 @@
     {
       "member": "tools/roomplan/build_sfxplan.py",
       "class": "roomplan-tool",
-      "sha256": "1a2f1afe02e270e49076d7f49c46b3eafe614baf1d08cfb9f7cee22d1e1dfc4c",
+      "sha256": "3f49ec0fc990da10d420b09df3dabfe655796285cebca6008866ba97184cad47",
       "justification": "Roomplan schema field name (as build_plan.py's) builds the hash-gated sound plan from player data.",
       "evidence_sha256": [
         "6955750dde82dd376341835b49ccfddc12b5789c39f68ae57e6c9a1461e9a310"
@@ -759,7 +777,7 @@
     {
       "member": "tools/roomplan/records/sounds/undertale-steam-1.08.json",
       "class": "roomplan-record",
-      "sha256": "ccbcc48fc52602c882c43066eb79c9031ba0e4f002719de387420f690b926324",
+      "sha256": "53396cdf0138f3f1dd36763462b0733b3f913824f18e838243eafb4844788688",
       "justification": "Owner-approved hash-gated sound indices per scene recorded during our own playthroughs (utsfx; lead 10-24, same kind as the room records).",
       "evidence_sha256": [
         "dcf99176f5beeab6da7c76142996000867d039c9fffd11c97f64eb2640957c09",
@@ -769,7 +787,7 @@
     {
       "member": "tools/roomplan/records/undertale-gog-1.08.json",
       "class": "roomplan-record",
-      "sha256": "3100187c98734d273efc9f57eb64969c3072a2e20ff873fedef5066e9b604615",
+      "sha256": "5e70b9dadb67fa34b0c8dcef8ec37baf70b9f6f516c0932d16cf9ba9e6c6a395",
       "justification": "Lead-approved GOG hash-gated record, reprojecting our recorded playthrough indices through equal metadata and RGBA.",
       "evidence_sha256": [
         "ea1289ef94f5f714e142d7cb8c4e851dc4326e625c48c21bb9639130497f6b5e",
@@ -799,7 +817,7 @@
     {
       "member": "tools/roomplan/records/sounds/undertale-gog-1.08.json",
       "class": "roomplan-record",
-      "sha256": "16dd9cb48f9d74d0b5826659b7ff843d07df750d99b470f3f11710f28299d005",
+      "sha256": "8d6328f8486d7d57d7afaa10e91fb0ad32e7d6167d8979ac7cf08667d3f12a2f",
       "justification": "Index-only sound observations from Steam rebound after exact CODE/ROOM/SOND and indexed audio payload proof (only relocated pointers and Ogg serial/CRC fields differ) on the measured GOG container; no audio or game content.",
       "evidence_sha256": [
         "ea1289ef94f5f714e142d7cb8c4e851dc4326e625c48c21bb9639130497f6b5e",
@@ -822,7 +840,7 @@
       "evidence_sha256": [
         "ec6d5c493df4c8b53e57dd4a2ce27ce563d52ee9ccf95083c9135cec002574aa"
       ],
-      "sha256": "a1a28facaac1c84d36c6795c96001c2deb42fadab770044b1b00e0cf3fc4873c"
+      "sha256": "af6dda605ed2db0a34c7c5445be466001ed38b48f91dd935fb6118ab0bce95d7"
     },
     {
       "member": "tools/aot/stpack.py",
@@ -938,7 +956,7 @@
     {
       "member": "platform/3ds/source/ctr_repack.inc",
       "class": "engine-lookups",
-      "sha256": "703088dce1aaefc7b87d925d162f11f788fdd269d6aae90fa6bd2d892b261a74",
+      "sha256": "54e003e7dc326e6344b87ae058ba345ee21db5498e74599bba2e391dc66447eb",
       "justification": "integrate23 repack stage 2026-10-27 (lane repack f8b21a137), approved by the lead 2026-10-27: one sprite name (the attack-bar PRESS sprite, the same name ctr_pixfix_press.c's approved entry carries) selects the tile pixpress rewrites at load, which the per-room repack keeps on its original tile (DELTARUNE New only; not compiled into UNDERTALE).",
       "evidence_sha256": [
         "0d4016bf56af8da86a16d4870d399694305ac9ccb86a9f93097499e37905e8f8"

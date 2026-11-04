@@ -38,9 +38,10 @@ uint32_t CtrAudioSystem_underruns(CtrAudioSystem* ca);
 uint32_t CtrAudioSystem_shedSfx(uint32_t bytes);
 
 // The loader thread's opens, closes and wait for work (ctr_audio_system.c's loaderThreadMain and flowend's
-// decode-time reads). UNDERTALE keeps the few files it reads sounds from open (z_ofloader.c, ofloader); DELTARUNE
-// calls newlib's and libctru's as before. Same arguments, so each call site keeps its code and only its target changes.
-#if defined(ENABLE_WAD16) && defined(__3DS__)
+// decode-time reads). Both games keep the few files they read sounds from open (z_ofloader.c: ofloader for UNDERTALE,
+// dofl for DELTARUNE, where it reads data.win and the chapter's audiogroup in turn). Same arguments, so each call site
+// keeps its code and only its target changes.
+#if defined(__3DS__)
 #include <3ds.h>
 int CtrOfLoader_open(const char* path, int flags);
 int CtrOfLoader_openOnce(const char* path, int flags);
@@ -58,6 +59,15 @@ void CtrOfLoader_wait(LightEvent* event);
 #define CTR_LOADER_CLOSE close
 #define CTR_LOADER_CLOSE_ONCE close
 #define CTR_LOADER_WAIT LightEvent_Wait
+#endif
+// stopLoaderThread's join (dofl, c26rev R150 F1; DELTARUNE only): once the loader has ended, its kept-open files and
+// their keeper are retired there, so none outlives it (the next chapter's loader may never start). UNDERTALE joins as
+// before.
+#if defined(__3DS__) && !defined(ENABLE_WAD16)
+Result CtrOfLoader_join(Thread thread, u64 timeoutNs);
+#define CTR_LOADER_JOIN CtrOfLoader_join
+#else
+#define CTR_LOADER_JOIN threadJoin
 #endif
 
 #endif

@@ -709,7 +709,7 @@ static NS6_TEXT void ns6Install(Renderer* renderer) {
     ns6.outer.surfaceFree = ns6CostFree;
     ns6.outer.beginFrame = ns6CostBeginFrame;
 #endif
-    renderer->vtable = &ns6.outer;
+    CTR_VTCHAIN_NOTE(renderer, &ns6.outer, renderer->vtable, natsurf6) renderer->vtable = &ns6.outer;
 }
 
 #ifdef ENABLE_WAD17

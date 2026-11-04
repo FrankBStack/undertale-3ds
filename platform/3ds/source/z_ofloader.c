@@ -23,12 +23,26 @@
 #include "ctr_open_files.h"
 #include "log.h"
 
+// dofl (titancpu, GO 11-03, docs/perf/sd-open-design.md B1): DELTARUNE runs the same code. Its loader reads
+// sounds from data.win and the chapter's audiogroup in turn, and reopened each about 7-10 times a Flowery minute
+// (~32 ms an open on the console, a main-thread read queued behind it). Its code, constants and statics go in their
+// own sections, appended after flowerhw stfix (late_reserve.ld), so nothing before them moves; UNDERTALE's stay where they
+// were. A DELTARUNE chapter switch stops the audio system's loader thread and the next chapter starts a new one
+// (stopLoaderThread, startLoaderThread), which UNDERTALE never does: see CtrOfLoader_join and olAdopt.
+#if defined(__3DS__) && !defined(ENABLE_WAD16)
+#define OL_CODE __attribute__((noinline, section(".titancpu_dofl")))
+#define OL_RO __attribute__((aligned(4), section(".titancpu_dofl_ro")))
+#define OL_BSS __attribute__((section(".bss_titancpu_dofl,\"aw\",%nobits @")))
+#define OL_ADOPT 1
+#endif
 #if defined(ENABLE_WAD16) && defined(__3DS__)
 #define OL_CODE __attribute__((noinline, section(".omegaflowey_ofloader")))
 #define OL_RO __attribute__((aligned(4), section(".omegaflowey_ofloader_ro")))
 // Zero-initialised, outside .bss.* so the main .bss line leaves it to late_reserve.ld's (flags spelled out, as
 // bubbleclip's: '@' starts the assembler's comment, ending GCC's own).
 #define OL_BSS __attribute__((section(".bss_omegaflowey_ofloader,\"aw\",%nobits @")))
+#endif
+#if defined(__3DS__)
 #define OL_FILES 3
 #define OL_PATH 192 // a longer path is opened and closed as before
 
@@ -44,11 +58,17 @@ static struct {
     int held;          // the fd loaderThreadMain holds (never shed), or -1
     uint32_t requests, opens, sheds, hits; // hits: requests served by a kept file (each an open saved)
     bool ready;
+#ifdef OL_ADOPT
+    u32 tid; // the kernel thread id of the loader these files belong to (ids are never reused)
+#endif
 } ol OL_BSS;
 
 static const char olLogOpen[] OL_RO = "[ofloader] keeps %s open (%lu opens, %lu requests, %lu sheds)\n";
 static const char olLogShed[] OL_RO = "[ofloader] shed: closed %d kept-open files (%lu sheds)\n";
 static const char olLogHits[] OL_RO = "[ofloader] %lu opens saved: %lu requests, %lu kept opens, %lu sheds\n";
+#ifdef OL_ADOPT
+static const char olLogRetire[] OL_RO = "[ofloader] retired %d\n";
+#endif
 
 static OL_CODE void olShed(void* owner) {
     (void) owner;
@@ -77,8 +97,50 @@ static OL_CODE void olInit(void) {
     for (int i = 0; OL_FILES > i; i++) ol.files[i].fd = -1;
 }
 
+#ifdef OL_ADOPT
+// DELTARUNE (c26rev R150 F1): retires an ended loader's cache, on a thread that knows the loader is gone (its join, or
+// the next loader). The wake has no event; the keeper is removed under the open-files lock, so no shed or wake is asked
+// of it again and a later thread given the old Thread's allocation never matches it. Every kept file is closed except
+// the one the loader held: its own last close (loaderThreadMain's end, newlib's close) ended that descriptor already,
+// whether or not it was a kept file, and its number may belong to another file by now, so it is dropped, never closed
+// again (-1 when it held none). The cache is left empty: the next loader starts afresh.
+static OL_CODE void olRetire(void) {
+    __atomic_store_n(&ol.event, NULL, __ATOMIC_SEQ_CST);
+    if (ol.keeper != 0) CtrOpenFiles_removeKeeper(ol.keeper - 1);
+    ol.keeper = 0;
+    int closed = 0;
+    for (int i = 0; OL_FILES > i; i++) {
+        OlFile* f = &ol.files[i];
+        if (0 <= f->fd && f->fd != ol.held) {
+            close(f->fd);
+            closed++;
+        }
+        f->fd = -1;
+    }
+    ol.held = -1;
+    ol.ready = false;
+    logInfo(olLogRetire, closed);
+}
+
+// DELTARUNE: the first call from a new loader thread (the next chapter's audio system) takes over. The old loader's
+// cache was retired at its join (CtrOfLoader_join), so this only starts afresh; one still here (a join that failed)
+// is retired now. The thread is told apart by its kernel id, not by its Thread pointer, which the next thread's
+// allocation can reuse.
+static OL_CODE void olAdopt(void) {
+    u32 tid = 0;
+    svcGetThreadId(&tid, CUR_THREAD_HANDLE);
+    if (ol.ready && ol.tid == tid) return;
+    if (ol.ready) olRetire();
+    olInit();
+    ol.tid = tid;
+}
+#endif
+
 // The file's descriptor: kept open from an earlier request, or opened now (and kept while the card has room).
 static OL_CODE int olOpen(const char* path, int flags, bool hold) {
+#ifdef OL_ADOPT
+    olAdopt();
+#endif
     if (!ol.ready) olInit();
     if (ol.keeper == 0) ol.keeper = CtrOpenFiles_addKeeper(olShed, olWake, NULL) + 1;
     CtrOpenFiles_poll(); // a shed asked for since the last request (no kept file is in use here)
@@ -144,13 +206,27 @@ OL_CODE int CtrOfLoader_closeOnce(int fd) {
 // loaderThreadMain's wait for work. A shed asked for while it waits signals this event (olWake), and it sheds once the
 // wait returns; one asked for just before is done before it waits. The wake signals the event only while the loader
 // waits on it: after the loader's last wait (as it stops) nothing signals an event that may be gone. The loader's
-// last close, of the file it held, stays newlib's (so this file's other functions keep their order); the other kept
-// files close as the process ends, and their keeper never sheds again, its thread gone.
+// last close, of the file it held, stays newlib's (so loaderThreadMain keeps its code); on DELTARUNE the other kept
+// files and the keeper are retired at the join (CtrOfLoader_join). UNDERTALE's loader runs until the process ends.
 OL_CODE void CtrOfLoader_wait(LightEvent* event) {
+#ifdef OL_ADOPT
+    olAdopt(); // the loader's first call: before its keeper's wake can name this event
+#endif
     __atomic_store_n(&ol.event, event, __ATOMIC_SEQ_CST);
     CtrOpenFiles_poll();
     LightEvent_Wait(event);
     __atomic_store_n(&ol.event, NULL, __ATOMIC_SEQ_CST);
     CtrOpenFiles_poll();
 }
+
+#ifdef OL_ADOPT
+// DELTARUNE (c26rev R150 F1): stopLoaderThread's join. Once the loader has ended (joined, so nothing can be reading
+// its files), the thread that stops it retires the cache (olRetire), so a chapter whose loader never starts keeps no
+// file or keeper of the last one's. A failed join retires nothing: the loader may still run.
+OL_CODE Result CtrOfLoader_join(Thread thread, u64 timeoutNs) {
+    Result rc = threadJoin(thread, timeoutNs);
+    if (R_SUCCEEDED(rc) && ol.ready) olRetire();
+    return rc;
+}
+#endif
 #endif

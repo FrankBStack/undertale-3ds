@@ -1262,8 +1262,10 @@ SECTIONS
     *(.text.late.titancpu)
     /* titancpu lever 1 (last, merge order; DELTARUNE New only, empty elsewhere): typed regions' draw_surface_part
        draws (vine_titancpu.inc's Titan_stripDraw, ctr_natsurf6.c's Titan_ns6PassesDraw), after every other late
-       function so that none of them moves. */
-    *(.text.titancpu_tail)
+       function so that none of them moves. KEEP: in knightgpu dspe session builds only Titan_stripDrawDspe (at the
+       dspe tail) calls it, outside the Knight and Titan rooms (its room gate), and before that gate nothing did: kept,
+       every later late function stays where 75zq has it, whatever calls it (lead ruling, 11-03). */
+    KEEP(*(.text.titancpu_tail))
     /* redpix (last, merge order): UT cold tile conversion only; original converter keeps its slot. */
     *z_redpix.o(.text.late.redpix)
     /* pacerflush (pacer gbot; last, after redpix, merge order; both games): main's consoles write-back, the top
@@ -1303,6 +1305,91 @@ SECTIONS
        earlier late code moves. */
     *(.text.ctrlui_late)
     *(.rodata.ctrlui_in_text)
+    /* ctrlui open (last, after the Controls page's constants; both games): CtrCtrlui_openPage, the screens' open's end
+       (ctr_ctrlui.c). Its own section, so the page's code and constants above keep their 75zp addresses (R119). */
+    *(.text.ctrlui_open)
+    /* GPU kick (pacer, from cheaplevers; rev3 gate; last, after ctrlui open (75zq), merge order; DELTARUNE New only, empty
+       elsewhere): every earlier late function keeps its address. */
+    *(.text.cheaplevers_kick_late)
+    /* omegaflowey ifg (last, after the GPU kick (75zq), merge order; UNDERTALE only, empty elsewhere): the early destroy of
+       bullets inactive for good (z_offkill.c's OffKill_doomed), then its constants. Named outside .text.* and
+       .rodata.* so z_offkill.o's line above leaves them here; last, so no earlier late code moves. */
+    *(.omegaflowey_ifg)
+    *(.omegaflowey_ifg_ro)
+    /* omegaflowey W1 (after omegaflowey ifg (75zq), merge order, before the repack test sections; UNDERTALE Old only, empty elsewhere): the preload link that asks
+       for a planned compressed sound effect's decode at the room change (ctr_audio_system.c's end, flamePreload). Named
+       outside .text.* so no catch-all above takes it; appended, so no earlier late code moves. */
+    *(.omegaflowey_flame)
+    /* flowerhw sun (after omegaflowey W1 (75zq), merge order, before the repack test sections; DELTARUNE New only, empty elsewhere): the phase plan's detection
+       of its next phase and its readied set (z_phaseplan.c's ppNextDrawn, ppNoteReadied). A section of its own so that
+       L2's ppEvict keeps its address; appended, so no earlier late code moves. Crisp art's ARM entry is fpsbox's retained
+       one (above), not an ld veneer after the last input, so nothing else moves either (check_layout vs 75zq6: 0). */
+    *(.text_flowerhw_sun)
+    /* gsfix (after flowerhw sun (75zq), merge order, before the repack test sections; both games, UNDERTALE's a stub):
+       the game's screen target makes VRAM room instead of aborting (ctr_renderer.c's end, and main.c's
+       CtrScreens_menuOnShown), then its constants. Named outside .text.late.* so no catch-all above takes them;
+       appended, so no earlier late code moves. */
+    *(.text.gsfix_late)
+    *(.rodata.gsfix_in_text)
+    /* sharebuf (titancpu, after gsfix (75zq unit 16), merge order, before the repack test sections; DELTARUNE New
+       only, empty elsewhere): surfaces that share one buffer (ctr_renderer_sharebuf.inc). Named outside .text.late.*
+       (ctr_renderer.o's catch-all); appended, so no earlier late code moves. */
+    *(.text.sharebuf_late)
+    /* savefail (after gsfix and sharebuf (75zq unit 17), merge order, both games): ctr_optmenu.c's
+       CtrOptmenu_saveWarn, main.c's SAVE FAILED line kept off an open options menu (chg-savefail-optpage).
+       Appended, so no earlier late code moves. */
+    *(.text.savewarn_late)
+    /* flowerhw cold (after savefail (75zq unit 19), merge order, before the repack test sections; DELTARUNE New only): the
+       first room after a save or chapter load finishes its seed (z_drresid.c's CtrRoomload_prefetchRoom wrap), then its
+       constants. Named outside .text.* and .rodata.* so z_drresid.o's line above leaves them here; appended, so no
+       earlier late code moves. */
+    *(.text_flowerhw_cold)
+    *(.flowerhw_cold_ro)
+    /* drhitbox (after flowerhw cold (75zq unit 20), merge order, before the repack test sections; DELTARUNE only):
+       the retained-bbox branch and the collision corrections. Own names bypass earlier catch-alls. */
+    *(.text.late.drhitbox_bridge)
+    *z_drhitbox.o(.text .text.*)
+    /* sharebuf G2 (titancpu, after drhitbox (75zq unit 21), merge order, before the repack test sections; DELTARUNE
+       New only, empty elsewhere and in build.sh sharebuf=g1): the dirty-band clears (ctr_renderer_sharebuf_g2.inc).
+       Appended, so G1 and everything before keep their addresses (check_sharebuf_layout.py --g2). */
+    *(.text.sharebuf_g2_late)
+    /* flowerhw stfix (after sharebuf G2 (75zq unit 23), merge order, before the repack test sections; DELTARUNE New only,
+       empty elsewhere): smalltext's room-change wrapper, which puts its outer table on a renderer once
+       (z_smalltext_dr.c). Named outside .text.* so z_smalltext_dr.o's line above leaves it here; appended, so no
+       earlier late code moves. */
+    *(.text_flowerhw_stfix)
+    /* knightgpu dspe (after flowerhw stfix (75zq21), merge order, before the repack test sections; DELTARUNE New only,
+       empty elsewhere and in knightgpu-dspe=off builds): typed regions' draw_surface_part_ext calls
+       (Knight_scalarSurfacePartExt and its bound test, vm_builtins.c's end; vm_builtins.o is out of the catch-all
+       above), then their draw session (vine_titancpu.inc's Knight_stripDrawExt, named outside .text.* so
+       ctr_renderer.o's catch-all leaves it here). Appended, so no earlier late code moves. */
+    *(.text.late.knightgpu_dspe)
+    *(.text_knightgpu_dspe)
+    /* g2log (titancpu, after knightgpu dspe (75zq22), merge order, before the repack test sections; DELTARUNE New
+       only, empty elsewhere and in build.sh sharebuf=g1): sharebuf G2's clears line, once a room visit and only when a
+       clear was saved (ctr_renderer_sharebuf_g2.inc's sbLogClearsRoom). Named outside .text.* so ctr_renderer.o's
+       catch-all leaves it here; appended, so no earlier late code moves. */
+    *(.text_titancpu_g2log)
+    /* dofl (titancpu, after titancpu g2log (75zq23), merge order, before the repack test sections; DELTARUNE
+       only, empty in UNDERTALE, whose ofloader sits above): the audio loader's kept-open files (z_ofloader.c), then
+       its log lines. Named outside .text.* and .rodata.*: no catch-all takes them. */
+    *(.titancpu_dofl)
+    *(.titancpu_dofl_ro)
+    /* KM rev 5 (pacer, 75zq append-only port, after titancpu dofl (zq25's last late text), merge order,
+       before the repack test sections; DELTARUNE New only, empty elsewhere): the GPU kick's chain, gate and
+       frame-end hold (ctr_gpu_kick5.inc, ctr_gpu_kick5_renderer.inc). KM rev 4.1's .text.cheaplevers_kick_late
+       above keeps its place and size; its exports branch here. Appended, so no earlier late code moves. */
+    *(.text.pacer_km5_late)
+    /* pacer C3 (after KM rev 5 (75zq unit 30), merge order, before the repack test sections; UNDERTALE Old only, empty elsewhere): the
+       Vorbis codebook share (ctr_audio_system.c's end) and its constants. Own names bypass every catch-all; appended,
+       so no earlier late code moves. */
+    *(.pacer_share)
+    *(.pacer_share_ro)
+    /* repack test install (repacka, 11-02; build.sh repacktest= test builds only, empty in every release build):
+       diag/ctr_repack_test.c's code and constants, last, so a test build keeps every late address of the release
+       build. Keep these two lines last in late text. */
+    *(.repack_test)
+    *(.repack_test_ro)
   }
   __late_text_end = ABSOLUTE(.);
   /* 192 KiB (grown in whole 4 KiB pages from 16 KiB, each time late code outgrew it): screens' options page took
@@ -1521,6 +1608,21 @@ SECTIONS
     /* knightgpu FC rev 2 (after tshare, so every late constant before keeps its address, c26rev r103 F1; DELTARUNE New
        only): its log formats and give-up reasons (ctr_renderer.c's end). */
     *(.rodata.knightgpu_fc2_late)
+    /* GPU kick (pacer, from cheaplevers; last, after knightgpu FC rev 2 (75zq), merge order; DELTARUNE New only, empty
+       elsewhere): its log formats. Every earlier late constant keeps its address. */
+    *(.rodata.cheaplevers_kick_late)
+    /* sharebuf (titancpu, last, after the GPU kick, merge order; DELTARUNE New only): its log formats and the
+       list's path. Every earlier late constant keeps its address. */
+    *(.rodata.sharebuf_late)
+    /* drhitbox (last, after sharebuf (75zq unit 17), merge order; DELTARUNE only). */
+    *z_drhitbox.o(.rodata .rodata.*)
+    /* sharebuf G2 (titancpu, last, after drhitbox, merge order; DELTARUNE New only): its log formats and the
+       addresses of the G1 functions it calls. */
+    *(.rodata.sharebuf_g2_late)
+    /* KM rev 5 (pacer, last, after sharebuf G2, merge order; DELTARUNE New only): its bench-end totals and
+       trace formats (the two it shares with KM rev 4.1 stay in rev 4.1's place). Every earlier late constant
+       keeps its address. */
+    *(.rodata.pacer_km5_late)
     __late_rodata_end = ABSOLUTE(.);
   }
   /* 8 KiB (at first 4 KiB): late code's constants are mostly log formats; heapfrag's are 472 B, and
@@ -1628,6 +1730,15 @@ SECTIONS
     *(.data.late.utbugs4)
     /* fpsbox75zm: DELTARUNE painter/cache lifetime lock, after existing data. */
     *(.data.fpsbox75zm_late)
+    /* GPU kick (pacer, from cheaplevers; last, after fpsbox75zm (75zq), merge order; DELTARUNE New only, empty elsewhere;
+       it has no data today). */
+    *(.data.cheaplevers_kick_late)
+    /* drhitbox (last, after the GPU kick (75zq), merge order; DELTARUNE only). */
+    *z_drhitbox.o(.data .data.*)
+    /* KM rev 5 (pacer, last, after drhitbox, merge order; DELTARUNE New only; it has no data today). */
+    *(.data.pacer_km5_late)
+    /* pacer C3 (last, after KM rev 5, merge order; UNDERTALE Old only): the codebook share's lock and slots. */
+    *(.pacer_share_data)
     __late_data_end = ABSOLUTE(.);
   }
   __late_data_limit = __late_data_start + 0x1000;
@@ -2071,6 +2182,42 @@ SECTIONS
     *(.bss_omegaflowey_ofloader)
     /* ctrlui (last, after omegaflowey ofloader, merge order; both games): the Controls page's cursor (ctr_ctrlui.c). */
     *(.bss.ctrlui_late)
+    /* GPU kick (pacer, from cheaplevers; last, after ctrlui (75zq), merge order; DELTARUNE New only, empty elsewhere):
+       its prefix queue view and entries, the trace and the rev3 gate. */
+    *(.bss.cheaplevers_kick_late)
+    /* omegaflowey ifg (last, after the GPU kick (75zq), merge order; UNDERTALE only): the entries of romfs:/offdoom.bin, their
+       count and the destroyed count (z_offkill.c). Named outside .bss.* so the main .bss line leaves it here. */
+    *(.bss_omegaflowey_ifg)
+    /* flowerhw sun (last, after omegaflowey ifg (75zq), merge order; DELTARUNE New only, empty elsewhere): the phase plan's
+       readied set (z_phaseplan.c's ppRd; named outside .bss.* so z_phaseplan.o's catch-all leaves it here). */
+    *(.bss_flowerhw_l2)
+    /* gsfix (last, after flowerhw sun (75zq), merge order; DELTARUNE only, empty in UNDERTALE): its VRAM block list and
+       hold state (ctr_renderer.c's end). */
+    *(.bss.gsfix_late)
+    /* sharebuf (titancpu, last, after gsfix (75zq unit 16), merge order; DELTARUNE New only): its transients,
+       the scratches it took over and the list (ctr_renderer_sharebuf.inc). */
+    *(.bss.sharebuf_late)
+    /* flowerhw cold (DELTARUNE New, last): the last room load's data.win and whether its room was a front-end room
+       (z_drresid.c; named outside .bss.* so z_drresid.o's line leaves it here). */
+    *(.bss_flowerhw_cold)
+    /* drhitbox (last, after flowerhw cold (75zq unit 20), merge order; DELTARUNE only): runtime gate. */
+    *(.bss.drhitbox_late)
+    *z_drhitbox.o(.bss .bss.* COMMON)
+    /* sharebuf G2 (titancpu, last, after drhitbox, merge order; DELTARUNE New only): its slots and counters. */
+    *(.bss.sharebuf_g2_late)
+    /* flowerhw stfix (last, after sharebuf G2 (75zq unit 23), merge order; DELTARUNE New only): the renderer that has
+       smalltext's outer table (z_smalltext_dr.c; named outside .bss.* so the catch-alls leave it here). */
+    *(.bss_flowerhw_stfix)
+    /* g2log (titancpu, last, after flowerhw stfix, merge order; DELTARUNE New only): the room its line was last
+       logged in. Named outside .bss.* so ctr_renderer.o's lines above leave it here. */
+    *(.bss_titancpu_g2log)
+    /* dofl (titancpu, last, after titancpu g2log (75zq23), merge order; DELTARUNE only): the loader's kept-open
+       files and their paths (z_ofloader.c). Named outside .bss.* so the main .bss line leaves it here. */
+    *(.bss_titancpu_dofl)
+    /* KM rev 5 (pacer, last, after titancpu dofl (zq25's last late state), merge order; DELTARUNE New only):
+       its chain, sealed entries, per-queue GPU-time records and gate (and the trace ring in gpukick-trace
+       builds). KM rev 4.1's .bss.cheaplevers_kick_late above keeps its place and size. */
+    *(.bss.pacer_km5_late)
     /* 3dsxtool refuses a segment whose size isn't a multiple of 4 ("The segments is not word-aligned!"), and this
        block ends the RW segment: late statics of odd sizes (bools) would end it off a word. */
     . = ALIGN(4);

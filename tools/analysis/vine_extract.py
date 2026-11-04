@@ -24,11 +24,16 @@ LATE_LANES = {'perfflowery': re.compile(r'^\.(?:text|rodata|data|bss)\.late\.per
               # Azahar-only free of the tower textures there (cnTowerFree, its own line in late_reserve.ld), change flowerhw's
               # tower cuts 6 and 7, its test words and tshare (the shared depth texture's wait for VRAM; all on its own
               # lines, last in late_reserve.ld), and titancpu's lazy surface hand-off splits (vine_titancpu.inc) and its
-              # lever 1 (the typed regions' draw_surface_part repeats), on their own lines too.
+              # lever 1 (the typed regions' draw_surface_part repeats), on their own lines too, and its sharebuf
+              # (ctr_renderer_sharebuf.inc, built with CTRPORT_SHAREBUF only) and its G2 (the _g2_ sections), then
+              # knightgpu dspe's draw_surface_part_ext session (Knight_stripDrawExt), last in late_reserve.ld, then
+              # titancpu's g2log (G2's clears line once a room visit: sbLogClearsRoom and its state).
               'flowergpu': re.compile(r'^\.(?:text|rodata|data|bss)\.late\.flowergpu$|^\.text\.climbnoise_late$'
                                       r'|^\.text\.flowerhw_late$|^\.rodata\.flowerhw_late$|^\.bss\.flowerhw_late$'
                                       r'|^\.text_flowerhw_tail$|^\.(?:text|rodata|bss)\.tshare_late$'
-                                      r'|^\.(?:text|bss)\.titancpu_late$|^\.text\.titancpu_tail$')}
+                                      r'|^\.(?:text|bss)\.titancpu_late$|^\.text\.titancpu_tail$'
+                                      r'|^\.(?:text|rodata|bss)\.sharebuf(?:_g2)?_late$'
+                                      r'|^\.text_knightgpu_dspe$|^\.(?:text|bss)_titancpu_g2log$')}
 sha = lambda text: hashlib.sha256(text.encode()).hexdigest()
 
 

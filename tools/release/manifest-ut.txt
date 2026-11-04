@@ -407,6 +407,7 @@ platform/3ds/source/ctr_video_layout.inc
 platform/3ds/source/ctr_video_sw.c
 platform/3ds/source/ctr_video_sw.h
 platform/3ds/source/ctr_vram_touch.c
+platform/3ds/source/ctr_vtchain.c
 platform/3ds/source/ctr_watchdog.c
 platform/3ds/source/ctr_watchdog.h
 platform/3ds/source/ctr_wrap_chain.h
@@ -971,8 +972,21 @@ engine/src/z_utrect.c
 engine/src/z_depthmove.h
 # knsurf: ctr_renderer.c always includes it (the body is DELTARUNE New only, under CTRPORT_KNSURF)
 platform/3ds/source/ctr_renderer_knsurf.inc
+# sharebuf (change titancpu): ctr_renderer.c includes it only in DELTARUNE New's vine helper pass (CTRPORT_SHAREBUF)
+platform/3ds/source/ctr_renderer_sharebuf.inc
+# its G2 (CTRPORT_SHAREBUF_G2), included at its end
+platform/3ds/source/ctr_renderer_sharebuf_g2.inc
 # drpix: ctr_renderer.c's OBJECT_DEPENDS names it on every target; only the Old DELTARUNE helper pass includes its body
 platform/3ds/source/drpix_replay.inc
+# GPU kick (change pacer, from cheaplevers; rev3 gate): DELTARUNE New only; its sources and compiler launcher.
+platform/3ds/source/ctr_gpu_kick.h
+platform/3ds/source/ctr_gpu_kick.inc
+platform/3ds/source/ctr_gpu_kick_renderer.inc
+# KM rev 5 (change pacer, 75zq append-only port): the kick launcher's second helper pass
+platform/3ds/source/ctr_gpu_kick5.inc
+platform/3ds/source/ctr_gpu_kick5_renderer.inc
+platform/3ds/source/ctr_gpu_kick_chain.h
+tools/analysis/cheaplevers_kick_compile.py
 
 tools/release/check_kit_hygiene.py
 
@@ -990,3 +1004,8 @@ platform/3ds/source/z_titandiag.c
 
 # omegaflowey ofloader (UNDERTALE): the audio loader's kept-open files (empty in DELTARUNE builds)
 platform/3ds/source/z_ofloader.c
+
+# drhitbox (DELTARUNE collision corrections; the UNDERTALE build excludes the object): its source, compiler launcher and test
+engine/src/z_drhitbox.c
+tools/buildcache/drhitbox_compile.py
+tools/buildcache/test_drhitbox_compile.py

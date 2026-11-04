@@ -41,6 +41,38 @@ SCOPED_NEW = (
     ('bindTarget.part.0', 'splitFrame', 'Titan_leaveSplit', 2, (0,)),
 )
 
+# titancpu sharebuf (ctr_renderer_sharebuf.inc, compiled in the helper pass only when CTRPORT_SHAREBUF is on): the
+# calls that store, load, touch, unpark and create surfaces go to its wrappers, each in the one function named and
+# counted, so ctr_renderer.c's code is compiled as without it. Every other call of these stays as it is.
+SCOPED_SHAREBUF = (
+    ('clearBoundTarget', 'loadSpill', 'shareLoad', 1),
+    ('reserveBatch', 'loadSpill', 'shareLoad', 1),
+    ('ctrSurfaceCopy', 'loadSpill', 'shareLoad', 1),
+    ('surfaceTexture', 'flushPendingStore', 'shareFlush', 1),
+    ('releaseIdleScratches', 'flushPendingStore', 'shareFlush', 1),
+    ('bindTarget.part.0', 'flushPendingStore', 'shareFlush', 1),
+    ('bindTarget.part.0', 'touchSurface', 'shareTouchBind', 1),
+    ('surfaceTexture', 'touchSurface', 'shareTouchSample', 1),
+    ('touchSurface', 'unparkSurface', 'shareUnpark', 1, 'b'),
+    ('ctrCreateSurface', 'createSurface', 'shareCreate', 1),
+)
+
+# sharebuf G2 (ctr_renderer_sharebuf_g2.inc, with CTRPORT_SHAREBUF_G2 too): bindTarget's touch and the three loads go
+# to G2's wrappers instead of G1's (which they then call), the whole clear's memory fill to shareClear, and every
+# delete of a scratch's target to shareTargetDelete. Against the G1 build only these calls change
+# (check_sharebuf_layout.py --g2).
+SHAREBUF_G2_ROUTES = {
+    ('bindTarget.part.0', 'touchSurface'): 'shareBindG2',
+    ('clearBoundTarget', 'loadSpill'): 'shareLoadG2',
+    ('reserveBatch', 'loadSpill'): 'shareLoadG2',
+    ('ctrSurfaceCopy', 'loadSpill'): 'shareLoadG2',
+}
+SCOPED_SHAREBUF_G2 = tuple((f, c, SHAREBUF_G2_ROUTES.get((f, c), w)) + tuple(rest) for f, c, w, *rest in SCOPED_SHAREBUF) + (
+    ('clearBoundTarget', 'C3D_FrameBufClear', 'shareClear', 1),
+    ('processDeferredFrees', 'C3D_RenderTargetDelete', 'shareTargetDelete', 2),
+    ('releaseIdleScratches', 'C3D_RenderTargetDelete', 'shareTargetDelete', 1),
+)
+
 # titancpu L1: the whole clear and surfaceTexture go through titancpu's wrappers (the clear's then to Vine_wrap_);
 # L2: drawSurfaceImpl too (its long way then to Vine_wrap_).
 TARGETS_NEW = {'clearBoundTarget': 'Titan_wrap_clearBoundTarget', 'surfaceTexture': 'Titan_wrap_surfaceTexture',
@@ -94,7 +126,12 @@ def main():
     parent.INTERNAL = internal
     parent.EXTERNAL = ()
     parent.ENTRIES = internal
-    parent.SCOPED = SCOPED_NEW if internal is not INTERNAL else (
+    sharebuf = internal is not INTERNAL and '-DCTRPORT_SHAREBUF' in sys.argv
+    if sharebuf and '-DCTRPORT_SHAREBUF_G2' in sys.argv:
+        sharebuf_routes = SCOPED_SHAREBUF_G2
+    else:
+        sharebuf_routes = SCOPED_SHAREBUF if sharebuf else ()
+    parent.SCOPED = SCOPED_NEW + sharebuf_routes if internal is not INTERNAL else (
         ('drawSurfaceQuad', 'replayRecorded', 'Drpix_replay', 1, 'b'),
         ('drawSurfaceQuad', 'pillarSurfaceQuad.isra.0', 'Drpix_surfaceQuad', 1, 'b'),
     )

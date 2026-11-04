@@ -16,6 +16,15 @@ data and leaves out an entry whose sprite would reach farther (or whose object i
 Output: 8 bytes per entry, little-endian: int16 object index, int8 axis (0 x, 1 y), int8 direction (+1 right/down,
 -1 left/up), uint8 reach in pixels, 3 zero bytes. No entries (DELTARUNE, no data): no file.
 
+It also writes romfs/offdoom.bin, the bullets inactive for good (omegaflowey, GO 11-02,
+"Omega Flowey after the 2nd SOUL"). Some bullets save their state and load it back
+later. One that went inactive (its own active variable 0, and invisible) after its last save, or that was saved while
+inactive, can never be active again: the next save copies the 0, the next load restores the 0 or destroys it, and
+nothing else sets the variable. z_offkill.c destroys such an instance at the end of the frame. Per entry, 8 bytes
+little-endian: int16 object index, then the int16 VARI ids (as the runtime's variable map takes them: the first entry of
+that name with an id >= 0) of its active flag, its saved flag and its saved copy of the active flag. Objects and
+variables are named by hash as above; an entry whose object or variables aren't found is left out.
+
        py -3 -I tools/aot/offkill.py --game <undertale|deltarune> --romfs <build>/romfs [--data <game folder>]
        py -3 -I tools/aot/offkill.py --hash NAME
        py -3 -I tools/aot/offkill.py --report <data.win>
@@ -32,6 +41,7 @@ sys.path.insert(0, HERE)
 
 HASH_DIGITS = 16
 MAX_ENTRIES = 8  # z_offkill.c's OK_MAX
+MAX_DOOMED = 4  # z_offkill.c's OD_MAX
 
 
 class Entry:
@@ -65,6 +75,25 @@ ENTRIES = (
 )
 
 
+class Doomed:
+    def __init__(self, key, active, saved, saved_active, what):
+        self.key, self.active, self.saved, self.saved_active, self.what = key, active, saved, saved_active, what
+
+
+# Inactive for good (UNDERTALE Steam and GOG 1.08), each proven from its PC code (omegaflowey.md). None has a Destroy
+# event, nor does their shared parent; no RNG in their events; not solid.
+DOOMED = (
+    # Photoshop Flowey's vines (room 294, the repeat phases after the 2nd SOUL): Create sets active 1; Step and the
+    # collision with the soul do anything only while active is 1; Step's fade sets visible and active 0 together; the
+    # save copies active, the load destroys an unsaved one or restores the copy. Alarm 4 counts only its own state.
+    Doomed('97585ffe2d69a5db', '96879611650f80a8', 'd81c55f49c5bb0d3', 'be709d07001c18cf', "Photoshop Flowey's vines"),
+    # Its eye shots: the same flags; leaving the room in memory mode sets visible and active 0 together; its save
+    # destroys it when the copied active is 0 and its load when it is unsaved, so it would go at the next save or load
+    # anyway. Its Step only spins and grows it; its Outside Room event acts only on itself.
+    Doomed('eb1982ad86514b1c', '96879611650f80a8', 'd81c55f49c5bb0d3', '60b907230770299b', "Photoshop Flowey's eye shots"),
+)
+
+
 def name_hash(name):
     return hashlib.sha256(name.encode('utf-8')).hexdigest()[:HASH_DIGITS]
 
@@ -86,6 +115,8 @@ class Data:
         for name in (b'OBJT', b'SPRT'):
             if name not in chunks:
                 raise ValueError('no %s chunk' % name.decode())
+        gen8 = chunks.get(b'GEN8', (0, 0))[0]
+        self.bytecode = d[gen8 + 1] if gen8 else 0
 
         def u32(p):
             if not 0 <= p <= len(d) - 4:
@@ -110,6 +141,16 @@ class Data:
         # OBJT: name, sprite, ...; SPRT: name, width, height, 4 margins, 3 flags, bbox mode, separate masks, origin x, y.
         self.objects = [(string(u32(p)), i32(p + 4)) for p in plist(b'OBJT')]
         self.sprites = [(string(u32(p)), u32(p + 4), u32(p + 8), i32(p + 48), i32(p + 52)) for p in plist(b'SPRT')]
+        # VARI (bytecode 15+: a 12-byte head, then 20 bytes each: name, instance type, id, occurrences, first use). The
+        # runtime's variable map keeps the first entry of a name whose id is >= 0 (vm.c, varNameMap).
+        self.variables = {}
+        if b'VARI' in chunks and self.bytecode >= 15:
+            base, size = chunks[b'VARI']
+            for i in range(max(0, size - 12) // 20):
+                p = base + 12 + 20 * i
+                vid = i32(p + 8)
+                if vid >= 0:
+                    self.variables.setdefault(string(u32(p)), vid)
 
     def corner(self, sprite, scale):
         """The farthest corner of the sprite's box from its origin, at that scale, in pixels."""
@@ -141,6 +182,39 @@ def resolve(data, entries=ENTRIES):
     return out
 
 
+def resolve_doomed(data, entries=DOOMED):
+    """[(entry, (object, active, saved, saved active) or None, why not or None)]: each entry against the player's data."""
+    objs, vars_ = {}, {}
+    for i, (name, _) in enumerate(data.objects):
+        objs.setdefault(name_hash(name), []).append(i)
+    for name, vid in data.variables.items():
+        vars_.setdefault(name_hash(name), []).append(vid)
+    out = []
+    for e in entries:
+        found = objs.get(e.key, [])
+        if len(found) != 1:
+            out.append((e, None, 'object not found' if not found else 'object name not unique'))
+            continue
+        ids = [vars_.get(k, []) for k in (e.active, e.saved, e.saved_active)]
+        if any(len(v) != 1 for v in ids):
+            out.append((e, None, 'variable not found'))
+            continue
+        row = (found[0],) + tuple(v[0] for v in ids)
+        if any(not 0 <= x <= 0x7FFF for x in row):
+            out.append((e, None, 'index too big'))
+            continue
+        out.append((e, row, None))
+    return out
+
+
+def pack_doomed(rows):
+    """romfs/offdoom.bin's bytes for the resolved entries that passed."""
+    out = b''.join(struct.pack('<4h', *row) for e, row, why in rows if why is None)
+    if len(out) > 8 * MAX_DOOMED:
+        raise ValueError('more than %d inactive-for-good entries' % MAX_DOOMED)
+    return out
+
+
 def pack(rows):
     """romfs/offkill.bin's bytes for the resolved entries that passed."""
     out = b''.join(struct.pack('<hbbB3x', index, e.axis, e.sign, e.reach) for e, index, why in rows if why is None)
@@ -149,8 +223,8 @@ def pack(rows):
     return out
 
 
-def build(game, data_dir):
-    """(bytes, report lines) for the game; b'' means no file."""
+def build(game, data_dir, doomed=False):
+    """(bytes, report lines) for the game; b'' means no file. doomed: offdoom.bin's instead of offkill.bin's."""
     if game != 'undertale':
         return b'', []
     import corpus
@@ -159,6 +233,12 @@ def build(game, data_dir):
     parts = [p for _, p, _ in corpus.parts(game, found)] if found else []
     if not parts:
         return b'', ['offkill: no UNDERTALE data; no early destroy in this build']
+    if doomed:
+        rows = resolve_doomed(Data(parts[0]))
+        lines = ['offkill: %s left out (%s)' % (e.what, why) for e, _, why in rows if why is not None]
+        blob = pack_doomed(rows)
+        lines.append('offkill: %d of %d inactive-for-good entries, %d B' % (len(blob) // 8, len(rows), len(blob)))
+        return blob, lines
     rows = resolve(Data(parts[0]))
     lines = ['offkill: %s left out (%s)' % (e.what, why) for e, _, why in rows if why is not None]
     blob = pack(rows)
@@ -166,9 +246,9 @@ def build(game, data_dir):
     return blob, lines
 
 
-def write(romfs, blob):
-    """Write (or remove, for no entries) romfs/offkill.bin; True when the file changed."""
-    path = os.path.join(romfs, 'offkill.bin')
+def write(romfs, blob, name='offkill.bin'):
+    """Write (or remove, for no entries) romfs/<name>; True when the file changed."""
+    path = os.path.join(romfs, name)
     try:
         with open(path, 'rb') as f:
             old = f.read()
@@ -205,6 +285,8 @@ def main(argv=None):
             corner = data.corner(sprite, e.scale) if 0 <= sprite < len(data.sprites) else float('nan')
             print('%-40s object %5d sprite %5d corner %6.2f need %6.2f reach %3d %s' % (
                 e.what, index, sprite, corner, corner + 1 + 2 * e.shake, e.reach, why or 'ok'))
+        for e, row, why in resolve_doomed(data):
+            print('%-40s object and variables %s %s' % (e.what, row, why or 'ok'))
         return 0
     if not a.game or not a.romfs:
         ap.error('--game and --romfs are required')
@@ -212,6 +294,10 @@ def main(argv=None):
     for line in lines:
         print(line)
     write(a.romfs, blob)
+    blob, lines = build(a.game, a.data, doomed=True)
+    for line in lines:
+        print(line)
+    write(a.romfs, blob, 'offdoom.bin')
     return 0
 
 

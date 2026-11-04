@@ -32,6 +32,16 @@ uint32_t CtrAudioSystem_chainPklin(uint32_t bytes);
 #define CTR_BEGINSFXPLAN_AFTER_FLOWEND CtrAudioSystem_chainPlanFlowhitch
 void CtrAudioSystem_chainPlanFlowhitch(void);
 
+// CtrAudioSystem_preloadSfx (UNDERTALE): flowend [-> the ADPCM pack's admit] -> flame (Old only) -> real.
+//   flame (ctr_audio_system.c's end, omegaflowey W1): a planned compressed sound effect has its decode into the cache
+//   asked for at the room change (the Ogg flame loop), where the real one only copies WAVs.
+#if defined(ENABLE_WAD16) && defined(CTRPORT_TARGET_O3DS)
+#define CTR_PRELOADSFX_AFTER_FLOWEND CtrAudioSystem_chainFlame
+int CtrAudioSystem_chainFlame(int32_t soundIndex, uint32_t bytes, uint32_t floorBytes);
+#else
+#define CTR_PRELOADSFX_AFTER_FLOWEND __real_CtrAudioSystem_preloadSfx
+#endif
+
 // UNDERTALE's bench-only alternate root precedes the ordinary argument parser.
 #ifdef CTRPORT_GOG_COMPAT
 #define CTR_LAUNCHARGS_AFTER_ARGCRASH CtrLaunchArgs_chainGogut

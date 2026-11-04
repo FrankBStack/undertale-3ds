@@ -54,7 +54,8 @@ FALSE_POSITIVE_CLASSES = {'engine-symbols', 'synthetic-fixture'}
 ROOMPLAN_RECORD_RE = re.compile(r'tools/roomplan/records/(?:(?:sounds/)?undertale-(?:steam|gog)-1\.08|'
                                r'deltarune-steam-0\.0\.253-chapter[1-5])\.json|'
                                r'tools/roomplan/phases/deltarune-steam-0\.0\.253-chapter5\.json|'
-                               r'tools/roomplan/tracks/deltarune\.json')
+                               r'tools/roomplan/tracks/deltarune\.json|'
+                               r'tools/roomplan/sharebuf/deltarune\.json')
 SFX_TOOL = 'tools/roomplan/build_sfxplan.py'
 ASSET_RULES = {'media-or-output-signature', 'large-binary'}
 PRESS_SOURCE = 'platform/3ds/source/ctr_pixfix_press.c'

@@ -1232,7 +1232,7 @@ static void stopLoaderThread(CtrAudioSystem* ca) {
     if (ca->loader == NULL) return;
     ca->loaderQuit = true;
     LightEvent_Signal(&ca->loadEvent);
-    threadJoin(ca->loader, U64_MAX);
+    CTR_LOADER_JOIN(ca->loader, U64_MAX);
     threadFree(ca->loader);
     ca->loader = NULL;
     for (int i = 0; i < LOAD_SLOTS; i++) {
@@ -5427,9 +5427,9 @@ __attribute__((noinline, optimize("Os"), section(".text.flowend_late"))) int __w
     if (got < 0) got = __real_CtrAudioSystem_preloadSfx(soundIndex, bytes, floorBytes);
 #elif defined(CTRPORT_ADPCM_SFXPACK)
     int got = apAdmit(soundIndex, bytes, floorBytes);
-    if (got == -2) got = __real_CtrAudioSystem_preloadSfx(soundIndex, bytes, floorBytes);
+    if (got == -2) got = CTR_PRELOADSFX_AFTER_FLOWEND(soundIndex, bytes, floorBytes);
 #else
-    int got = __real_CtrAudioSystem_preloadSfx(soundIndex, bytes, floorBytes);
+    int got = CTR_PRELOADSFX_AFTER_FLOWEND(soundIndex, bytes, floorBytes);
 #endif
 #line 5072
     flowendLayer();
@@ -7663,4 +7663,333 @@ AUDOFIX_FEED_CODE int32_t audofixFeedRead(CtrDecoder* dec, int16_t* out, uint32_
 // The two links by name: aliases GCC doesn't see, so flowhitch's and pcmwait's functions call what looks to it like
 // the same external function as before (a call to a function of this file reorders flowend's block: b8).
 __asm__(".set audofixReadLink, audofixFeedRead\n.set audofixFreeLink, audofixFree\n");
+#endif
+
+#if defined(ENABLE_WAD16) && defined(CTRPORT_TARGET_O3DS)
+// ===[ omegaflowey W1: a planned compressed sound effect is decoded at the room change (late code, UNDERTALE Old) ]===
+// Omega Flowey's flame loop (a 0.43 s embedded Ogg) is stopped and played again by every flame, one every ~67 ms. Not
+// cached yet, each play opened a memory stream (12-52 ms on the opener thread), and the background decode its first
+// play asked for took 1.68 s on the Old models' share of the system core, so the first ~1.7 s of each attack opened
+// 16-18 streams: the plays sounded ~20-23 ms of their ~67 ms (some none), and held frames clustered there (change
+// omegaflowey). The copy was then shed between attacks, and the next one began
+// again. The sound plan now lists such a sound first in its room's scene (build_sfxplan.py's warm sounds): flowend's
+// preload wrapper keeps it from shedding for the room, and here, where the real preloadSfx copies WAVs only, its
+// blob is read (as its first play would read it) and its decode into the cache is asked for at the room change. Plays
+// then find the cache copy: the same decoder's samples, from the play's own frame. Everything else goes on to the
+// real one. Game thread (z_utsfx.c's preload). 1 asked, 0 cached already, -1 not now.
+__attribute__((noinline, noipa, used, optimize("Os"), section(".omegaflowey_flame"))) int flamePreload(int32_t soundIndex, uint32_t bytes,
+                                                                                                      uint32_t floorBytes) {
+    CtrAudioSystem* ca = gShutdownTarget;
+    if (ca == NULL || !ca->ndspReady || ca->base.audioGroups == NULL || soundIndex < 0 || (uint32_t) soundIndex >= ca->soundCount ||
+        (ca->base.audioGroups[0]->sond.sounds[soundIndex].flags & AUDIO_ENTRY_FLAG_IS_COMPRESSED) == 0) {
+        return __real_CtrAudioSystem_preloadSfx(soundIndex, bytes, floorBytes);
+    }
+    if (ca->sfxCache[soundIndex].pcm != NULL) return 0;
+    // Not while a read or decode of it is on its way (its play takes that one).
+    bool busy = false;
+    LightLock_Lock(&ca->loadLock);
+    for (int i = 0; i < LOAD_SLOTS; i++) busy |= ca->loads[i].soundIndex == soundIndex && ca->loads[i].state != LOAD_FREE;
+    for (int i = 0; i < PREP_SLOTS; i++) busy |= ca->preps[i].soundIndex == soundIndex && ca->preps[i].state != PREP_FREE;
+    LightLock_Unlock(&ca->loadLock);
+    CachedSfx* sfx = NULL;
+    const uint8_t* mem = NULL;
+    uint32_t memSize = 0;
+    u64 loadTicks = ca->windowLoadTicks; // the [audio] line's load time counts plays only
+    int got = -1;
+    if (!busy && ca->loader != NULL && prepareAudoSource(ca, soundIndex, &sfx, &mem, &memSize) && sfx == NULL && mem != NULL) {
+        LightLock_Lock(&ca->loadLock);
+        for (int i = 0; i < PREP_SLOTS && 0 > got; i++) {
+            PrepJob* job = &ca->preps[i];
+            if (job->state != PREP_FREE) continue;
+            memset(job, 0, sizeof(*job));
+            job->soundIndex = soundIndex;
+            job->mem = mem;
+            job->memSize = memSize;
+            job->state = PREP_PROBE;
+            got = 1;
+        }
+        LightLock_Unlock(&ca->loadLock);
+        if (got > 0) LightEvent_Signal(&ca->loadEvent);
+    }
+    ca->windowLoadTicks = loadTicks;
+    return got;
+}
+// flowend's preload wrapper calls the link by this name (ctr_wrap_chain.h): an alias GCC doesn't see, as audofix's.
+__asm__(".set CtrAudioSystem_chainFlame, flamePreload\n");
+#endif
+
+#if defined(ENABLE_WAD16) && defined(CTRPORT_PACER_SHARE) // CMakeLists.txt: UT Old, Tremor, the checked libvorbisidec.a
+// ===[ pacer C3: Vorbis streams with the same codebooks share one decoded set (late code, UNDERTALE Old) ]===
+// Tremor's vorbis_synthesis_init (a stream's first read, on the decode thread, core 1) decodes every codebook of the
+// stream's setup header again for each stream: one calloc, then per book vorbis_book_init_decode (sort, code words,
+// unquantized values, first table: ~470 allocations for UNDERTALE's main header) and the static book's free. UNDERTALE
+// has 216 Vorbis streams but only 5 distinct setup headers; 206 streams (sound effects and music alike)
+// carry the same 38 books, so the work is the same every time (pacer, C3; a setup census). Here the first
+// stream with a given set of static books builds the decoded books once, and every later stream whose static books are
+// byte for byte equal (every field vorbis_book_init_decode reads: dim, entries, each length, map type, q_min, q_delta,
+// q_quant, q_sequencep and each quantized value) uses that set. vorbis_book_init_decode is a pure function of those
+// fields and decoding only reads the decoded book, so the samples are unchanged. The static books are freed and NULLed
+// as Tremor's own loop does, and Tremor's init then finds ci->fullbooks set and skips its book loop (block.o, 0x98).
+// vorbis_info_clear's wrap takes a shared set off ci->fullbooks before Tremor frees the rest and drops the stream's
+// reference without a lock (it also runs on the main and decode threads). When a release leaves a set idle, every
+// other idle set but the newest is freed right there, on that thread, as Tremor's clear frees a stream's books today
+// (claimed by compare-and-swap, so never twice and never while held): at most one idle set is ever kept, for the
+// next stream of its header; a new set takes a free slot, else the idle set's. Up to 3 sets: with all 3 in use a stream keeps the books it built (Tremor's clear frees
+// them). A field that does not fit the compare key or a failed build falls through to Tremor's own loop unchanged.
+// The offsets below are Tremor's private codec_setup_info and codebook (no installed header declares them): CMake
+// defines CTRPORT_PACER_SHARE only for the libvorbisidec.a whose disassembly they were read from (sha256 check), so
+// any other Tremor build runs its own path. Weak references, as C2's: a strong one would pull Tremor's members out of libvorbisidec.a in another order and
+// move every Tremor function; vorbisfile.o's own calls bring them in.
+typedef struct PacerStaticBook {
+    long dim;
+    long entries;
+    long* lengthlist;
+    int maptype;
+    long q_min;
+    long q_delta;
+    int q_quant;
+    int q_sequencep;
+    long* quantlist;
+} PacerStaticBook; // Tremor 1.2.1's static_codebook (0x24 B; block.o / sharedbook.o)
+#define PACER_CI_BOOKS(ci) (*(int*) ((char*) (ci) + 0x1c))
+#define PACER_CI_BOOK_PARAM(ci) ((PacerStaticBook**) ((char*) (ci) + 0x820))
+#define PACER_CI_FULLBOOKS(ci) (*(void**) ((char*) (ci) + 0xc20))
+#define PACER_CODEBOOK_BYTES 0x34
+#define PACER_SETS 3
+_Static_assert(sizeof(long) == 4 && sizeof(int) == 4, "Tremor 1.2.1 layout");
+int vorbis_book_init_decode(void* dest, const PacerStaticBook* s) __attribute__((weak));
+void vorbis_book_clear(void* b) __attribute__((weak));
+void vorbis_staticbook_destroy(PacerStaticBook* s) __attribute__((weak));
+long _book_maptype1_quantvals(const PacerStaticBook* s) __attribute__((weak));
+int __real_vorbis_synthesis_init(vorbis_dsp_state* v, vorbis_info* vi) __attribute__((weak));
+void __real_vorbis_info_clear(vorbis_info* vi) __attribute__((weak));
+int __wrap_vorbis_synthesis_init(vorbis_dsp_state* v, vorbis_info* vi);
+void __wrap_vorbis_info_clear(vorbis_info* vi);
+typedef struct PacerShareSet {
+    void* fullbooks; // NULL: free slot
+    uint8_t* key;
+    int keyBytes;
+    int books;
+    int refs; // streams using the set (atomic)
+    u32 idle; // when refs last reached 0 (pacerShare.clock)
+} PacerShareSet;
+typedef struct PacerShare {
+    LightLock lock;
+    u32 clock;
+    PacerShareSet sets[PACER_SETS];
+} PacerShare;
+__attribute__((section(".pacer_share_data"))) static PacerShare pacerShare = {.lock = 1}; // 1 = libctru's unlocked
+#define PACER_CODE __attribute__((optimize("Os"), section(".pacer_share")))
+// Per stream init: whole set-up, then the books part ("o" own: Tremor's loop, the figure is its whole init; "s" shared,
+// "b" built and kept, "k" built but every slot busy, so the stream owns it; "n" none: decoded before, a re-init).
+static const char pacerShareLog[] __attribute__((section(".pacer_share_ro"))) = "Audio: Vorbis set-up %lu us, books %c %lu us\n";
+static const char pacerShareHow[] __attribute__((section(".pacer_share_ro"))) = "osbkn";
+#define PACER_US(ticks) ((unsigned long) ((u32) (ticks) / 268u)) // 268.1 ARM11 ticks a microsecond
+#ifndef PACER_PAUSE
+#define PACER_PAUSE(n) // a yield at each publication point in the host stress test
+#endif
+
+// The compare key: per book dim, entries, then maptype, q_min, q_delta, q_quant, q_sequencep (4 B each, as stored),
+// each length (1 B) and with a map each quantized value (2 B). Written to out, compared with cmp, or only counted.
+typedef struct PacerKeyWalk {
+    uint8_t* out;
+    const uint8_t* cmp;
+    int n;
+    int bad;
+} PacerKeyWalk;
+
+PACER_CODE static void pacerKeyPut(PacerKeyWalk* w, const void* p, long count, int bytes) {
+    for (long i = 0; i < count && !w->bad; i++) {
+        uint32_t v; // every field and list element is 4 B (long and int on the 3DS)
+        memcpy(&v, (const char*) p + 4 * i, 4);
+        if (bytes < 4 && v >> (8 * bytes))
+            w->bad = 1; // does not fit: no key, Tremor's own loop
+        for (int b = 0; b < bytes; b++, w->n++) {
+            uint8_t c = (uint8_t) (v >> (8 * b));
+            if (w->out)
+                w->out[w->n] = c;
+            else if (w->cmp && w->cmp[w->n] != c)
+                w->bad = 1;
+        }
+    }
+}
+
+// The key's length, or -1 (a difference from cmp, or a field that does not fit).
+PACER_CODE static int pacerShareKey(void* ci, uint8_t* out, const uint8_t* cmp) {
+    PacerKeyWalk w = {out, cmp, 0, 0};
+    for (int i = 0; i < PACER_CI_BOOKS(ci) && !w.bad; i++) {
+        const PacerStaticBook* s = PACER_CI_BOOK_PARAM(ci)[i];
+        if (!s || !s->lengthlist || (s->maptype && !s->quantlist))
+            return -1;
+        pacerKeyPut(&w, &s->dim, 2, 4);
+        pacerKeyPut(&w, &s->maptype, 5, 4);
+        pacerKeyPut(&w, s->lengthlist, s->entries, 1);
+        if (s->maptype)
+            pacerKeyPut(&w, s->quantlist, s->maptype == 1 ? _book_maptype1_quantvals(s) : s->entries * s->dim, 2);
+    }
+    return w.bad ? -1 : w.n;
+}
+
+
+// Frees a set's decoded books (vorbis_info_clear's own steps for them) and its key. Never under the lock.
+PACER_CODE static void pacerShareFree(PacerShareSet* set) {
+    for (int i = 0; set->fullbooks && i < set->books; i++)
+        vorbis_book_clear((char*) set->fullbooks + i * PACER_CODEBOOK_BYTES);
+    free(set->fullbooks);
+    free(set->key);
+}
+
+// refs: n >= 0 streams hold the set (0 = idle), -1 = claimed by the one thread that takes it out of its slot. pin:
+// n -> n + 1 unless claimed; claim: 0 -> -1 only. Both fail on a claimed set, so a set is freed once and never while
+// held. A slot is free once its fullbooks is NULL; only an install under the lock fills it, and it holds the set
+// (refs 1, stored first) before it publishes fullbooks (last, release): a set in use never shows refs 0, so a claim
+// that wins has an idle set whichever install it came from (no generation count needed). Readers acquire fullbooks.
+PACER_CODE static int pacerShareCas(PacerShareSet* set, int pin) {
+    int r = __atomic_load_n(&set->refs, __ATOMIC_SEQ_CST);
+    do {
+        if (r < 0 || (!pin && r))
+            return 0;
+        PACER_PAUSE(1);
+    } while (!__atomic_compare_exchange_n(&set->refs, &r, pin ? r + 1 : -1, 0, __ATOMIC_SEQ_CST, __ATOMIC_SEQ_CST));
+    return 1;
+}
+
+// A stream lets go of a set. Lock free: vorbis_info_clear also runs on the main thread and the decode thread, which
+// must never wait on a lock that a starved low-priority worker holds (change pacer lk3w1: newlib's heap lock, 28 ms).
+// used: a stream's real use (stamps the set newest; a key compare that missed does not). The stamp is stored while the
+// reference is held. When the count reaches 0, the older of it and each other idle set is claimed and freed right here, on
+// this thread, as Tremor's clear frees a stream's books today: at most one idle set is ever kept (sequentially consistent
+// count and loads: of two sets going idle at once, at least one release sees the other).
+PACER_CODE static void pacerShareRelease(PacerShareSet* set, int used) {
+    if (used)
+        __atomic_store_n(&set->idle, __atomic_add_fetch(&pacerShare.clock, 1, __ATOMIC_RELAXED), __ATOMIC_RELAXED);
+    PACER_PAUSE(2);
+    if (__atomic_sub_fetch(&set->refs, 1, __ATOMIC_SEQ_CST))
+        return;
+    PACER_PAUSE(3);
+    for (int i = 0; i < PACER_SETS; i++) { // of this set and each other idle set, the older goes
+        PacerShareSet* s = &pacerShare.sets[i];
+        if (s == set || !__atomic_load_n(&s->fullbooks, __ATOMIC_SEQ_CST) || __atomic_load_n(&s->refs, __ATOMIC_SEQ_CST))
+            continue;
+        PacerShareSet* old =
+            __atomic_load_n(&s->idle, __ATOMIC_RELAXED) < __atomic_load_n(&set->idle, __ATOMIC_RELAXED) ? s : set;
+        PACER_PAUSE(4);
+        if (pacerShareCas(old, 0)) {
+            PacerShareSet gone = *old;
+            old->key = NULL;
+            PACER_PAUSE(5);
+            __atomic_store_n(&old->fullbooks, NULL, __ATOMIC_SEQ_CST); // the slot is free from here: never touched again
+            pacerShareFree(&gone);
+        }
+        if (old == set)
+            return;
+    }
+}
+
+// The static books' end, as Tremor's loop after each book it decodes.
+PACER_CODE static void pacerShareDropStatic(void* ci) {
+    for (int i = 0; i < PACER_CI_BOOKS(ci); i++) {
+        vorbis_staticbook_destroy(PACER_CI_BOOK_PARAM(ci)[i]);
+        PACER_CI_BOOK_PARAM(ci)[i] = NULL;
+    }
+}
+
+// Puts a decoded set on ci: 1 found (shared), 2 built and kept for later streams, 3 built but every slot is in use
+// (ci owns it, Tremor's clear frees it), or 0: Tremor's own loop runs (a misfit key or a failed build). Runs on the
+// stream's decoding thread (the decode thread, the loader or the opener; all core 1). The lock orders pins and
+// installs only (a few loads, stores and compare-and-swaps, no heap calls); compares, builds and frees run outside it.
+PACER_CODE static int pacerShareBooks(void* ci) {
+    PacerShareSet mine = {NULL, NULL, pacerShareKey(ci, NULL, NULL), PACER_CI_BOOKS(ci), 1, 0};
+    if (mine.keyBytes <= 0)
+        return 0;
+    PacerShareSet* take[PACER_SETS] = {NULL};
+    LightLock_Lock(&pacerShare.lock);
+    for (int i = 0; i < PACER_SETS; i++) { // same-shape sets are candidates, pinned while their keys are compared
+        PacerShareSet* set = &pacerShare.sets[i];
+        if (__atomic_load_n(&set->fullbooks, __ATOMIC_ACQUIRE) && set->books == mine.books &&
+            set->keyBytes == mine.keyBytes && pacerShareCas(set, 1))
+            take[i] = set;
+    }
+    LightLock_Unlock(&pacerShare.lock);
+    PacerShareSet* hit = NULL;
+    for (int i = 0; i < PACER_SETS; i++) {
+        if (!take[i])
+            continue;
+        if (!hit && pacerShareKey(ci, NULL, take[i]->key) == mine.keyBytes)
+            hit = take[i];
+        else
+            pacerShareRelease(take[i], 0);
+    }
+    if (hit) {
+        PACER_CI_FULLBOOKS(ci) = hit->fullbooks;
+        pacerShareDropStatic(ci);
+        return 1;
+    }
+    // A miss: build the set here, as Tremor's loop would.
+    mine.key = malloc(mine.keyBytes);
+    mine.fullbooks = calloc(mine.books, PACER_CODEBOOK_BYTES);
+    int built = mine.key && mine.fullbooks;
+    if (built)
+        pacerShareKey(ci, mine.key, NULL);
+    for (int i = 0; built && i < mine.books; i++)
+        built = !vorbis_book_init_decode((char*) mine.fullbooks + i * PACER_CODEBOOK_BYTES, PACER_CI_BOOK_PARAM(ci)[i]);
+    if (!built) { // vorbis_book_clear also frees what a failed book left (all-zero books clear to nothing)
+        pacerShareFree(&mine);
+        return 0;
+    }
+    pacerShareDropStatic(ci);
+    PACER_CI_FULLBOOKS(ci) = mine.fullbooks;
+    // A free slot, else the idle set's (claimed here, freed below). Two streams that built the same set at once would
+    // each keep a slot: correct, only less shared.
+    PacerShareSet* slot = NULL;
+    PacerShareSet drop = {NULL, NULL, 0, 0, 0, 0};
+    LightLock_Lock(&pacerShare.lock);
+    for (int i = 0; i < PACER_SETS && !slot; i++)
+        if (!__atomic_load_n(&pacerShare.sets[i].fullbooks, __ATOMIC_SEQ_CST))
+            slot = &pacerShare.sets[i];
+    for (int i = 0; i < PACER_SETS && !slot; i++)
+        if (pacerShareCas(&pacerShare.sets[i], 0)) {
+            slot = &pacerShare.sets[i];
+            drop = *slot;
+        }
+    if (slot) { // held before it is visible, fullbooks last (R155 F1: a plain struct copy let a release free it)
+        __atomic_store_n(&slot->refs, 1, __ATOMIC_SEQ_CST);
+        PACER_PAUSE(6);
+        slot->key = mine.key;
+        slot->keyBytes = mine.keyBytes;
+        slot->books = mine.books;
+        __atomic_store_n(&slot->idle, 0, __ATOMIC_RELAXED);
+        PACER_PAUSE(7);
+        __atomic_store_n(&slot->fullbooks, mine.fullbooks, __ATOMIC_RELEASE);
+    }
+    LightLock_Unlock(&pacerShare.lock);
+    if (!slot)
+        free(mine.key); // ci keeps the books
+    pacerShareFree(&drop);
+    return slot ? 2 : 3;
+}
+
+PACER_CODE int __wrap_vorbis_synthesis_init(vorbis_dsp_state* v, vorbis_info* vi) {
+    void* ci = vi->codec_setup;
+    u64 t0 = svcGetSystemTick();
+    int how = PACER_CI_FULLBOOKS(ci) ? 4 : pacerShareBooks(ci);
+    u64 t1 = svcGetSystemTick();
+    int ret = __real_vorbis_synthesis_init(v, vi);
+    u64 t2 = svcGetSystemTick();
+    logInfo(pacerShareLog, PACER_US(t2 - t0), pacerShareHow[how], PACER_US(how ? t1 - t0 : t2 - t1));
+    return ret;
+}
+
+// No lock: this stream's reference keeps its set in its slot, so the slot's pointer cannot change under the compare.
+PACER_CODE void __wrap_vorbis_info_clear(vorbis_info* vi) {
+    void* ci = vi->codec_setup;
+    for (int i = 0; ci && PACER_CI_FULLBOOKS(ci) && i < PACER_SETS; i++) {
+        PacerShareSet* set = &pacerShare.sets[i];
+        if (__atomic_load_n(&set->fullbooks, __ATOMIC_ACQUIRE) == PACER_CI_FULLBOOKS(ci)) {
+            PACER_CI_FULLBOOKS(ci) = NULL;
+            pacerShareRelease(set, 1);
+        }
+    }
+    __real_vorbis_info_clear(vi);
+}
 #endif

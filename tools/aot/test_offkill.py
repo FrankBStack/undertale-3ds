@@ -17,11 +17,12 @@ sys.path.insert(0, HERE)
 import offkill  # noqa: E402
 
 
-def fake_data_win(objects, sprites):
-    """A minimal FORM with OBJT (name, sprite) and SPRT (name, width, height, origin) chunks, strings in STRG."""
+def fake_data_win(objects, sprites, variables=()):
+    """A minimal FORM with OBJT (name, sprite) and SPRT (name, width, height, origin) chunks, strings in STRG; with
+    variables ((name, id) pairs), a GEN8 (bytecode 16) and a VARI chunk after them."""
     strg = bytearray()
     names = {}
-    for name in [n for n, _ in objects] + [s[0] for s in sprites]:
+    for name in [n for n, _ in objects] + [s[0] for s in sprites] + [n for n, _ in variables]:
         if name not in names:
             names[name] = len(strg)
             strg += name.encode('utf-8') + b'\0'
@@ -55,6 +56,11 @@ def fake_data_win(objects, sprites):
     body = b'STRG' + struct.pack('<I', len(strg)) + strg
     body += b'OBJT' + struct.pack('<I', len(objt)) + objt
     body += b'SPRT' + struct.pack('<I', len(sprt)) + sprt
+    if variables:
+        body += b'GEN8' + struct.pack('<I', 4) + bytes([0, 16, 0, 0])
+        vari = struct.pack('<III', len(variables), len(variables), 0)
+        vari += b''.join(struct.pack('<IiiII', strg_at + names[n], -1, vid, 1, 0) for n, vid in variables)
+        body += b'VARI' + struct.pack('<I', len(vari)) + vari
     return b'FORM' + struct.pack('<I', len(body)) + body
 
 
@@ -65,11 +71,15 @@ class OffKillTest(unittest.TestCase):
     def tearDown(self):
         self.tmp.cleanup()
 
-    def data(self, objects, sprites):
+    def data(self, objects, sprites, variables=()):
         path = os.path.join(self.tmp.name, 'data.win')
         with open(path, 'wb') as f:
-            f.write(fake_data_win(objects, sprites))
+            f.write(fake_data_win(objects, sprites, variables))
         return offkill.Data(path)
+
+    def doomed(self, name, active='on', saved='kept', saved_active='kept_on'):
+        h = offkill.name_hash
+        return offkill.Doomed(h(name), h(active), h(saved), h(saved_active), name)
 
     def entry(self, name, axis=0, sign=1, reach=10, shake=0, scale=1):
         return offkill.Entry(offkill.name_hash(name), axis, sign, reach, shake, scale, name)
@@ -128,8 +138,52 @@ class OffKillTest(unittest.TestCase):
         self.assertFalse(os.path.exists(path))
         self.assertFalse(offkill.write(romfs, b''))
 
+    def test_variables_take_the_first_id_of_a_name(self):
+        d = self.data([('a', 0)], [('s', 4, 4, 2, 2)], [('on', -1), ('on', 7), ('kept', 3), ('on', 9)])
+        self.assertEqual(d.variables, {'on': 7, 'kept': 3})
+
+    def test_doomed_pack_layout(self):
+        d = self.data([('a', 0), ('b', 0)], [('s', 4, 4, 2, 2)], [('on', 5), ('kept', 300), ('kept_on', 2)])
+        rows = offkill.resolve_doomed(d, [self.doomed('b')])
+        self.assertEqual(rows[0][1:], ((1, 5, 300, 2), None))
+        blob = offkill.pack_doomed(rows)
+        self.assertEqual(blob, bytes([1, 0, 5, 0, 44, 1, 2, 0]))
+
+    def test_doomed_missing_object_or_variable_is_left_out(self):
+        d = self.data([('a', 0), ('a', 0), ('b', 0)], [('s', 4, 4, 2, 2)], [('on', 5), ('kept', 3)])
+        rows = offkill.resolve_doomed(d, [self.doomed('a'), self.doomed('c'), self.doomed('b')])
+        self.assertEqual([why for _, _, why in rows], ['object name not unique', 'object not found', 'variable not found'])
+        self.assertEqual(offkill.pack_doomed(rows), b'')
+        # No VARI at all (older data or a cut file): nothing resolves.
+        self.assertEqual(offkill.Data(self.write_plain()).variables, {})
+
+    def write_plain(self):
+        path = os.path.join(self.tmp.name, 'plain.win')
+        with open(path, 'wb') as f:
+            f.write(fake_data_win([('a', 0)], [('s', 4, 4, 2, 2)]))
+        return path
+
+    def test_too_many_doomed_entries(self):
+        d = self.data([('a', 0)], [('s', 4, 4, 2, 2)], [('on', 5), ('kept', 3), ('kept_on', 2)])
+        rows = offkill.resolve_doomed(d, [self.doomed('a')] * (offkill.MAX_DOOMED + 1))
+        with self.assertRaises(ValueError):
+            offkill.pack_doomed(rows)
+
+    def test_doomed_table(self):
+        self.assertLessEqual(len(offkill.DOOMED), offkill.MAX_DOOMED)
+        for e in offkill.DOOMED:
+            for key in (e.key, e.active, e.saved, e.saved_active):
+                self.assertEqual(len(key), offkill.HASH_DIGITS)
+
+    def test_write_names_its_file(self):
+        romfs = os.path.join(self.tmp.name, 'romfs')
+        self.assertTrue(offkill.write(romfs, b'\3' * 8, 'offdoom.bin'))
+        self.assertTrue(os.path.exists(os.path.join(romfs, 'offdoom.bin')))
+        self.assertFalse(os.path.exists(os.path.join(romfs, 'offkill.bin')))
+
     def test_deltarune_has_no_entries(self):
         self.assertEqual(offkill.build('deltarune', None), (b'', []))
+        self.assertEqual(offkill.build('deltarune', None, doomed=True), (b'', []))
 
     def test_entry_table(self):
         self.assertLessEqual(len(offkill.ENTRIES), offkill.MAX_ENTRIES)
@@ -151,6 +205,11 @@ class OffKillTest(unittest.TestCase):
         got = [struct.unpack_from('<hbbB3x', blob, 8 * i) for i in range(len(blob) // 8)]
         # UNDERTALE 1.08 (Steam and GOG): object indices 1204, 475, 480 and 1634.
         self.assertEqual(got, [(1204, 0, 1, 6), (475, 1, 1, 25), (480, 1, 1, 72), (1634, 0, 1, 91), (1634, 0, -1, 91)])
+        blob, lines = offkill.build('undertale', found, doomed=True)
+        self.assertEqual(lines[-1], 'offkill: 2 of 2 inactive-for-good entries, 16 B', lines)
+        # UNDERTALE 1.08 (Steam and GOG): objects 1643 and 1642, variables 493, 441, then 3692 and 3685.
+        self.assertEqual([struct.unpack_from('<4h', blob, 8 * i) for i in range(2)],
+                         [(1643, 493, 441, 3692), (1642, 493, 441, 3685)])
 
 
 if __name__ == '__main__':
