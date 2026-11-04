@@ -1373,6 +1373,8 @@ class State:
         self.records = []
         self.build_ok = False
         self.delivered = False
+        self.delivered_key = None  # DeliverPage.delivery_key() of the copy that succeeded (AUD-05).
+        self.inputs = 0  # Counts builds and game folder choices: each one makes earlier copies stale (R175 F4).
         self.deliver_how = "sd"
         self.sd_root = None
         self.files_root = None
@@ -1780,6 +1782,7 @@ class FindPage(Page):
             if new != self.st.folder:
                 self.st.folder = new
                 self.st.verdict = None
+                self.st.inputs += 1
                 self.app.theme.load_from_game_dir(new)
         self.app.update_nav()
 
@@ -1849,6 +1852,7 @@ class VerifyPage(Page):
         self.running = False
         self.bar.stop()
         self.st.verdict = verdict
+        self.st.inputs += 1
         if verdict.accepted:
             self.st.parts = [p for p in verdict.parts if p != "root"] or None
         self.render()
@@ -2314,6 +2318,7 @@ class BuildPage(Page):
         self.stop.clear()
         self.running = True
         self.st.artifacts, self.st.records = [], []
+        self.st.inputs += 1
         self.log.delete("1.0", "end")
         self.intro.config(text="Building...")
         self.status.config(text="")
@@ -2428,10 +2433,42 @@ class BuildPage(Page):
         return "next" if self.st.build_ok else "wait"
 
 
+STALE_COPY = "The card list changed during the copy, so check the card and click Copy to card again."
+
+
+def source_manifest(folder):
+    """Each file in the game folder with its size and modified and change (POSIX) or creation (Windows) times, so a
+    game file replaced at the same path after a copy makes that copy stale (R175 F4). A missing folder lists nothing. A folder or link that can't be
+    read is listed as such, so it never blocks Next on its own but changes the listing once it can be read."""
+    if not folder or not os.path.isdir(folder):
+        return ()
+    out, todo = [], [(folder, '')]
+    while todo:  # scandir: Windows gives size and date with the listing, so this stays quick on the Tk thread.
+        top, rel = todo.pop()
+        try:
+            with os.scandir(top) as entries:
+                for entry in entries:
+                    if entry.is_dir(follow_symlinks=False):  # Never into a linked folder: no loops.
+                        todo.append((entry.path, rel + entry.name + '/'))
+                        continue
+                    try:
+                        info = entry.stat()
+                    except OSError:
+                        info = entry.stat(follow_symlinks=False)  # A broken link: its own size and date.
+                    out.append((rel + entry.name, info.st_size, info.st_mtime_ns, info.st_ctime_ns))
+        except OSError as error:
+            out.append((rel, 'unreadable', error.errno))
+    return tuple(sorted(out, key=repr))
+
+
 class DeliverPage(Page):
     """Each way of delivering has its own panel and its own status text; a progress bar shows only while copying."""
     title = "Put it on the 3DS"
     card_roots = {}  # Listed card text -> its root; refresh() replaces it.
+    # Bumped by forget() for each mode. A copy, send or save captures its mode's count when it starts, and only a
+    # completion still current may grant a receipt: one that finishes after a Refresh, a folder choice or a new
+    # visit reports where it went but doesn't enable Next (R175b F4).
+    sd_visit = wifi_visit = files_visit = 0
 
     def __init__(self, app):
         super().__init__(app)
@@ -2488,8 +2525,20 @@ class DeliverPage(Page):
         self.saved_key = None
 
     def on_show(self):
+        # A copy or send counts only on the visit it was made in: the card or console may be another one now (R175 F4).
+        self.forget()
         self.refresh()
         self.mode()
+
+    def forget(self, how=None):
+        """Drop the finished copy or send (of one mode, or any), and any still running: it must be done again
+        before Next."""
+        for mode in (how,) if how else ('sd', 'wifi', 'files'):
+            setattr(self, mode + '_visit', getattr(self, mode + '_visit') + 1)
+        if how in (None, 'files'):
+            self.saved_key = None  # mode() rebuilds the files receipt from this, so it goes too (R175c).
+        if how is None or (self.st.delivered_key or (None,))[0] == how:
+            self.st.delivered, self.st.delivered_key = False, None
 
     def set_status(self, how, text):
         """One status text per panel; only the visible panel's text is on screen."""
@@ -2536,8 +2585,8 @@ class DeliverPage(Page):
         for f in self.panels.values():
             f.pack_forget()
         how = self.how.get()
-        if how != self.st.deliver_how:
-            self.st.delivered = False
+        if how != self.st.deliver_how or self.st.delivered_key != self.delivery_key():
+            self.st.delivered = False  # Another mode, build, game, chapter set or destination: copy again.
         self.st.deliver_how = how
         self.panels[how].pack(anchor="w", fill="x")
         if how == "files":
@@ -2547,19 +2596,40 @@ class DeliverPage(Page):
             self.open_files.state(["!disabled"] if ready else ["disabled"])
             self.st.sd_root = None
             self.st.delivered = ready
+            self.st.delivered_key = self.delivery_key() if ready else None
         self._show_status()
         self.app.update_nav()
 
     def files_key(self):
+        """The build, the game files and the choices a copy or saved folder was made from. inputs counts builds,
+        so a rebuild with the same outputs still counts; the manifest catches game files changed in place."""
         return (self.st.game, self.st.folder, tuple(self.st.parts or ()),
-                tuple((a.path, a.sha256) for a in self.st.artifacts))
+                tuple((a.path, a.sha256) for a in self.st.artifacts), self.st.inputs,
+                source_manifest(self.st.folder))
+
+    def destination(self):
+        how = self.how.get()
+        if how == 'sd':
+            root = self.target_root()
+            return os.path.normcase(os.path.normpath(root)) if root else None
+        if how == 'wifi':
+            try:
+                return '%s:%d' % ftp_delivery.endpoint(self.addr.get())
+            except OSError:
+                return None
+        return self.st.files_root
+
+    def delivery_key(self):
+        """What a finished copy was: the mode, the card, console or folder, and the build and game files."""
+        return self.how.get(), self.destination(), self.files_key()
 
     def save_files(self):
         if self.copying:
             return
-        key = self.files_key()
+        key, visit = self.files_key(), self.files_visit
         self.copying = True
         self.st.delivered = False
+        self.saved_key = None  # Until this save succeeds: a failed one may have changed the folder (R175c).
         self.save.state(["disabled"])
         self.open_files.state(["disabled"])
         self.set_status("files", "Saving files and preparing textures...")
@@ -2573,7 +2643,8 @@ class DeliverPage(Page):
             if isinstance(res, Exception):
                 self.set_status("files", str(res))
             else:
-                self.saved_key = key
+                if visit == self.files_visit:
+                    self.saved_key = key
                 self.st.files_root = getattr(res, 'folder', None) or res.root
                 self.show_progress("files", 100)
                 self.set_status("files", "Saved %d files (%.1f MB).\n%s" %
@@ -2583,6 +2654,7 @@ class DeliverPage(Page):
                                                  self.app.opts.work, self.st.parts, prog), after, errors=True)
 
     def refresh(self):
+        self.forget('sd')  # A card may have been swapped at the same drive or mount point (R175 F4).
         try:
             self.cards = deliver.list_sd_cards()
         except OSError:
@@ -2624,7 +2696,9 @@ class DeliverPage(Page):
         root = self.target_root()
         if not root:
             return
+        visit = self.sd_visit
         self.copying = True
+        self.st.delivered = False  # Until this copy succeeds, even if an earlier one did.
         self.go.state(["disabled"])
         self.set_status('sd', 'Preparing a list of files. Nothing is being copied to the card yet.')
         self.app.update_nav()
@@ -2638,7 +2712,7 @@ class DeliverPage(Page):
             items, tool, text = result
             # Autopilot only writes to its explicit disposable card fixture.
             if self.app.opts.autopilot is not None:
-                self._copy_approved(root, items, tool)
+                self._copy_approved(root, items, tool, visit)
                 return
             window = tk.Toplevel(self.frame)
             window.title('Files for this SD card')
@@ -2660,7 +2734,7 @@ class DeliverPage(Page):
                 self.app.update_nav()
             def approve():
                 window.destroy()
-                self._copy_approved(root, items, tool)
+                self._copy_approved(root, items, tool, visit)
             button(window, text='Copy to card', command=approve, primary=True).pack(side='right', padx=8, pady=8)
             button(window, text='Cancel', command=dismiss).pack(side='right', padx=8, pady=8)
             window.protocol('WM_DELETE_WINDOW', dismiss)
@@ -2669,11 +2743,13 @@ class DeliverPage(Page):
         self.app.work(lambda: deliver.sd_preview(root, self.st.product, self.st.artifacts,
                       self.st.folder, self.app.opts.work, self.st.parts), prepared, errors=True)
 
-    def _copy_approved(self, root, items, tool):
+    def _copy_approved(self, root, items, tool, visit=None):
         self.set_status("sd", "Copying...")
         self.show_progress("sd", 0)
         self.app.update_nav()
         prog = lambda done, total, name: self.app.call(self.show_progress, "sd", 100.0 * done / max(1, total))  # noqa
+        key = self.files_key()
+        visit = self.sd_visit if visit is None else visit
 
         def after(res):
             self.copying = False
@@ -2687,10 +2763,14 @@ class DeliverPage(Page):
                 msg += "\n" + tex.message
                 if deliver.dsp_missing(root):
                     msg += "\n\n" + deliver.DSP_MESSAGE
+                if visit != self.sd_visit:
+                    msg += "\n\n" + STALE_COPY
                 self.set_status("sd", msg)
-                self.st.sd_root = root
-                self.st.deliver_how = "sd"
-                self.st.delivered = True
+                if visit == self.sd_visit:
+                    self.st.sd_root = root
+                    self.st.deliver_how = "sd"
+                    self.st.delivered = True
+                    self.st.delivered_key = ('sd', os.path.normcase(os.path.normpath(root)), key)
             self.app.update_nav()
         self.app.work(lambda: deliver.copy_with_textures(root, items, self.st.product, self.st.folder,
                                                          self.app.opts.work, self.st.parts, prog, tool=tool), after, errors=True)
@@ -2707,6 +2787,7 @@ class DeliverPage(Page):
         self.wifi_busy(True)
         self.st.delivered = False
         self._ftp_update, self._ftp_phase = 0, None
+        key, visit = self.files_key(), self.wifi_visit
         self.set_status('wifi', 'Preparing files and textures on the PC...')
         self.show_progress("wifi", 0)
 
@@ -2720,11 +2801,13 @@ class DeliverPage(Page):
             self.set_status("wifi", ftp_delivery.error_text(res) if isinstance(res, Exception) else "Sent and checked. You can close ftpd.")
             if not isinstance(res, Exception):
                 self.show_progress("wifi", 100)
+            if not isinstance(res, Exception) and visit == self.wifi_visit:
                 self.st.sd_root = None
                 self.st.ftp_console = addr
                 self.st.files_root = res.root
                 self.st.deliver_how = "wifi"
                 self.st.delivered = True
+                self.st.delivered_key = ('wifi', addr, key)
                 preferences.save(self.app.opts.work, self.app.boring.get(), console=addr)
             self.app.update_nav()
         self.app.work(job, after, errors=True)
@@ -2755,6 +2838,7 @@ class DeliverPage(Page):
     def find_console(self, permission_retry=False):
         if self.copying:
             return
+        self.forget('wifi')  # Looking again: the console at that address may be another one (R175 F4).
         self.wifi_busy(True)
         self.set_status('wifi', 'Looking for a 3DS running ftpd on your network...' +
             ('\nIf macOS asks for Local Network access, choose Allow.' if sys.platform == 'darwin' else ''))
@@ -2786,7 +2870,7 @@ class DeliverPage(Page):
         self.app.root.after_idle(lambda: self.app.work(job, after, errors=True))
 
     def can_next(self):
-        return self.st.delivered and not self.copying
+        return self.st.delivered and self.st.delivered_key == self.delivery_key() and not self.copying
 
     def busy(self):
         return self.copying
@@ -2795,7 +2879,7 @@ class DeliverPage(Page):
         ap = self.app.opts.autopilot or {}
         if self.copying:
             return "wait"
-        if self.st.delivered:
+        if self.can_next():
             return "next"
         if ap.get("deliver", "sd") == "files":
             self.how.set("files")
@@ -3599,9 +3683,24 @@ def _bring_to_front(root):
 
 
 def run(opts: Options):
-    root = tk.Tk()
-    app = App(root, opts)
-    if opts.autopilot is None:
-        root.after_idle(app.check_updates)
-    root.mainloop()
-    return app.exit_code
+    # One builder window per work folder (AUD-15): a second one would replace the first one's sources and outputs.
+    try:
+        lease = pipeline.claim_work(opts.work)
+    except pipeline.WorkLockError as exc:
+        print(exc.window, file=sys.stderr, flush=True)
+        if opts.autopilot is None:
+            root = tk.Tk()
+            root.withdraw()
+            title = "Builder already open" if isinstance(exc, pipeline.WorkBusy) else "Builder can't start"
+            messagebox.showerror(title, exc.window, parent=root)
+            root.destroy()
+        return 1
+    try:
+        root = tk.Tk()
+        app = App(root, opts)
+        if opts.autopilot is None:
+            root.after_idle(app.check_updates)
+        root.mainloop()
+        return app.exit_code
+    finally:
+        lease.release()

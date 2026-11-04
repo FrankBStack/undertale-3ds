@@ -717,6 +717,9 @@ tools/release/test_builder_find_page.py
 tools/release/test_builder_build_cancel.py
 tools/release/test_builder_card_names.py
 tools/release/test_macos_launcher_logs.py
+tools/release/test_builder_sd_lease.py
+tools/release/test_builder_work_lease.py
+tools/release/test_builder_deliver_key.py
 tools/release/fake_ftpd.py
 tools/release/generate_music_manifest.py
 tools/release/builder/builder.py

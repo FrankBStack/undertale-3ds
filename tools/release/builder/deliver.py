@@ -321,6 +321,11 @@ def _copy_payload(sd_root, items, product, folder, work, parts=None, progress=No
     return copied, skipped, nbytes, res
 
 
+BUSY_MESSAGE = "Another copy to this SD card is still running.\nWait for it to finish, then try again."
+NO_LOCK_MESSAGE = ("This SD card can't lock files, so another copy could change it at the same time. Nothing was "
+                   "copied.\nPut the card in a card reader on this PC and try again, or send over Wi-Fi.")
+
+
 def copy_with_textures(sd_root, items, product, folder, work, parts=None, progress=None, cancelled=lambda: False,
                        log=lambda s: None, textures=True, tool=None, data_version=True):
     """Stage and verify a whole installation, then publish with rollback backups and a recovery journal.
@@ -328,9 +333,28 @@ def copy_with_textures(sd_root, items, product, folder, work, parts=None, progre
     Nothing in the installed set changes on staging failure. Publication errors restore the old set. If the
     card disappears before rollback, retry this copy before launching the game: recovery runs first.
     """
-    import texcache
     items = list(items)
     transaction = sd_transaction.Transaction(sd_root, product)
+    try:
+        # Held until this copy has finished or rolled back: no other session can recover, stage or publish an
+        # update to this card meanwhile (DEEP-04).
+        transaction.acquire()
+    except sd_transaction.Busy as error:
+        raise DeliverError(BUSY_MESSAGE) from error
+    except sd_transaction.NoLock as error:
+        raise DeliverError(NO_LOCK_MESSAGE) from error
+    except OSError as error:
+        raise write_error(sd_root, error) from error
+    try:
+        return _copy_transaction(transaction, sd_root, items, product, folder, work, parts, progress, cancelled,
+                                 log, textures, tool, data_version)
+    finally:
+        transaction.release()
+
+
+def _copy_transaction(transaction, sd_root, items, product, folder, work, parts, progress, cancelled, log,
+                      textures, tool, data_version):
+    import texcache
     try:
         if cancelled():
             raise InterruptedError('cancelled')

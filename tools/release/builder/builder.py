@@ -203,6 +203,19 @@ def cli(o, out=print):
         except ValueError as exc:
             out(str(exc))
             return 1
+    # The first step that touches the work folder: another builder using it must finish first (AUD-15).
+    try:
+        lease = pipeline.claim_work(work)
+    except pipeline.WorkLockError as exc:
+        out(str(exc))
+        return 1
+    try:
+        return _build_and_deliver(o, out, game, product, work, probes, folder, v, parts)
+    finally:
+        lease.release()
+
+
+def _build_and_deliver(o, out, game, product, work, probes, folder, v, parts):
     tc = toolchain.detect(os.path.join(work, "tools", "bin"), roots=[o["devkitpro"]] if o["devkitpro"] else None)
     for c in tc.checks:
         out("  [%s] %s: %s" % ("ok" if c.ok else "--", c.name, c.detail))

@@ -36,6 +36,7 @@ CARDS = [deliver.Card('/Volumes/SD  CARD', 900 * 10**6, 'SD  CARD'),
 class CardNameTests(unittest.TestCase):
     def page(self, cards):
         page = gui.DeliverPage.__new__(gui.DeliverPage)
+        page.app = SimpleNamespace(state=gui.State('undertale'))  # refresh() forgets an SD copy (R175 F4).
         page.card, page.manual, page.copying = Combo(), None, False
         page.go, page.set_status = mock.Mock(), mock.Mock()
         with mock.patch.object(deliver, 'list_sd_cards', return_value=cards):

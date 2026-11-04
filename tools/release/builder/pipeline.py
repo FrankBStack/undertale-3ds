@@ -50,6 +50,55 @@ SKIP_DIRS = {"__pycache__", ".git", "build", "scratch"}
 SKIP_SUFFIXES = (".pyc", ".win", ".ogg", ".cia", ".3dsx", ".elf", ".o", ".a", ".dat")
 
 
+WORK_BUSY = ("Another copy of the builder is already running with the work folder %s.\n"
+             "Use that one, or close it and start the builder again.")
+WORK_NO_LOCK = ("The work folder %s can't lock files, so another builder could change it during a build.\n"
+                "Use a work folder on this PC's own drive (--work), then start the builder again.")
+WORK_LOCK_ERROR = ("Can't use the work folder %s (%s).\n"
+                   "Check that it can be written, or choose another with --work, then start the builder again.")
+# The window's own wording. The window can't choose its work folder, and moving the folder changes nothing (the
+# next launch works out the same path), so it names the folder and points to --work on a command line (R175b-text).
+WINDOW_NO_LOCK = ("The builder keeps its work in %s, and that folder's drive can't lock files, so the builder "
+                  "won't start there.\nThis window can't choose another work folder. To use one on this PC's own "
+                  "drive, start the builder from a command line with --work and that folder.")
+WINDOW_LOCK_ERROR = ("The builder can't use its work folder %s (%s).\nClose any other builder, check that the folder "
+                     "isn't read-only and its drive isn't full, then open the builder again.")
+WORK_LEASE = ".builder-session.lock"
+
+
+class WorkLockError(RuntimeError):
+    """The builder can't hold its work folder, so it must not start: Busy, no locks, or the lock can't be made
+    (R175 F1/F3). There is no build without the lease. str() is the command line's text, window the window's."""
+
+    def __init__(self, message, window=None):
+        super().__init__(message)
+        self.window = window or message
+
+
+class WorkBusy(WorkLockError):
+    pass
+
+
+def claim_work(work):
+    """One builder process per work folder (AUD-15): builds mirror and delete src/build, and delivery and
+    cleanup rewrite the rest. The OS lock goes when the process ends, so a crashed builder never blocks the next.
+    Returns the held lease, or raises WorkLockError: WorkBusy for another builder, otherwise the folder or its lock
+    file can't be used, and the builder stops rather than run unlocked (R175 F3)."""
+    import sd_transaction
+    try:
+        os.makedirs(work, exist_ok=True)
+        lease = sd_transaction.Lease(os.path.join(work, WORK_LEASE))
+        lease.acquire()
+    except sd_transaction.Busy:
+        raise WorkBusy(WORK_BUSY % work) from None
+    except sd_transaction.NoLock:
+        raise WorkLockError(WORK_NO_LOCK % work, WINDOW_NO_LOCK % work) from None
+    except OSError as error:
+        reason = error.strerror or type(error).__name__
+        raise WorkLockError(WORK_LOCK_ERROR % (work, reason), WINDOW_LOCK_ERROR % (work, reason)) from None
+    return lease
+
+
 def default_work_dir(env=None, platform=sys.platform):
     """A short folder without spaces (CMake object paths come close to Windows' 250-character limit)."""
     env = os.environ if env is None else env

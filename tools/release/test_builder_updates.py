@@ -353,7 +353,8 @@ class Gui(unittest.TestCase):
         import gui
         root, app = mock.Mock(), mock.Mock()
         app.exit_code = 0
-        with mock.patch.object(gui.tk, 'Tk', return_value=root), mock.patch.object(gui, 'App', return_value=app):
+        with mock.patch.object(gui.tk, 'Tk', return_value=root), mock.patch.object(gui, 'App', return_value=app), \
+                mock.patch.object(gui.pipeline, 'claim_work'):  # Never the real work folder.
             self.assertEqual(gui.run(gui.Options()), 0)
         root.after_idle.assert_called_once_with(app.check_updates)
         app.check_updates.assert_not_called()

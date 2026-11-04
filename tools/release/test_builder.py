@@ -1440,11 +1440,13 @@ class CliTest(MusicFixtures):
         out = []
         with mock.patch.object(app.discover, 'verify_copy', return_value=verified), \
                 mock.patch.object(app.toolchain, 'detect', return_value=tc), \
+                mock.patch.object(app.pipeline, 'claim_work') as claim, \
                 mock.patch.object(app.pipeline, 'Build', side_effect=pipeline.BuildFailed('fixture work folder')):
             rc = app.cli(app.parse(['--cli', '--folder', '.', '--work', './work folder']), out=out.append)
         self.assertEqual(rc, 1)
         self.assertIn('fixture work folder', out)
         self.assertNotIn('Log: None', out)
+        claim.return_value.release.assert_called_once()
 
     def test_work_folder_spaces_reach_each_platform_as_one_argument(self):
         with tempfile.TemporaryDirectory() as tmp:
