@@ -1,5 +1,10 @@
 # undertale-3ds
 
+> [!IMPORTANT]
+> **Not released yet. There is nothing to download or install here yet.**
+>
+> **The first release (UNDERTALE 1.0 beta) is planned for early November.** It comes with the builder, a program that builds the port from your own copy of UNDERTALE and installs it. Until then, this repository is the source code only.
+
 An unofficial fan port of UNDERTALE to the Nintendo 3DS.
 
 You build it from your own copy of UNDERTALE.
