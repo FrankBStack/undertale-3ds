@@ -237,7 +237,7 @@
     {
       "member": "tools/release/test_builder.py",
       "class": "engine-lookups",
-      "sha256": "26874e81c6c0252a3cf167a702b54e5d70512ed0bcd63f6f3145ce85636f57ae",
+      "sha256": "043537c82b92dca2ce28473213219335cd66e8e297cacca5f348f8353cee30a6",
       "justification": "Existing synthetic compiler/music fixtures and player cursor lookup; new tests only require private generator source closure in the exported builder.",
       "evidence_sha256": [
         "e1013ccac9297ff1f3205e0d2e1e0966f75c9b7b570515dedc2026aba40ade7b"
@@ -336,10 +336,10 @@
     {
       "member": "tools/release/builder/home_art.py",
       "class": "engine-lookups",
-      "sha256": "c7f4fa10afee24256a6e479780c543c6a6993c1e0baa00205ad82ca5e107505a",
+      "sha256": "aada9af67be791bec582eefa0c9b37713f8c379f4f9f242724a64bef1f8f32b3",
       "justification": "Sound and sprite lookups extract HOME art from the players own files.",
       "evidence_sha256": [
-        "ccfa466951f360627017fc519c66be4624f598f5a86191481a9157ef9b1f382e"
+        "a17328b239059f37c7f1c49a8dc11f244525b455c14b9269b427c74f452fab4d"
       ]
     },
     {

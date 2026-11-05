@@ -575,6 +575,37 @@ def fake_source(tmp):
     return src
 
 
+class CapturedEnv(dict):
+    """A child environment a fake popen captured. Every repr (unittest's failure messages, pprint diffs) shows only how
+    many variables it holds, so no failed assertion prints a value from the developer's environment."""
+    def __repr__(self):
+        return '<captured environment, %d variables>' % len(self)
+
+    __str__ = __repr__
+
+
+class CapturedEnvTest(unittest.TestCase):
+    def test_a_failed_assertion_never_prints_a_captured_environment(self):
+        canary = 'invented-canary-value-7f3a'
+        seen = {'argv': ['bash'], 'env': CapturedEnv({'INVENTED_API_KEY': canary})}
+        checks = {
+            'whole capture equal': lambda: self.assertEqual(seen, {}),
+            'whole capture dict equal': lambda: self.assertDictEqual(seen, {}),
+            'env equal': lambda: self.assertEqual(seen['env'], {}),
+            'env dict equal': lambda: self.assertDictEqual(seen['env'], {}),
+            'env not in': lambda: self.assertNotIn('env', seen),
+            'key in env': lambda: self.assertIn('PATH', seen['env']),
+            'env is none': lambda: self.assertIsNone(seen['env']),
+            'env falsy': lambda: self.assertFalse(seen['env']),
+        }
+        for name, check in checks.items():
+            with self.subTest(name):
+                with self.assertRaises(AssertionError) as caught:
+                    check()
+                self.assertNotIn(canary, str(caught.exception))
+        self.assertEqual(seen['env']['INVENTED_API_KEY'], canary)
+
+
 class FakeProc:
     def __init__(self, lines, rc, on_start=None):
         self.stdout = iter(lines)
@@ -654,7 +685,7 @@ class BuildTest(unittest.TestCase):
         seen = {}
 
         def popen(argv, **kw):
-            seen["argv"], seen["env"] = argv, kw["env"]
+            seen["argv"], seen["env"] = argv, CapturedEnv(kw["env"])
             return FakeProc(lines, rc, on_start=lambda: rc == 0 and self.outputs(aot, kinds))
         b = pipeline.Build(products.PRODUCTS["undertale"], self.tc, self.work, "n3ds", "D:\\Games\\Undertale",
                            outputs=outputs, popen=popen, source_root=self.src, art_generator=lambda *a, **k: {})
@@ -709,7 +740,7 @@ class BuildTest(unittest.TestCase):
                 b, seen = self.make([])
                 with self.assertRaises(pipeline.BuildFailed):
                     b.run()
-                self.assertNotIn('argv', seen)
+                self.assertNotIn('argv', list(seen))
                 self.assertFalse(os.path.isdir(os.path.join(self.work, 'src')))
                 write(os.path.join(self.src, 'engine/src/vm.c'), 'int x;\n')
 
@@ -722,7 +753,7 @@ class BuildTest(unittest.TestCase):
                     with mock.patch.object(toolchain, 'compiler_details', return_value={
                             'path': '/fixture/gcc', 'version': version, 'target': 'arm-none-eabi'}):
                         _, record = b.run()
-                    self.assertIn('argv', seen)
+                    self.assertIn('argv', list(seen))
                     self.assertFalse(record['compiler']['layout_pins'])
                     self.assertIn('16.1.0', record['compiler']['warning'])
                     self.assertIn('performance may differ slightly.', record['compiler']['warning'])
@@ -787,7 +818,7 @@ class BuildTest(unittest.TestCase):
             b.run()
         self.assertIn("source archive is incomplete", str(e.exception))
         self.assertIn("no VERSION file", str(e.exception))
-        self.assertNotIn("argv", seen)
+        self.assertNotIn("argv", list(seen))
         self.assertFalse(os.path.exists(os.path.join(self.work, "src")))
 
     def test_malformed_version_is_refused(self):

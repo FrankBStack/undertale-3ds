@@ -2424,7 +2424,7 @@ configure_file("${CTRPORT_SPECS}.new" "${CTRPORT_SPECS}" COPYONLY)
 # ===[ .3dsx ]===
 # Placeholder art drawn by assets/make_art.py: one icon and banner per game and target.
 if(CTRPORT_GAME STREQUAL "undertale")
-    set(APP_NAME "undertale-3ds")
+    set(APP_NAME "UNDERTALE")
 else()
     set(APP_NAME "deltarune-3ds (unofficial)")
 endif()
@@ -2434,7 +2434,6 @@ include("${CMAKE_CURRENT_SOURCE_DIR}/legal.cmake")
 set(CTRPORT_SMDH_SCRIPT "${CMAKE_CURRENT_SOURCE_DIR}/smdh.cmake")
 set(CTRPORT_SMDH_ARGS "-DROOT=${CMAKE_CURRENT_SOURCE_DIR}/../.." "-DGAME=${CTRPORT_GAME}"
     "-DMODEL=${CTRPORT_TARGET}" "-DGIT_EXECUTABLE=${GIT_EXECUTABLE}")
-set(APP_AUTHOR "Community contributors")
 set(APP_ICON "${CMAKE_CURRENT_SOURCE_DIR}/assets/icon-${GAME_DIR_NAME}-${CTRPORT_TARGET}.png")
 set(APP_BANNER "${CMAKE_CURRENT_SOURCE_DIR}/assets/banner-${GAME_DIR_NAME}-${CTRPORT_TARGET}.png")
 
@@ -2449,7 +2448,7 @@ set(APP_BANNER_AUDIO "${CMAKE_CURRENT_SOURCE_DIR}/assets/banner.wav")
 # helper rewrites its output only when metadata, icon or packaging tool changes.
 add_custom_target(ctrport_smdh
     COMMAND "${CMAKE_COMMAND}" ${CTRPORT_SMDH_ARGS} "-DMODE=3dsx" "-DTOOL=${CTR_SMDHTOOL_EXE}"
-        "-DNAME=${APP_NAME}" "-DAUTHOR=${APP_AUTHOR}" "-DICON=${APP_ICON}"
+        "-DNAME=${APP_NAME}" "-DICON=${APP_ICON}"
         "-DOUT=${CMAKE_CURRENT_BINARY_DIR}/ctrport.smdh" -P "${CTRPORT_SMDH_SCRIPT}"
     BYPRODUCTS "${CMAKE_CURRENT_BINARY_DIR}/ctrport.smdh"
     DEPENDS ctrport_build_id "${APP_ICON}" "${CTRPORT_SMDH_SCRIPT}"
@@ -2546,7 +2545,7 @@ if(MAKEROM_EXE AND BANNERTOOL_EXE)
 
     add_custom_target(ctrport_cia_icon
         COMMAND "${CMAKE_COMMAND}" ${CTRPORT_SMDH_ARGS} "-DMODE=cia" "-DTOOL=${BANNERTOOL_EXE}"
-            "-DNAME=${APP_NAME}" "-DAUTHOR=${APP_AUTHOR}" "-DICON=${APP_ICON}" "-DFLAGS=${CIA_SMDH_FLAGS}"
+            "-DNAME=${APP_NAME}" "-DICON=${APP_ICON}" "-DFLAGS=${CIA_SMDH_FLAGS}"
             "-DOUT=${CMAKE_CURRENT_BINARY_DIR}/ctrport.icn" -P "${CTRPORT_SMDH_SCRIPT}"
         BYPRODUCTS "${CMAKE_CURRENT_BINARY_DIR}/ctrport.icn"
         DEPENDS ctrport_build_id "${APP_ICON}" "${CTRPORT_SMDH_SCRIPT}"

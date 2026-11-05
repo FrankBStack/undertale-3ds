@@ -569,6 +569,15 @@ def source_build(root, game):
     return result
 
 
+def smdh_source(source):
+    """What a source build's HOME Menu publisher line names (R204): the commit it is based on, "-dirty" when git
+    reports changes, as platform/3ds/smdh.cmake reads CTRPORT_SMDH_SOURCE. The mirror has no .git, so without this
+    the line would show the release version. None for a kit's release build."""
+    if source.get('kind') != 'source':
+        return None
+    return source['public_commit'][:7] + ('-dirty' if source.get('git_reports_changes') else '')
+
+
 def source_build_text(source):
     """The one line that tells a player a build is a source build (CLI, dry run, build log and record)."""
     changed = SOURCE_CHANGED if source.get('git_reports_changes') else ''
@@ -1019,6 +1028,22 @@ class Build:
         os.makedirs(os.path.join(self.work, "tools", "bin"), exist_ok=True)
         return version, copied, removed
 
+    def environment(self):
+        """build.sh's environment, after prepare(): the release profile's source link and, for a source build, the
+        commit the HOME Menu publisher line names (a kit's build never carries one, even from a stale shell)."""
+        env = dict(os.environ)
+        env["CTRPORT_CCACHE_DIR"] = os.path.join(self.work, "ccache")
+        env["PYTHONDONTWRITEBYTECODE"] = "1"
+        env["CTRPORT_PYTHON"] = toolchain.python_exe()
+        env = products.release_contract.build_environment(
+            self.product.key, self.release_source['public_commit'], env)
+        env.pop("CTRPORT_SMDH_SOURCE", None)
+        stamp = smdh_source(self.release_source)
+        if stamp:
+            env["CTRPORT_SMDH_SOURCE"] = stamp
+        env.pop("CTRPORT_FILE_PREFIX_MAP", None)
+        return env
+
     def run(self):
         if self.product.key == 'deltarune':
             import chapters
@@ -1034,12 +1059,7 @@ class Build:
             data_dir = products.aot_data_dir(self.product, self.data_dir, os.path.join(self.work, "data"))
         argv = build_argv(self.tc, self.work, self.product.key, self.target, data_dir, self.openh264,
                           platform=self.tc.platform)
-        env = dict(os.environ)
-        env["CTRPORT_CCACHE_DIR"] = os.path.join(self.work, "ccache")
-        env["PYTHONDONTWRITEBYTECODE"] = "1"
-        env["CTRPORT_PYTHON"] = toolchain.python_exe()
-        env = products.release_contract.build_environment(
-            self.product.key, self.release_source['public_commit'], env)
+        env = self.environment()
         compiler = toolchain.compiler_details(self.tc)
         tested = products.release_contract.read(self.source_root)['tested_compiler']
         compiler['tested'] = tested
@@ -1048,7 +1068,6 @@ class Build:
         compiler['warning'] = ('' if compiler['layout_pins'] else
             'Tested with devkitARM GCC %s (%s); found %s (%s), so layout pins are off and performance may differ slightly.' %
             (tested['version'], tested['target'], compiler['version'], compiler['target']))
-        env.pop("CTRPORT_FILE_PREFIX_MAP", None)
         kw = hidden_options(group=True)
         if sys.platform != "win32":
             kw["start_new_session"] = True

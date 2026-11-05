@@ -1,4 +1,9 @@
-"""SMDH identities are packaging metadata; incremental builds must refresh them."""
+"""SMDH identities are packaging metadata; incremental builds must refresh them.
+
+HOME Menu text (maintainer, 2026-11-04): the long description is the game's name, and the publisher line carries the rest:
+"Unofficial port - v<version> - <model>" from a release source tree, "Unofficial port - <label> <commit> - <model>"
+from a Git checkout (label: a stage/candidate tag, else "source build").
+"""
 from pathlib import Path
 import json
 import os
@@ -27,7 +32,8 @@ class SmdhMetadata(unittest.TestCase):
         self.env = dict(os.environ, GIT_CONFIG_NOSYSTEM='1', GIT_CONFIG_GLOBAL=os.devnull,
                         GIT_TERMINAL_PROMPT='0')
         for key in ('GIT_DIR', 'GIT_WORK_TREE', 'GIT_COMMON_DIR', 'GIT_INDEX_FILE', 'GIT_OBJECT_DIRECTORY',
-                    'GIT_ALTERNATE_OBJECT_DIRECTORIES', 'GIT_NAMESPACE', 'CTRPORT_SMDH_BUILD_TAG'):
+                    'GIT_ALTERNATE_OBJECT_DIRECTORIES', 'GIT_NAMESPACE', 'CTRPORT_SMDH_BUILD_TAG',
+                    'CTRPORT_SMDH_SOURCE'):
             self.env.pop(key, None)
 
     def command(self, args, cwd=None, check=True):
@@ -49,11 +55,14 @@ class SmdhMetadata(unittest.TestCase):
         return self.git('rev-parse', '--short=7', 'HEAD')
 
     def query(self, game='undertale', model='o3ds', root=None, check=True):
+        """(description, publisher), or the failed process."""
         output = Path(self.temp.name) / 'description.txt'
+        publisher = Path(self.temp.name) / 'publisher.txt'
         result = self.command(['cmake', '-DROOT=' + str(root or self.root), '-DGAME=' + game,
                                '-DMODEL=' + model, '-DGIT_EXECUTABLE=' + shutil.which('git'),
-                               '-DDESCRIPTION_OUT=' + str(output), '-P', SCRIPT], check=check)
-        return output.read_text() if result.returncode == 0 else result
+                               '-DDESCRIPTION_OUT=' + str(output), '-DPUBLISHER_OUT=' + str(publisher),
+                               '-P', SCRIPT], check=check)
+        return (output.read_text(), publisher.read_text()) if result.returncode == 0 else result
 
     def test_all_player_models_use_contract_version_and_no_parent_identity(self):
         self.commit()
@@ -66,19 +75,76 @@ class SmdhMetadata(unittest.TestCase):
             for model, label in (('o3ds', 'Old 3DS'), ('n3ds', 'New 3DS')):
                 with self.subTest(game=game, model=model):
                     self.assertEqual(self.query(game, model, archive),
-                                     game.upper() + ' for 3DS (port) - ' + version + ' - ' + label)
+                                     (game.upper(), 'Unofficial port - v' + version + ' - ' + label))
+
+    def test_builder_source_identity_names_the_commit_in_a_tree_without_git(self):
+        # R204 F1: the builder mirrors a checkout without .git and passes the commit it read as CTRPORT_SMDH_SOURCE.
+        for value, model, label in (('abc1234', 'o3ds', 'Old 3DS'), ('abc1234-dirty', 'n3ds', 'New 3DS'),
+                                    ('0123456789ab-dirty', 'n3ds', 'New 3DS')):
+            with self.subTest(value=value):
+                self.env['CTRPORT_SMDH_SOURCE'] = value
+                self.assertEqual(self.query('undertale', model),
+                                 ('UNDERTALE', 'Unofficial port - source build ' + value + ' - ' + label))
+        for value in ('release', 'abc123', 'ABC1234', 'abc1234;x', 'abc1234-dirty-dirty', 'abc1234 ', 'a' * 13, 'a' * 40,
+                      'abc1234\n'):
+            with self.subTest(value=value):
+                self.env['CTRPORT_SMDH_SOURCE'] = value
+                failed = self.query(check=False)
+                self.assertNotEqual(failed.returncode, 0)
+                self.assertIn('SMDH source must be a commit', failed.stdout + failed.stderr)
+        # In a Git checkout git itself is the truth; a stale value from the environment is not used.
+        commit = self.commit()
+        self.env['CTRPORT_SMDH_SOURCE'] = 'abc1234'
+        self.assertEqual(self.query()[1], 'Unofficial port - source build ' + commit + ' - Old 3DS')
+
+    def test_a_checkout_git_cannot_read_is_a_source_build_never_the_release(self):
+        # R204 F1: Git missing, or a .git marker git refuses, used to fall back to the release version.
+        self.commit()
+        output = Path(self.temp.name) / 'd.txt'
+        publisher = Path(self.temp.name) / 'p.txt'
+        for git in ('', str(Path(self.temp.name) / 'no such git.exe')):
+            with self.subTest(git=git):
+                self.command(['cmake', '-DROOT=' + str(self.root), '-DGAME=undertale', '-DMODEL=n3ds',
+                              '-DGIT_EXECUTABLE=' + git, '-DDESCRIPTION_OUT=' + str(output),
+                              '-DPUBLISHER_OUT=' + str(publisher), '-P', SCRIPT])
+                self.assertEqual(publisher.read_text(), 'Unofficial port - source build - New 3DS')
+        (self.root / '.git').rename(Path(self.temp.name) / 'moved git')
+        (self.root / '.git').write_text('gitdir: ' + (Path(self.temp.name) / 'missing').as_posix() + '\n')
+        self.assertEqual(self.query(), ('UNDERTALE', 'Unofficial port - source build - Old 3DS'))
+
+    def test_a_dangling_git_link_is_a_source_build_never_the_release(self):
+        # A .git junction or symlink whose target is gone is still a checkout marker, though EXISTS says false: it
+        # must never fall back to the release version, nor take a builder identity meant for a tree without .git.
+        target = Path(self.temp.name) / 'gone git'
+        target.mkdir()
+        link = self.root / '.git'
+        try:
+            if sys.platform == 'win32':
+                import _winapi
+                _winapi.CreateJunction(str(target), str(link))
+            else:
+                os.symlink(target, link, target_is_directory=True)
+        except OSError as error:
+            self.skipTest('cannot make a directory link here: %s' % error)
+        self.addCleanup(lambda: os.path.lexists(link) and (os.rmdir if sys.platform == 'win32' else os.unlink)(link))
+        target.rmdir()
+        self.assertFalse(link.exists())
+        self.assertTrue(os.path.lexists(link))
+        self.assertEqual(self.query(), ('UNDERTALE', 'Unofficial port - source build - Old 3DS'))
+        self.env['CTRPORT_SMDH_SOURCE'] = 'abc1234'
+        self.assertEqual(self.query(model='n3ds'), ('UNDERTALE', 'Unofficial port - source build - New 3DS'))
 
     def test_lab_label_and_commit_follow_incremental_changes(self):
         first = self.commit()
         self.env['CTRPORT_SMDH_BUILD_TAG'] = 'stage73'
-        self.assertTrue(self.query().endswith(' - stage73 ' + first))
+        self.assertEqual(self.query(), ('UNDERTALE', 'Unofficial port - stage73 ' + first + ' - Old 3DS'))
         (self.root / 'VERSION').write_text('1.0.0\n')
-        self.assertIn('1.0.0 - Old 3DS - stage73 ' + first + '-dirty', self.query())
+        self.assertEqual(self.query()[1], 'Unofficial port - stage73 ' + first + '-dirty - Old 3DS')
         second = self.commit()
         self.assertNotEqual(first, second)
-        self.assertTrue(self.query().endswith(' - stage73 ' + second))
+        self.assertEqual(self.query()[1], 'Unofficial port - stage73 ' + second + ' - Old 3DS')
         self.env['CTRPORT_SMDH_BUILD_TAG'] = 'cand27'
-        self.assertTrue(self.query().endswith(' - cand27 ' + second))
+        self.assertEqual(self.query('undertale', 'n3ds'), ('UNDERTALE', 'Unofficial port - cand27 ' + second + ' - New 3DS'))
 
     def foreign_repository(self):
         foreign = Path(self.temp.name) / 'foreign repository'
@@ -105,7 +171,7 @@ class SmdhMetadata(unittest.TestCase):
                 shutil.move(self.root / '.git', metadata)
                 (self.root / '.git').write_text('gitdir: ' + metadata.as_posix() + '\n')
             with self.subTest(marker=marker):
-                self.assertTrue(self.query().endswith(' - stage73 ' + commit))
+                self.assertEqual(self.query()[1], 'Unofficial port - stage73 ' + commit + ' - Old 3DS')
                 self.assertEqual(self.env['GIT_DIR'], str(foreign / '.git'))
 
     def test_exported_builder_with_foreign_git_dir_keeps_player_description(self):
@@ -142,10 +208,12 @@ assert not (source/'.git').exists()
 for game in ('undertale','deltarune'):
     for model in ('o3ds','n3ds'):
         output=work/(game+'-'+model+'.txt')
+        publisher=work/(game+'-'+model+'-publisher.txt')
         subprocess.run([sys.argv[3],'-DROOT='+str(source),'-DGAME='+game,'-DMODEL='+model,
-            '-DGIT_EXECUTABLE='+sys.argv[4],'-DDESCRIPTION_OUT='+str(output),'-P',
+            '-DGIT_EXECUTABLE='+sys.argv[4],'-DDESCRIPTION_OUT='+str(output),'-DPUBLISHER_OUT='+str(publisher),'-P',
             str(source/'platform/3ds/smdh.cmake')],check=True,stdin=subprocess.DEVNULL,timeout=20)
         print(output.read_text())
+        print(publisher.read_text())
 '''
         self.env.update(GIT_DIR=str(foreign / '.git'), CTRPORT_SMDH_BUILD_TAG='cand28')
         version = (archive / 'VERSION').read_text().strip()
@@ -159,9 +227,61 @@ for game in ('undertale','deltarune'):
                 result = self.command([sys.executable, '-I', '-B', '-c', child, archive, work,
                                        shutil.which('cmake'), shutil.which('git')])
                 self.assertEqual(result.stdout.splitlines(), [
-                    game.upper() + ' for 3DS (port) - ' + version + ' - ' + label
+                    line
                     for game in ('undertale', 'deltarune')
-                    for label in ('Old 3DS', 'New 3DS')])
+                    for label in ('Old 3DS', 'New 3DS')
+                    for line in (game.upper(), 'Unofficial port - v' + version + ' - ' + label)])
+
+    def test_exported_builder_from_a_source_checkout_names_its_commit(self):
+        # R204 F1, end to end: the exported builder run from a Git checkout (no release descriptor) mirrors it
+        # without .git; the environment Build.run gives build.sh makes the production SMDH helper name the commit.
+        sys.path[:0] = [str(ROOT / 'tools/release'), str(ROOT / 'tools/release/builder')]
+        import package_builder
+        archive = Path(self.temp.name) / 'checkout of the public source'
+        for name, data in package_builder.inputs(ROOT, 'undertale').items():
+            path = archive / name
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(data)
+        self.command(['git', 'init', '-q'], cwd=archive)
+        self.command(['git', '-c', 'core.autocrlf=false', 'add', '.'], cwd=archive)
+        self.command(['git', '-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.invalid',
+                      '-c', 'commit.gpgsign=false', 'commit', '-qm', 'Invented checkout'], cwd=archive)
+        commit = self.command(['git', 'rev-parse', 'HEAD'], cwd=archive).stdout.strip()
+        child = r'''
+from pathlib import Path
+from types import SimpleNamespace
+import subprocess,sys
+archive,work=map(Path,sys.argv[1:3])
+sys.path.insert(0,str(archive/'tools/release/builder'))
+import pipeline,products
+assert Path(pipeline.__file__).resolve().is_relative_to(archive.resolve())
+assert not (archive/products.release_contract.DESCRIPTOR).exists()
+job=pipeline.Build(products.PRODUCTS['undertale'],SimpleNamespace(),str(work),'o3ds',str(work/'unused-game'),
+                   source_root=str(archive))
+job.prepare()
+assert job.release_source['kind']=='source'
+source=work/'src'
+assert not (source/'.git').exists()
+env=job.environment()
+for model in ('o3ds','n3ds'):
+    output=work/(model+'.txt'); publisher=work/(model+'-publisher.txt')
+    subprocess.run([sys.argv[3],'-DROOT='+str(source),'-DGAME=undertale','-DMODEL='+model,
+        '-DGIT_EXECUTABLE='+sys.argv[4],'-DDESCRIPTION_OUT='+str(output),'-DPUBLISHER_OUT='+str(publisher),'-P',
+        str(source/'platform/3ds/smdh.cmake')],check=True,stdin=subprocess.DEVNULL,timeout=20,env=env)
+    print(output.read_text())
+    print(publisher.read_text())
+'''
+        for dirty in (False, True):
+            if dirty:
+                (archive / 'untracked fixture.txt').write_text('An added file is a local change.\n')
+            with self.subTest(dirty=dirty):
+                work = Path(self.temp.name) / ('source-work-' + str(dirty))
+                result = self.command([sys.executable, '-I', '-B', '-c', child, archive, work,
+                                       shutil.which('cmake'), shutil.which('git')])
+                stamp = commit[:7] + ('-dirty' if dirty else '')
+                self.assertEqual(result.stdout.splitlines(), [
+                    'UNDERTALE', 'Unofficial port - source build ' + stamp + ' - Old 3DS',
+                    'UNDERTALE', 'Unofficial port - source build ' + stamp + ' - New 3DS'])
 
     def test_foreign_build_id_stops_before_artifact_collection(self):
         foreign = self.foreign_repository()
@@ -199,11 +319,13 @@ for game in ('undertale','deltarune'):
 
     def test_exact_tag_auto_detection_and_lab_fallback(self):
         commit = self.commit()
-        self.assertTrue(self.query().endswith(' - lab ' + commit))
+        self.assertEqual(self.query(), ('UNDERTALE', 'Unofficial port - source build ' + commit + ' - Old 3DS'))
+        self.assertEqual(self.query('deltarune', 'n3ds'),
+                         ('DELTARUNE', 'Unofficial port - source build ' + commit + ' - New 3DS'))
         self.git('tag', 'stage73')
-        self.assertTrue(self.query().endswith(' - stage73 ' + commit))
+        self.assertEqual(self.query()[1], 'Unofficial port - stage73 ' + commit + ' - Old 3DS')
         self.env['CTRPORT_SMDH_BUILD_TAG'] = 'cand27'
-        self.assertTrue(self.query().endswith(' - cand27 ' + commit))
+        self.assertEqual(self.query()[1], 'Unofficial port - cand27 ' + commit + ' - Old 3DS')
 
     def test_rejects_overflow_and_injected_labels(self):
         self.commit()
@@ -211,12 +333,22 @@ for game in ('undertale','deltarune'):
             with self.subTest(label=label):
                 self.env['CTRPORT_SMDH_BUILD_TAG'] = label
                 self.assertNotEqual(self.query(check=False).returncode, 0)
+        # The publisher holds 63 characters: "Unofficial port - " + label + " " + commit + " - New 3DS".
+        longest = 'stage1' + 'a' * (63 - len('Unofficial port -  1234567 - New 3DS') - 6)
+        self.env['CTRPORT_SMDH_BUILD_TAG'] = longest
+        self.assertEqual(len(self.query('undertale', 'n3ds')[1]), 63)
+        self.env['CTRPORT_SMDH_BUILD_TAG'] = longest + 'a'
+        failed = self.query('undertale', 'n3ds', check=False)
+        self.assertNotEqual(failed.returncode, 0)
+        self.assertIn('publisher exceeds 63 characters', failed.stdout + failed.stderr)
 
     def test_build_rules_keep_titles_icons_author_and_refresh_both_formats(self):
         text = (ROOT / 'platform/3ds/CMakeLists.txt').read_text()
-        self.assertIn('set(APP_NAME "undertale-3ds")', text)
+        self.assertIn('set(APP_NAME "UNDERTALE")', text)
         self.assertIn('set(APP_NAME "deltarune-3ds (unofficial)")', text)
-        self.assertIn('set(APP_AUTHOR "Community contributors")', text)
+        # The publisher line is smdh.cmake's own (unofficial port, version or source, model).
+        self.assertNotIn('APP_AUTHOR', text)
+        self.assertNotIn('Community contributors', text)
         self.assertIn('assets/icon-${GAME_DIR_NAME}-${CTRPORT_TARGET}.png', text)
         self.assertNotIn('GameMaker runner (Butterscotch)', text)
         self.assertIn('add_dependencies(ctrport_3dsx legal_texts ctrport_smdh)', text)
@@ -230,23 +362,23 @@ for game in ('undertale','deltarune'):
         icon = ROOT / 'platform/3ds/assets/icon-undertale-o3ds.png'
         args = ['cmake', '-DROOT=' + str(self.root), '-DGAME=undertale', '-DMODEL=o3ds',
                 '-DGIT_EXECUTABLE=' + shutil.which('git'), '-DMODE=3dsx',
-                '-DTOOL=' + shutil.which('smdhtool'), '-DNAME=undertale-3ds',
-                '-DAUTHOR=Community contributors', '-DICON=' + str(icon), '-DOUT=' + str(out), '-P', SCRIPT]
+                '-DTOOL=' + shutil.which('smdhtool'), '-DNAME=UNDERTALE',
+                '-DICON=' + str(icon), '-DOUT=' + str(out), '-P', SCRIPT]
         self.command(args)
         raw = out.read_bytes()
         self.assertEqual(raw[:4], b'SMDH')
         def title(data, offset, length):
             return data[offset:offset+length].decode('utf-16le').split('\0')[0]
-        self.assertEqual(title(raw, 8, 128), 'undertale-3ds')
-        self.assertTrue(title(raw, 136, 256).endswith('stage73 ' + commit))
-        self.assertEqual(title(raw, 392, 128), 'Community contributors')
+        self.assertEqual(title(raw, 8, 128), 'UNDERTALE')
+        self.assertEqual(title(raw, 136, 256), 'UNDERTALE')
+        self.assertEqual(title(raw, 392, 128), 'Unofficial port - stage73 ' + commit + ' - Old 3DS')
         before = out.stat().st_mtime_ns
         self.command(args)
         self.assertEqual(out.stat().st_mtime_ns, before)
         self.env['CTRPORT_SMDH_BUILD_TAG'] = 'cand27'
         self.command(args)
         changed = out.read_bytes()
-        self.assertTrue(title(changed, 136, 256).endswith('cand27 ' + commit))
+        self.assertEqual(title(changed, 392, 128), 'Unofficial port - cand27 ' + commit + ' - Old 3DS')
         self.assertEqual(raw[0x2008:], changed[0x2008:])
         # Corrupt output must be repaired even if inputs still match the stamp.
         out.write_bytes(b'broken')

@@ -65,6 +65,11 @@ PALETTE = (b"\0\0\0\0", b"\xff\xff\xff\xff", b"\xff\0\0\xff")
 UT_EXE_SIZE = 4136960
 UT_EXE_SHA256 = "c8c4191026bf5587a6fad120855b8b82ffb4fa0c3eaf10515be472ad84248e58"
 UT_ICON_SHA256 = "17627228a14a62c099da418e399f581400fefd956dacc2fde2587a0dd299f818"
+# The HOME Menu hover sound (maintainer, 2026-11-04): the save point's chime, 0.57 s in both games. It must be a short sound
+# embedded in the player's data (UNDERTALE: data.win; DELTARUNE: chapter 1's audiogroup1.dat) as 16-bit PCM WAV;
+# anything longer than HOME_SOUND_MAX_SECONDS is refused (the HOME Menu plays a banner sound of about 3 s at most).
+HOME_SOUND = "snd_save"
+HOME_SOUND_MAX_SECONDS = 3.0
 
 
 def pe_icon(data):
@@ -273,6 +278,17 @@ def steam_art(game, kind, roots, tex3ds, work, specs=CACHE_ART, decoder=decode_c
     return None, {"source": "player data"}
 
 
+def pcm_bytes(wav):
+    """The size the RIFF data chunk declares, or -1 when the chunk is missing or runs past the end of the file."""
+    pos = 12
+    while pos + 8 <= len(wav):
+        size = struct.unpack_from("<I", wav, pos + 4)[0]
+        if wav[pos:pos + 4] == b"data":
+            return size if pos + 8 + size <= len(wav) else -1
+        pos += 8 + size + (size & 1)
+    return -1
+
+
 class RuntimeArt:
     """Bounded, read-only FORM reader. Texture pages are decoded lazily; never reads save files."""
     def __init__(self, path):
@@ -421,10 +437,10 @@ class RuntimeArt:
         return trim(Image(width, height, bytes(mask)))
 
     def sound(self):
-        ptr = self.named(b"SOND", "snd_select")
+        ptr = self.named(b"SOND", HOME_SOUND)
         group, index = struct.unpack_from("<2i", self.data, ptr + 28)
         if group < 0 or index < 0:
-            raise ArtError("Missing snd_select audio")
+            raise ArtError("Missing %s audio" % HOME_SOUND)
         if group:
             with RuntimeArt(self.path.with_name("audiogroup%d.dat" % group)) as audio:
                 return audio.audio(index)
@@ -434,14 +450,21 @@ class RuntimeArt:
         ptr = self.pointers(b"AUDO")[index]
         start, chunk_size = self.chunks[b"AUDO"]
         if not start <= ptr < start + chunk_size - 4:
-            raise ArtError("Invalid snd_select audio pointer")
+            raise ArtError("Invalid %s audio pointer" % HOME_SOUND)
         size = self.u32(ptr)
         if not 0 < size <= 8 * 1024 * 1024 or ptr + 4 + size > start + chunk_size:
-            raise ArtError("Invalid snd_select audio")
+            raise ArtError("Invalid %s audio" % HOME_SOUND)
         data = self.data[ptr + 4:ptr + 4 + size]
         with wave.open(io.BytesIO(data)) as wav:
             if wav.getcomptype() != "NONE" or wav.getsampwidth() != 2 or wav.getnchannels() not in (1, 2):
-                raise ArtError("Unsupported snd_select audio")
+                raise ArtError("Unsupported %s audio" % HOME_SOUND)
+            if wav.getframerate() <= 0 or wav.getnframes() > wav.getframerate() * HOME_SOUND_MAX_SECONDS:
+                raise ArtError("%s is longer than %g s" % (HOME_SOUND, HOME_SOUND_MAX_SECONDS))
+            # The headers are not the sound (R204): every declared sample frame must be there, whole.
+            frame = 2 * wav.getnchannels()
+            if (wav.getnframes() <= 0 or pcm_bytes(data) != wav.getnframes() * frame
+                    or len(wav.readframes(wav.getnframes())) != wav.getnframes() * frame):
+                raise ArtError("Invalid %s audio" % HOME_SOUND)
         return data
 
 
@@ -531,7 +554,7 @@ def generate(game, data_dir, destination, tex3ds, roots=None, specs=CACHE_ART, d
                 result[kind] = info
             sound = runtime.sound()
             (destination / "banner.wav").write_bytes(sound)
-            result["sound"] = {"source": "player data", "name": "snd_select", "sha256": hashlib.sha256(sound).hexdigest()}
+            result["sound"] = {"source": "player data", "name": HOME_SOUND, "sha256": hashlib.sha256(sound).hexdigest()}
     except (ValueError, KeyError, IndexError, struct.error, zlib.error, EOFError, wave.Error) as exc:
         raise ArtError("Could not read HOME Menu art from your game. Verify the game files and try again.") from exc
     (destination / "home-art.json").write_text(json.dumps(result, indent=2) + "\n", encoding="utf-8")

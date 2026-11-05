@@ -1,6 +1,13 @@
 # Packaging metadata only: never include this file in a compiler command.
-# Lab builds may set CTRPORT_SMDH_BUILD_TAG=stage73 (or cand27) in the environment.
-# An exact candidate/stage Git tag is used automatically; other checkouts say lab.
+# HOME Menu text (maintainer, 2026-11-04: "trim the name down"): the long description is the game's name; the publisher
+# line says what this is: "Unofficial port - v<version> - <model>" only for a release tree (no .git, and no source
+# identity from the builder), else "Unofficial port - <label> <commit> - <model>", which says which source it was
+# built from. An unofficial source build never shows the release version (R204):
+# - a Git checkout: git's own commit and status. Lab builds may set CTRPORT_SMDH_BUILD_TAG=stage73 (or cand27); an
+#   exact candidate/stage tag is used automatically; other checkouts say "source build". A checkout git can't read
+#   (no git, a .git git refuses, or a .git link whose target is gone) says "source build" with no commit.
+# - the builder run from a checkout: its mirror has no .git, so the builder passes the commit it read (and
+#   "-dirty") as CTRPORT_SMDH_SOURCE. In a Git checkout git wins over that variable.
 # Always query Git at build time, so an incremental build follows HEAD too.
 get_filename_component(ROOT "${ROOT}" ABSOLUTE)
 include("${CMAKE_CURRENT_LIST_DIR}/release_contract.cmake")
@@ -13,7 +20,29 @@ set(model_name "Old 3DS")
 if(MODEL STREQUAL "n3ds")
     set(model_name "New 3DS")
 endif()
-set(description "${game_name} for 3DS (port) - ${RELEASE_VERSION} - ${model_name}")
+set(description "${game_name}")
+set(build "v${RELEASE_VERSION}")
+# EXISTS is false for a .git junction or symlink whose target is gone; that is still a checkout marker.
+set(checkout_marker FALSE)
+if(EXISTS "${ROOT}/.git" OR IS_SYMLINK "${ROOT}/.git")
+    set(checkout_marker TRUE)
+endif()
+if(NOT checkout_marker AND DEFINED ENV{CTRPORT_SMDH_SOURCE})
+    set(source "$ENV{CTRPORT_SMDH_SOURCE}")
+    if(NOT source MATCHES "^[0-9a-f]+(-dirty)?$")
+        message(FATAL_ERROR "SMDH source must be a commit (7 to 12 lowercase hex, optional -dirty)")
+    endif()
+    string(REGEX REPLACE "-dirty$" "" source_commit "${source}")
+    string(LENGTH "${source_commit}" length)
+    # git's short form; 12 characters plus "-dirty" still fit the publisher line.
+    if(length LESS 7 OR length GREATER 12)
+        message(FATAL_ERROR "SMDH source must be a commit (7 to 12 lowercase hex, optional -dirty)")
+    endif()
+    set(build "source build ${source}")
+elseif(checkout_marker)
+    # A checkout is a source build even when git can't say which commit it is.
+    set(build "source build")
+endif()
 if(GIT_EXECUTABLE AND EXISTS "${ROOT}/.git")
     # Only this source tree's directory/worktree marker permits a lab stamp.
     # Inherited Git redirection can report the current directory as the top
@@ -52,7 +81,7 @@ if(GIT_EXECUTABLE AND EXISTS "${ROOT}/.git")
             endforeach()
         endif()
         if(NOT label)
-            set(label "lab")
+            set(label "source build")
         endif()
         execute_process(COMMAND "${GIT_EXECUTABLE}" status --porcelain --untracked-files=no WORKING_DIRECTORY "${ROOT}"
             RESULT_VARIABLE status_result OUTPUT_VARIABLE changes OUTPUT_STRIP_TRAILING_WHITESPACE ERROR_QUIET TIMEOUT 10)
@@ -62,16 +91,24 @@ if(GIT_EXECUTABLE AND EXISTS "${ROOT}/.git")
         if(changes)
             string(APPEND commit "-dirty")
         endif()
-        string(APPEND description " - ${label} ${commit}")
+        set(build "${label} ${commit}")
     endif()
 endif()
-# All description components are ASCII. SMDH has 128 UTF-16 code units including NUL.
+set(publisher "Unofficial port - ${build} - ${model_name}")
+# All components are ASCII. SMDH has 128 UTF-16 code units for the description and 64 for the publisher, NULs included.
 string(LENGTH "${description}" length)
 if(length GREATER 127)
     message(FATAL_ERROR "SMDH description exceeds 127 characters")
 endif()
+string(LENGTH "${publisher}" length)
+if(length GREATER 63)
+    message(FATAL_ERROR "SMDH publisher exceeds 63 characters: ${publisher}")
+endif()
 if(DESCRIPTION_OUT)
     file(WRITE "${DESCRIPTION_OUT}" "${description}")
+    if(PUBLISHER_OUT)
+        file(WRITE "${PUBLISHER_OUT}" "${publisher}")
+    endif()
     return()
 endif()
 if(NOT MODE MATCHES "^(3dsx|cia)$")
@@ -79,7 +116,7 @@ if(NOT MODE MATCHES "^(3dsx|cia)$")
 endif()
 file(SHA256 "${ICON}" icon_hash)
 file(SHA256 "${TOOL}" tool_hash)
-string(SHA256 fingerprint "${MODE}|${NAME}|${description}|${AUTHOR}|${icon_hash}|${tool_hash}|${FLAGS}")
+string(SHA256 fingerprint "${MODE}|${NAME}|${description}|${publisher}|${icon_hash}|${tool_hash}|${FLAGS}")
 set(previous "")
 if(EXISTS "${OUT}" AND EXISTS "${OUT}.stamp")
     file(SHA256 "${OUT}" output_hash)
@@ -89,9 +126,9 @@ if(EXISTS "${OUT}" AND EXISTS "${OUT}.stamp")
     endif()
 endif()
 if(MODE STREQUAL "3dsx")
-    set(args --create "${NAME}" "${description}" "${AUTHOR}" "${ICON}" "${OUT}.part")
+    set(args --create "${NAME}" "${description}" "${publisher}" "${ICON}" "${OUT}.part")
 else()
-    set(args makesmdh -s "${NAME}" -l "${description}" -p "${AUTHOR}" -i "${ICON}" -f "${FLAGS}" -o "${OUT}.part")
+    set(args makesmdh -s "${NAME}" -l "${description}" -p "${publisher}" -i "${ICON}" -f "${FLAGS}" -o "${OUT}.part")
 endif()
 execute_process(COMMAND "${TOOL}" ${args} RESULT_VARIABLE result TIMEOUT 60)
 if(NOT result EQUAL 0)
