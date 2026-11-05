@@ -3279,7 +3279,10 @@ if(CTRPORT_GAME STREQUAL "undertale")
         COMPILE_OPTIONS "-Os;-fno-merge-constants;-fno-tree-switch-conversion;-fno-jump-tables")
     set_property(SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/source/z_utold_contblack.c" APPEND PROPERTY
         COMPILE_DEFINITIONS __real_Btnprompt_registerAll=CtrUtWindow_register)
-    set_property(SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/source/z_freebies.c" APPEND PROPERTY
+    # The room change reaches the real function from ctr_loadaudio_mix.inc (CtrLoadmix_handleRoomChange, included by
+    # ctr_audio_system.c) since loadaudio 76dd8ab09; on z_freebies.c this define was dead and the window hooks never
+    # installed (UT-036 regression, zq47). tools/analysis/test_utwindow_chain.py checks it stays on the caller.
+    set_property(SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/source/ctr_audio_system.c" APPEND PROPERTY
         COMPILE_DEFINITIONS __real_Runner_handlePendingRoomChange=CtrUtWindow_pendingRoom)
 endif()
 
