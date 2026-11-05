@@ -156,7 +156,7 @@
     {
       "member": "platform/3ds/source/ctr_benchmark.c",
       "class": "engine-lookups",
-      "sha256": "4a8c94602f9654e16eedf6f752c9f5ccafc17dd3cd08e14c27b4f74221c6dc94",
+      "sha256": "38655f578a9268c961e08bf7e35e21998d31030faf181b9d19aa1a536643f0ed",
       "justification": "Room, object and script lookup names select harness setup in player data.",
       "evidence_sha256": [
         "2b5bc4fa300c8eb091e9e80ba7df656563bd895c75a5e7b06f4a4104ea59a29b"
@@ -210,7 +210,7 @@
     {
       "member": "platform/3ds/source/main.c",
       "class": "engine-lookups",
-      "sha256": "5ede9da31e11420e87672b6b78e4f1b884fc4b20ebf690c6d3c455f87da52cfc",
+      "sha256": "c84ce75411131aa390cabfaf5e5b80b05e40e39c6b5670c2155603bed0d4f24e",
       "justification": "Intro and title room names select startup rooms in player data.",
       "evidence_sha256": [
         "beff7c970aaeadca3f94aedfe4901d446f31340c60d5b22c361461f1f3cc2cdc"
@@ -264,7 +264,7 @@
     {
       "member": "platform/3ds/source/ctr_argui.c",
       "class": "engine-lookups",
-      "sha256": "3abd8dd938fd1909337a64a7036146f36213d523d5902d96c16ae43750178041",
+      "sha256": "7df52cd51127901f966680d9e42b4ee37e7ea30abe00d7a069b86dce5e1d49c5",
       "justification": "Sound and sprite names select player-owned assets for the ports menu.",
       "evidence_sha256": [
         "b291957bba88a74d17ab4095454e6e9a3189d316481440f59df566a2938d9439"
@@ -426,7 +426,7 @@
     {
       "member": "platform/3ds/source/ctr_file_system.c",
       "class": "engine-symbols",
-      "sha256": "6160e1ddc18387e3d001dbb412fd7d9655fc80331b8a449c284be4aec2eb64a6",
+      "sha256": "d0a5182eae5000d0382d9c9840915319c0ae3e0024b12b82dbd52839bf2c2048",
       "justification": "Reviewed parser limits, format fields, settings or upstream APIs; prefix overlap is not a game asset.",
       "evidence_sha256": [
         "f4d8d125c95da0a3abfeea00ec7c1aa4076cb9f819c965d9049f51802a090640"

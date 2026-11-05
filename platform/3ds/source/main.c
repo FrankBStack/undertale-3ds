@@ -1082,8 +1082,8 @@ startGame:
         CtrRenderer_startFlickerProbe(renderer, launch.flickerProbe, "--flicker-probe");
     CtrDisplaySettings display;
     CtrDisplay_defaults(&display);
-    CtrDisplay_load(&display, SETTINGS_PATH, CtrRenderer_getDisplayCaps(renderer));
-    applyIniOverrides(&display, CtrRenderer_getDisplayCaps(renderer), session.loadCount == 1);
+    CtrDisplay_load(&display, SETTINGS_PATH, CtrRenderer_capsAuditfixh(renderer));
+    applyIniOverrides(&display, CtrRenderer_capsAuditfixh(renderer), session.loadCount == 1);
     CtrBtnprompt_setDisplay(renderer, &display);
     logInfo("Display: top %s, drawing %s, 3D %s, smoothing %s, bottom %s\n", CtrDisplay_topModeName(display.topMode),
             CtrDisplay_drawingName(display.drawing), CtrDisplay_stereoModeName(display.stereoMode), CtrDisplay_smoothingName(display.smoothing),
@@ -1344,7 +1344,7 @@ startGame:
         if (openMenu) {
             CtrLog_setConsoleEnabled(false);
             displayAtMenuOpen = display;
-            CtrMenu_open(&menu, &menuConsole, &display, CtrRenderer_getDisplayCaps(renderer));
+            CtrMenu_open(&menu, &menuConsole, &display, CtrRenderer_capsAuditfixh(renderer));
             down = 0; // the release that opened it isn't a menu input
         } else if (menu.open) {
             CtrMenuAction action = CtrMenu_update(&menu, down);
@@ -1353,7 +1353,7 @@ startGame:
             } else if (action == MENU_ACTION_RESUME || action == MENU_ACTION_QUIT || action == MENU_ACTION_PERF_TEST) {
                 if (menu.edited) {
                     // Only the menu's changes: settings given with --ini stay for this run.
-                    CtrBtnprompt_saveEdits(&displayAtMenuOpen, &display, SETTINGS_PATH, CtrRenderer_getDisplayCaps(renderer));
+                    CtrBtnprompt_saveEdits(&displayAtMenuOpen, &display, SETTINGS_PATH, CtrRenderer_capsAuditfixh(renderer));
                     logInfo("Display settings saved to %s\n", SETTINGS_PATH);
                 }
                 CtrMenu_close(&menu);
@@ -1370,7 +1370,7 @@ startGame:
         }
         if (autopauseLeft < 0 && arrlen(autopause) >= 2 && autopause[0] == runner->frameCount && !menu.open) {
             displayAtMenuOpen = display;
-            CtrMenu_open(&menu, &menuConsole, &display, CtrRenderer_getDisplayCaps(renderer));
+            CtrMenu_open(&menu, &menuConsole, &display, CtrRenderer_capsAuditfixh(renderer));
             autopauseLeft = autopause[1] > 2 ? autopause[1] : 2;
             logInfo("Menu opened as scheduled (%s)\n", AUTOPAUSE_PATH);
         }
@@ -2311,3 +2311,6 @@ __attribute__((noinline, noipa, used, section(".text.gsfix_late"))) void CtrScre
     CtrLog_endConsole();
 }
 #endif
+
+// z_overlayread.c fail-stops through the error screen (R195b): a global name for it, no code.
+__asm__(".globl CtrMain_fatalScreen\n.set CtrMain_fatalScreen, fatalScreen");

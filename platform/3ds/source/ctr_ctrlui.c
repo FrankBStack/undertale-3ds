@@ -219,7 +219,7 @@ CTL_CODE CtrMenuAction CtrCtrlui_update(CtrMenu* menu, u32 down) {
         menu->page = MENU_PAGE_OPTIONS; // optmenu draws its page this frame (optKeys marked it)
         return MENU_ACTION_NONE;
     }
-    u32 folded = down | ((down >> 24) & 0xF0u); // the Circle Pad and C-stick as the D-pad, as in optKeys
+    u32 folded = CTR_MENU_FOLD(down); // the Circle Pad and C-stick as the D-pad, as in optKeys
     uint32_t i = ctl.row;
     if (folded & (KEY_DUP | KEY_DDOWN)) {
         do {

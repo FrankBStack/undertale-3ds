@@ -358,4 +358,12 @@ void CtrVtchain_note(const void* renderer, const void* outer, const void* under,
 #define CTR_VTCHAIN_NOTE(renderer, outer, under, who)
 #endif
 
+// The caps query may reinstall snap hooks. Under the hash, target the table below
+// the hash wrapper rather than capturing its callbacks as their own originals.
+#if defined(ENABLE_WAD16)
+CtrDisplayCaps CtrRenderer_capsAuditfixh(Renderer* renderer);
+#else
+#define CtrRenderer_capsAuditfixh CtrRenderer_getDisplayCaps
+#endif
+
 #endif

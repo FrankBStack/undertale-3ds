@@ -1052,3 +1052,9 @@ platform/3ds/source/z_symkeep.c
 platform/3ds/source/z_credfail.c
 # sleepflush (auditfixe SCOURS2-005, auditfixe3 R178 F1): the save flush before sleep and the HOME Menu, with its deadline
 platform/3ds/source/z_sleepflush.c
+# hashmenu (auditfixh item 8): the cold caps query preserves state-hash/snap callback ownership
+platform/3ds/source/z_hashmenu.c
+# wrapfix (auditfixe SCOURT2-001): draw_text_ext keeps a too-wide word whole on one line, as on PC (UT; empty in DR)
+platform/3ds/source/z_wrapfix.c
+# overlayread (auditfixe3 SCOURSOL3-002): the overlay file system's whole-file reads fail unless complete
+platform/3ds/source/z_overlayread.c

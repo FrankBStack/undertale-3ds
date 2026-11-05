@@ -30,6 +30,8 @@
 #line 27
 #include "ctr_log.h"
 #include "ctr_renderer.h"
+#include "ctr_menu.h"
+#line 29
 
 #include "ctr_benchromfs.h"
 #include "ctr_build_id.h" // CTRPORT_COMMIT
@@ -2246,11 +2248,11 @@ CtrBenchFrame CtrBench_beginFrame(u32 down, double frameMs) {
                 return BENCH_FRAME_RUN;
             }
             bool redraw = false;
-            if (down & (KEY_DUP | KEY_CPAD_UP)) {
+            if (down & (KEY_DUP | CTR_MENU_PAD_UP)) {
                 bench.cursor = (bench.cursor + count - 1) % count;
                 redraw = true;
             }
-            if (down & (KEY_DDOWN | KEY_CPAD_DOWN)) {
+            if (down & (KEY_DDOWN | CTR_MENU_PAD_DOWN)) {
                 bench.cursor = (bench.cursor + 1) % count;
                 redraw = true;
             }
@@ -2273,11 +2275,11 @@ CtrBenchFrame CtrBench_beginFrame(u32 down, double frameMs) {
         case PHASE_RESULTS: {
             int32_t n = (int32_t) arrlen(bench.results);
             bool redraw = false;
-            if ((down & (KEY_DUP | KEY_CPAD_UP)) && n > 0) {
+            if ((down & (KEY_DUP | CTR_MENU_PAD_UP)) && n > 0) {
                 bench.cursor = (bench.cursor + n - 1) % n;
                 redraw = true;
             }
-            if ((down & (KEY_DDOWN | KEY_CPAD_DOWN)) && n > 0) {
+            if ((down & (KEY_DDOWN | CTR_MENU_PAD_DOWN)) && n > 0) {
                 bench.cursor = (bench.cursor + 1) % n;
                 redraw = true;
             }

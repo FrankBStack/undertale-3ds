@@ -801,3 +801,15 @@ __attribute__((noinline, section(".text.late.utkill"))) void StateHash_runDraw(i
 #endif
 }
 #endif
+
+// auditfixh: only the cold menu caps query uses this selector. Keep the outer
+// hash table active for drawing, including copies made by the text renderer.
+#if defined(PLATFORM_3DS) && defined(ENABLE_WAD16)
+__attribute__((noinline, optimize("Os"), section(".text.late.auditfixh")))
+RendererVtable* StateHash_menuTable(Renderer* renderer) {
+    RendererVtable* outer = renderer->vtable;
+    if (outer->beginView == w_beginView && g_originalVtable != nullptr)
+        return (RendererVtable*) g_originalVtable;
+    return outer;
+}
+#endif

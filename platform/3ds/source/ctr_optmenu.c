@@ -1094,7 +1094,7 @@ OPT_STATIC CtrMenuAction optActivate(CtrMenu* menu, uint32_t i, int32_t dir) {
 }
 
 OPT_STATIC CtrMenuAction optKeys(CtrMenu* menu, u32 down) {
-    u32 folded = down | ((down >> 24) & 0xF0u);
+    u32 folded = CTR_MENU_FOLD(down);
     if (folded & 0xFFu) optSound((folded & 0xC0u) == 0);
     opt.dirty = true;
     if (CtrLegal_shown()) {

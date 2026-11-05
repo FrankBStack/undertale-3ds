@@ -545,17 +545,17 @@ LATE CTR_COLD_OS CtrMenuAction __wrap_CtrMenu_update(CtrMenu* menu, u32 down) {
 
     CtrMenuAction action = MENU_ACTION_NONE;
     bool redraw = false;
-    if (down & (KEY_DUP | KEY_CPAD_UP)) {
+    if (down & (KEY_DUP | CTR_MENU_PAD_UP)) {
         menu->cursor = (menu->cursor + ITEM_COUNT - 1) % ITEM_COUNT;
         redraw = true;
     }
-    if (down & (KEY_DDOWN | KEY_CPAD_DOWN)) {
+    if (down & (KEY_DDOWN | CTR_MENU_PAD_DOWN)) {
         menu->cursor = (menu->cursor + 1) % ITEM_COUNT;
         redraw = true;
     }
     int32_t dir = 0;
-    if (down & (KEY_DRIGHT | KEY_CPAD_RIGHT)) dir = 1;
-    if (down & (KEY_DLEFT | KEY_CPAD_LEFT)) dir = -1;
+    if (down & (KEY_DRIGHT | CTR_MENU_PAD_RIGHT)) dir = 1;
+    if (down & (KEY_DLEFT | CTR_MENU_PAD_LEFT)) dir = -1;
     if (menu->cursor == ITEM_LEGAL && (dir != 0 || (down & KEY_A))) {
         CtrLegal_open(menu);
         return MENU_ACTION_NONE;

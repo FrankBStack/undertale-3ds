@@ -481,7 +481,7 @@ ARGUI_CODE void CtrArgui_menuClose(CtrMenu* menu) {
 
 ARGUI_CODE CtrMenuAction CtrArgui_menuUpdate(CtrMenu* menu, u32 down) {
     if (!menu->open || down == 0) return MENU_ACTION_NONE;
-    u32 folded = down | ((down >> 24) & 0xF0u);
+    u32 folded = CTR_MENU_FOLD(down);
     int32_t cur = menu->cursor;
     bool onOpts = menu->page == MENU_PAGE_OPTIONS && !CtrLegal_shown();
     CtrMenuAction action = MENU_ACTION_NONE;

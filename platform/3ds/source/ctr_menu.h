@@ -49,4 +49,33 @@ void CtrArgui_menuClose(CtrMenu* menu);
 #define CtrMenu_close CtrArgui_menuClose
 #endif
 
+// libctru places C-stick directions four bits below the Circle Pad's directions.
+// Keep Old 3DS and DELTARUNE's existing input/code unchanged.
+#if defined(ENABLE_WAD16) && defined(CTRPORT_TARGET_N3DS)
+#define CTR_MENU_PAD_RIGHT (KEY_CPAD_RIGHT | KEY_CSTICK_RIGHT)
+#define CTR_MENU_PAD_LEFT (KEY_CPAD_LEFT | KEY_CSTICK_LEFT)
+#define CTR_MENU_PAD_UP (KEY_CPAD_UP | KEY_CSTICK_UP)
+#define CTR_MENU_PAD_DOWN (KEY_CPAD_DOWN | KEY_CSTICK_DOWN)
+#if defined(__arm__)
+// Three ARM instructions, as in the old Circle Pad fold: retain the menu bodies' slots.
+static inline __attribute__((always_inline)) u32 CtrMenu_fold(u32 down) {
+    u32 folded;
+    __asm__("orr %0, %1, %1, lsl #4\n\t"
+            "and %0, %0, #0xf0000000\n\t"
+            "orr %0, %1, %0, lsr #24"
+            : "=&r" (folded) : "r" (down));
+    return folded;
+}
+#define CTR_MENU_FOLD(down) CtrMenu_fold(down)
+#else
+#define CTR_MENU_FOLD(down) ((down) | ((((down) | ((down) << 4)) & 0xF0000000u) >> 24))
+#endif
+#else
+#define CTR_MENU_PAD_RIGHT KEY_CPAD_RIGHT
+#define CTR_MENU_PAD_LEFT KEY_CPAD_LEFT
+#define CTR_MENU_PAD_UP KEY_CPAD_UP
+#define CTR_MENU_PAD_DOWN KEY_CPAD_DOWN
+#define CTR_MENU_FOLD(down) ((down) | (((down) >> 24) & 0xF0u))
+#endif
+
 #endif

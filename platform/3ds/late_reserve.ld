@@ -502,7 +502,7 @@ SECTIONS
     *(.text.late.utasgore)
     /* Any other late text (round 14 dropped the wildcard ahead of the host table: it placed nothing). Not
        ctr_renderer.c's or z_itemverdict.c's, whose smartcut sections come last (round 17). */
-    *(SORT_BY_NAME(EXCLUDE_FILE (*z_utlife.o *z_dlghold.o *z_redpix.o *z_labcut.o *ctr_fpsbox.o *ctr_legal.o *ctr_legal_romfs.o *z_colexact.o *z_utwindow.o *z_asrtext* *z_adpcm* *ctr_adpcm_probe.o *source/ctr_audio_system.o *z_knightnew_history.o *source/z_flowcode.o *ctr_data_version.o *z_gogut* *ctr_pixgrid* *z_builderx_review* *z_builderx_new* *z_builderx_old* *z_builderx_receipt* *runner.o *z_loadscreen.o *z_symverdict* *z_smalltext_dr* *z_utstall* *z_sdmigrate* *source/ctr_renderer.o *source/z_itemverdict.o *z_phaseplan* *z_utold_scalar* *source/ctr_benchmark.o *z_sdlat* *vm_builtins.o *z_gamedir* *ctr_flowervramg_promotion.o *ctr_memory.o *ctr_flowervramg_palette.o *ctr_textures.o) .text.late.*))
+    *(SORT_BY_NAME(EXCLUDE_FILE (*z_utlife.o *z_dlghold.o *z_redpix.o *z_labcut.o *ctr_fpsbox.o *ctr_legal.o *ctr_legal_romfs.o *z_colexact.o *z_utwindow.o *z_asrtext* *z_adpcm* *ctr_adpcm_probe.o *source/ctr_audio_system.o *z_knightnew_history.o *source/z_flowcode.o *ctr_data_version.o *z_gogut* *ctr_pixgrid* *z_builderx_review* *z_builderx_new* *z_builderx_old* *z_builderx_receipt* *runner.o *z_loadscreen.o *z_symverdict* *z_smalltext_dr* *z_utstall* *z_sdmigrate* *source/ctr_renderer.o *source/z_itemverdict.o *z_phaseplan* *z_utold_scalar* *source/ctr_benchmark.o *z_sdlat* *vm_builtins.o *z_gamedir* *ctr_flowervramg_promotion.o *ctr_memory.o *ctr_flowervramg_palette.o *ctr_textures.o *z_hashmenu.o *state_hash.o) .text.late.*))
     /* builderx UT-only adapters, after every round-14 fixed section. DR excludes this object. */
     *z_builderx_review*(.text .text.* .rodata .rodata.*)
     *(.text.h1hole.bxreview)
@@ -1471,6 +1471,23 @@ SECTIONS
        keeps its bytes but the hook's call target. Appended. */
     *(.rodata_sleepflush)
     *(.text_sleepflush_r2)
+    /* auditfixh (after dndrel, merge order; UNDERTALE only): the menu's caps query under the state hash. */
+    *(.text.late.auditfixh)
+    /* wrapfix (auditfixe SCOURT2-001, after credfail, merge order; UNDERTALE, empty in DELTARUNE): draw_text_ext's
+       copy whose wrap keeps a too-wide word whole, and UtKill_registerAll's wrap that registers it (z_wrapfix.c,
+       reached through --wrap), its name, then that file's out-of-line copies of header functions; appended. */
+    *(.text_wrapfix)
+    *(.rodata.wrapfix_in_text)
+    *z_wrapfix.o(.text .text.* .rodata .rodata.*)
+    /* overlayread (auditfixe3, SCOURSOL3-002, after sleepflush r2; both games): the overlay file system's checked
+       whole-file readers and the OverlayFileSystem_create wrap (z_overlayread.c, reached through
+       -Wl,--wrap=OverlayFileSystem_create), then its one message (a named array, not a mergeable string). Appended. */
+    *(.text_overlayread)
+    *(.rodata_overlayread)
+    *z_overlayread.o(.text .text.* .rodata .rodata.*)
+    /* overlayread R195c (auditfixe3): ctr_file_system.c's CtrFileSystem_readStrict, readWhole for
+       z_overlayread.c's CtrFileSystem_readWhole (readSaveFile's and readIndexed's whole-file read). Appended. */
+    *(.text_overlayread_fs)
     /* gogut (GOG UNDERTALE only, empty in every Steam and DELTARUNE build; moved here by integrate21 zq44g, betasmoke
        R2-B2): GOG's own late code (z_gogut.c, ctr_renderer.c's Smart texel and font-folder helpers, ctr_pixgrid.c's
        data check), then its constants. It sat after round 16 (and ctr_renderer.o's .text.late.* line took most of it
@@ -2335,6 +2352,12 @@ SECTIONS
     /* sleepflush (auditfixe SCOURS2-005, after inisafe, merge order; both games): its file system pointer, hook
        cookie and flag (z_sleepflush.c). */
     *(.bss.sleepflush_late)
+    /* wrapfix (auditfixe SCOURT2-001, after symkeep, merge order; UNDERTALE): the draw_text_ext builtin it
+       replaced (z_wrapfix.c). */
+    *(.bss.wrapfix_late)
+    /* overlayread (auditfixe3, SCOURSOL3-002, after sleepflush; both games): its copy of the overlay vtable and
+       the original's address (z_overlayread.c). */
+    *(.bss.overlayread_late)
     /* 3dsxtool refuses a segment whose size isn't a multiple of 4 ("The segments is not word-aligned!"), and this
        block ends the RW segment: late statics of odd sizes (bools) would end it off a word. */
     . = ALIGN(4);

@@ -1215,6 +1215,14 @@ if(CTRPORT_PLAYER_SHOTS AND CTRPORT_TARGET STREQUAL "o3ds")
     string(REPLACE "__late_text_limit = ALIGN(__late_text_start, 0x1000) +" "__late_text_limit = ALIGN(__late_text_start, 0x1000) + 0x1000 +"
            CTRPORT_LATE_LD_TEXT "${CTRPORT_LATE_LD_TEXT}")
 endif()
+# DELTARUNE Old, every build (review decision, integrate21 zq47, 2026-11-04): one more 4 KiB page of late code. zq46 left
+# DELTARUNE Old 860 B there, and auditfixe3's overlay reads (z_overlayread.c, R195b/c/d: a save that is there is never
+# read as missing, both games) need 2,079 B. DELTARUNE is parked: its .rodata, .data and .bss move by one page and its
+# heap is 4 KB smaller; DELTARUNE measurements are re-baselined. UNDERTALE and DELTARUNE New are unchanged.
+if(CTRPORT_GAME STREQUAL "deltarune" AND CTRPORT_TARGET STREQUAL "o3ds")
+    string(REPLACE "__late_text_limit = ALIGN(__late_text_start, 0x1000) +" "__late_text_limit = ALIGN(__late_text_start, 0x1000) + 0x1000 +"
+           CTRPORT_LATE_LD_TEXT "${CTRPORT_LATE_LD_TEXT}")
+endif()
 file(WRITE "${CTRPORT_LATE_LD}.new" "${CTRPORT_LATE_LD_TEXT}")
 configure_file("${CTRPORT_LATE_LD}.new" "${CTRPORT_LATE_LD}" COPYONLY)
 set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${CTRPORT_LATE_LD_SOURCE}")
@@ -1540,6 +1548,15 @@ endif()
 # sleepflush (change auditfixe, SCOURS2-005): z_sleepflush.c adds an APT hook at the first CtrFileSystem_create that
 # flushes the save queue before the console sleeps or the HOME Menu opens.
 target_link_options(ctrport PRIVATE -Wl,--wrap=CtrFileSystem_create,--wrap=CtrFileSystem_destroy)
+# wrapfix (change auditfixe, SCOURT2-001): z_wrapfix.c points draw_text_ext at a copy whose wrap keeps every letter of a
+# word wider than the width and runs it past the width, as GameMaker 1.4 on PC does, once UtKill_registerAll (in
+# VM_create's builtin chain, called from z_utflames.c) ends.
+if(CTRPORT_GAME STREQUAL "undertale")
+    target_link_options(ctrport PRIVATE -Wl,--wrap=UtKill_registerAll)
+endif()
+# overlayread (change auditfixe3, SCOURSOL3-002): z_overlayread.c gives every overlay file system whole-file readers
+# that fail unless they read the whole file (ctr_file_system.c's and main.c's OverlayFileSystem_create calls).
+target_link_options(ctrport PRIVATE -Wl,--wrap=OverlayFileSystem_create)
 # Timestamp logs from before libctru service/heap setup, retaining its r0 argument.
 target_link_options(ctrport PRIVATE -Wl,--wrap=__libctru_init)
 # ctr_frame_pacer.c holds citro3d's screen flips for the vblank that ends each frame's slot.

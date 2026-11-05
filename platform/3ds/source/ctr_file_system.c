@@ -229,7 +229,7 @@ static bool readSaveFile(CtrFileSystem* cfs, const char* rel, const char* lkey, 
         return true;
     }
     char* full = joinDir(cfs->saveDir, rel);
-    bool ok = readWhole(full, INT32_MAX, outData, outSize);
+    bool ok = CtrFileSystem_readWhole(full, INT32_MAX, outData, outSize); // R195c: missing only if gone
     free(full);
     if (ok) cachePut(cfs, lkey, copyWithNul(*outData, *outSize), *outSize);
     return ok;
@@ -550,7 +550,7 @@ static bool readIndexed(CtrFileSystem* cfs, const char* key, bool* outOk, uint8_
         ok = readSaveFile(cfs, rel, lkey, outData, outSize);
     } else if (where == LOOKUP_BUNDLE && !knownMissing(cfs, key)) {
         char* full = joinDir(cfs->bundleDir, rel);
-        ok = readWhole(full, INT32_MAX, outData, outSize);
+        ok = CtrFileSystem_readWhole(full, INT32_MAX, outData, outSize); // R195c: missing only if gone
         free(full);
         shput(cfs->exists, key, ok);
     }
@@ -1049,4 +1049,18 @@ SLEEPFLUSH_FS_CODE int CtrFileSystem_flushBy(FileSystem* fs, uint64_t deadline) 
     int left = (int) arrlen(cfs->queue);
     LightLock_Unlock(&cfs->lock);
     return left;
+}
+
+// overlayread (change auditfixe3, R195c): readWhole for z_overlayread.c's CtrFileSystem_readWhole, which readSaveFile and
+// readIndexed call instead of readWhole (an external call: a call to a function of this file would change the order
+// GCC emits this file's functions in, and with it every later address). This keeps readWhole's callers as many as
+// before, so it stays out of line, with INT32_MAX as readSaveFile and readIndexed passed it (its maxSize range). Late
+// (late_reserve.ld).
+#ifdef __3DS__
+#define OVERLAYREAD_FS_CODE __attribute__((noinline, section(".text_overlayread_fs")))
+#else
+#define OVERLAYREAD_FS_CODE __attribute__((noinline))
+#endif
+OVERLAYREAD_FS_CODE bool CtrFileSystem_readStrict(const char* fullPath, uint8_t** outData, int32_t* outSize) {
+    return readWhole(fullPath, INT32_MAX, outData, outSize);
 }

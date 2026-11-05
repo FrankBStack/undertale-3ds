@@ -223,14 +223,14 @@ static LATE_CODE CTR_COLD_OS CtrMenuAction updateLegal(CtrMenu* menu, u32 down) 
             legal.page = 0;
             drawViewer(menu);
         }
-    } else if (down & (KEY_DUP | KEY_DDOWN | KEY_CPAD_UP | KEY_CPAD_DOWN)) {
+    } else if (down & (KEY_DUP | KEY_DDOWN | CTR_MENU_PAD_UP | CTR_MENU_PAD_DOWN)) {
         legal.document = 1 - legal.document;
         legal.page = 0;
         drawViewer(menu);
-    } else if (down & (KEY_DLEFT | KEY_CPAD_LEFT)) {
+    } else if (down & (KEY_DLEFT | CTR_MENU_PAD_LEFT)) {
         if (legal.page > 0) legal.page--;
         drawViewer(menu);
-    } else if (down & (KEY_DRIGHT | KEY_CPAD_RIGHT)) {
+    } else if (down & (KEY_DRIGHT | CTR_MENU_PAD_RIGHT)) {
         if (legal.page + 1 < legal.pages) legal.page++;
         drawViewer(menu);
     }
@@ -262,8 +262,8 @@ LATE_CODE CtrMenuAction CtrLegal_retiredMenuUpdate(CtrMenu* menu, u32 down) {
         return action;
     }
     if (down & (KEY_SELECT | KEY_B)) return MENU_ACTION_RESUME;
-    const u32 previous = KEY_DUP | KEY_CPAD_UP;
-    const u32 next = KEY_DDOWN | KEY_CPAD_DOWN;
+    const u32 previous = KEY_DUP | CTR_MENU_PAD_UP;
+    const u32 next = KEY_DDOWN | CTR_MENU_PAD_DOWN;
     if (down & (previous | next)) {
         int at = cursor(menu);
         if (down & previous) at = (at + MENU_ITEMS - 1) % MENU_ITEMS;
@@ -271,7 +271,7 @@ LATE_CODE CtrMenuAction CtrLegal_retiredMenuUpdate(CtrMenu* menu, u32 down) {
         legal.selected = at == LEGAL_ITEM;
         menu->cursor = at > LEGAL_ITEM ? at - 1 : at;
     }
-    if (legal.selected && (down & (KEY_A | KEY_DLEFT | KEY_DRIGHT | KEY_CPAD_LEFT | KEY_CPAD_RIGHT))) {
+    if (legal.selected && (down & (KEY_A | KEY_DLEFT | KEY_DRIGHT | CTR_MENU_PAD_LEFT | CTR_MENU_PAD_RIGHT))) {
         legal.active = true;
         legal.document = -1;
         drawSummary(menu);
@@ -364,10 +364,10 @@ enum { LUI_ROWS = 13, LUI_TOP = 30, LUI_PITCH = 14, LUI_COLS = CTR_RELEASE_LEGAL
 #define LUI_GREY 0x8410u
 #define LUI_LIGHT 0xC618u
 #define LUI_RED 0xF800u
-#define LUI_UP (KEY_DUP | KEY_CPAD_UP)
-#define LUI_DOWN (KEY_DDOWN | KEY_CPAD_DOWN)
-#define LUI_PREV (KEY_DLEFT | KEY_CPAD_LEFT)
-#define LUI_NEXT (KEY_DRIGHT | KEY_CPAD_RIGHT)
+#define LUI_UP (KEY_DUP | CTR_MENU_PAD_UP)
+#define LUI_DOWN (KEY_DDOWN | CTR_MENU_PAD_DOWN)
+#define LUI_PREV (KEY_DLEFT | CTR_MENU_PAD_LEFT)
+#define LUI_NEXT (KEY_DRIGHT | CTR_MENU_PAD_RIGHT)
 #define LUI_MOVE (LUI_UP | LUI_DOWN | LUI_PREV | LUI_NEXT)
 
 static struct {

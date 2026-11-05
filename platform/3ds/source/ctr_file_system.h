@@ -37,3 +37,9 @@ void CtrFileSystem_flush(FileSystem* fs);
 // how many writes are still queued: 0 when all are done (written, or given up on with CtrSave_failed set); otherwise
 // the deadline came first, and they stay queued and are written after it.
 int CtrFileSystem_flushBy(FileSystem* fs, uint64_t deadline);
+// R195c (z_overlayread.c): readSaveFile's and readIndexed's read: readWhole, then z_overlayread.c's reader if that
+// fails. The whole file at fullPath with a NUL after it; false only when it isn't there. On the main thread a file
+// that is there but can't be read whole stops the game.
+bool CtrFileSystem_readWhole(const char* fullPath, int32_t maxSize, uint8_t** outData, int32_t* outSize);
+// R195c (ctr_file_system.c): readWhole itself, strict (false on any failure, errno as it left it), maxSize INT32_MAX.
+bool CtrFileSystem_readStrict(const char* fullPath, uint8_t** outData, int32_t* outSize);
