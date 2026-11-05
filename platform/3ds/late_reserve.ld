@@ -1512,6 +1512,17 @@ SECTIONS
        painter with the look-ahead wrap and the pixel bound (z_argcrash.c's end; SCOURS4-005's gate is parked). Named outside .text.late.*; appended, so .text.late.argcrash keeps its
        size and every symbol its place (RULES 3adf7ac34). */
     *(.text_argcrashfix)
+    /* utfade (utfade, after overlayread R195c; UNDERTALE only, empty in DELTARUNE): a door's room change
+       shows black while the room loads: the room change link (z_utfade.c) and the pacer's black (ctr_frame_pacer.c's
+       end), then z_utfade.c's out-of-line copies of header functions (none expected). Its two object names are late
+       constants (.rodata.utfade_late). Appended. */
+    *(.text_utfade)
+    *z_utfade.o(.text .text.*)
+    /* datarefuse (auditfixe, playblocker #8, after argcrashfix, merge order; UNDERTALE only, empty in DELTARUNE): main.c's
+       data-version notice (z_datarefuse.c, reached through a compile definition on main.c). Since R243b only the
+       44 B slot R215 had here: a branch to the code in .text_datarefuse_warn, after GOG's below, so GOG's late code
+       keeps its addresses. */
+    *(.text_datarefuse)
     /* gogut (GOG UNDERTALE only, empty in every Steam and DELTARUNE build; moved here by integrate21 zq44g, betasmoke
        R2-B2): GOG's own late code (z_gogut.c, ctr_renderer.c's Smart texel and font-folder helpers, ctr_pixgrid.c's
        data check), then its constants. It sat after round 16 (and ctr_renderer.o's .text.late.* line took most of it
@@ -1519,10 +1530,26 @@ SECTIONS
        5,146 B there pushed relprep and asgborder past their limits, and no release build of GOG UNDERTALE linked on
        the Old 3DS. Here, after every fixed hole, the layout up to the holes is Steam's; GOG's two extra late pages
        take the code. Named .text_gogut, outside .text.late.*, so no catch-all or per-file late line takes it first
-       (tools/release/test_gogut_late_order.py pins both). Later appends go above this block, so GOG's other late
-       code keeps the Steam addresses too (empty in Steam, so moving it there moves nothing). */
+       (tools/release/test_gogut_late_order.py pins both). Later appends go AFTER this block (lead ruling 11-05):
+       dlgtop and utfade A follow it, so code put above it would move them in Steam builds and every GOG late
+       symbol in GOG builds. Each new unit appends at the end of late text, before the repack test pair, and adds
+       its input to test_gogut_late_order.py's AFTER_GOGUT (or AFTER_GOGUT_OWNERS for a per-object catch-all). In
+       GOG builds the inputs after this block sit gogut's size later than in Steam; nothing before it moves. */
     *(.text_gogut)
     *(.rodata.gogut_in_text)
+    /* dlgtop UT-only cold loading helpers, after all release inputs. */
+    *(.text.late.dlgtop)
+    *(.rodata.late.dlgtop)
+    /* utfade A (utfade, after dlgtop, the last release input, merge order; UNDERTALE Old only, empty elsewhere):
+       a door's destination read during its fade-out (z_btlentry.c's end), then its object names and log lines. Named
+       outside .text.late.* and .rodata.* so no catch-all takes them; appended, so no earlier late code moves. */
+    *(.text_utfadea)
+    *(.rodata.utfadea_in_text)
+    /* datarefuse warn (auditfixe R243b, after gogut and utfade A; UNDERTALE only, empty in DELTARUNE): the data.win warning, the
+       crash and hang reports' UNSUPPORTED line and the offkill bypass (z_datarefuse.c; its old slot is above). After
+       GOG's code so every GOG late address stays; its address differs between Steam and GOG builds. */
+    *(.text_datarefuse_warn)
+    *z_datarefuse.o(.text .text.*)
     /* repack test install (repacka, 11-02; build.sh repacktest= test builds only, empty in every release build):
        diag/ctr_repack_test.c's code and constants, last, so a test build keeps every late address of the release
        build. Keep these two lines last in late text. */
@@ -1761,6 +1788,17 @@ SECTIONS
        trace formats (the two it shares with KM rev 4.1 stay in rev 4.1's place). Every earlier late constant
        keeps its address. */
     *(.rodata.pacer_km5_late)
+    /* utfade (utfade, last, after KM rev 5; UNDERTALE only): the two object names (z_utfade.c), then its other
+       constants (none expected). */
+    *(.rodata.utfade_late)
+    *z_utfade.o(.rodata .rodata.*)
+    /* datarefuse (auditfixe, last, after KM rev 5, merge order; UNDERTALE only): R215's two constants, the
+       read-error stop's message and the mismatch stop's never-read placeholder (z_datarefuse.c). Every earlier late
+       constant keeps its address. */
+    *(.rodata.datarefuse_late)
+    /* datarefuse warn (R243b): the warning's text and the UNSUPPORTED line's format, after R215's two. */
+    *(.rodata.datarefuse_warn)
+    *z_datarefuse.o(.rodata .rodata.*)
     __late_rodata_end = ABSOLUTE(.);
   }
   /* 8 KiB (at first 4 KiB): late code's constants are mostly log formats; heapfrag's are 472 B, and
@@ -2391,6 +2429,16 @@ SECTIONS
     /* argcrashfix (auditfixe2 SCOURS4-005 R188e, parked for 1.0, so empty; after codeverify, merge order;
        both games): the crash-screen gate's state (z_argcrash.c's end; named outside .bss.late.* so the catch-alls leave it here). */
     *(.bss.argcrashfix_late)
+    /* utfade (utfade, after overlayread; UNDERTALE only): z_utfade.c's statics (none in release builds; the
+       probe's flag in utfadeprobe test builds). */
+    *z_utfade.o(.bss .bss.* COMMON)
+    /* utfade A (utfade, after utfade; UNDERTALE Old only): the doors' object indices and the door's read-ahead
+       (z_btlentry.c's end; named outside .bss.late.* so the catch-alls leave it here). */
+    *(.bss.utfadea_late)
+    /* datarefuse warn (auditfixe R215c, last, after utfade A, merge order; UNDERTALE only): the unsupported
+       data.win's line for crash and hang reports, and the warning test's frame count in its test builds
+       (z_datarefuse.c). */
+    *(.bss.datarefuse_late)
     /* 3dsxtool refuses a segment whose size isn't a multiple of 4 ("The segments is not word-aligned!"), and this
        block ends the RW segment: late statics of odd sizes (bools) would end it off a word. */
     . = ALIGN(4);

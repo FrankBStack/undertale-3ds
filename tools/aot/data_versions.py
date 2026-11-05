@@ -63,3 +63,70 @@ def check_folder(game, folder, cache_folder):
         cache_file.write_text(json.dumps(cache, indent=2) + "\n", encoding="utf-8")
     except OSError:
         pass  # Optional cache; the next build hashes again if it could not be saved.
+
+
+# datarefuse (playblocker #8, maintainer 11-04: "we shouldnt accept modified game files, it should work with the steam and
+# gog copies"): build.sh's gate for UNDERTALE. A data.win that isn't one of the table's UNDERTALE rows (Steam, its
+# macOS file, GOG) stops the build. A known one gives its size, which build.sh passes to CMake (CTRPORT_DATA_SIZE):
+# the 3DS build then knows only that row, so the console refuses any other data.win, another known copy included
+# (the RomFS tables, offkill's object numbers among them, are made from this file).
+BUILD_INPUT_REFUSED = 2
+BUILD_INPUT_NO_DATA = 3
+
+
+def build_input(game, data, cache_folder, out=None, err=None):
+    """(exit code, size or None) for build.sh: 0 known, 2 refused (message on err), 3 no data folder found."""
+    import sys
+    out = out or sys.stdout
+    err = err or sys.stderr
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    import prepare  # prepare imports this module; import it only here
+    folder = prepare.find_data(game, data)
+    if not folder:
+        return BUILD_INPUT_NO_DATA, None
+    path = Path(folder) / "data.win"
+    revision, known = load_table()
+    cache_file = Path(cache_folder) / "data_versions.json"
+    try:
+        cache = json.loads(cache_file.read_text(encoding="utf-8"))
+        if not isinstance(cache, dict): cache = {}
+    except (OSError, ValueError):
+        cache = {}
+    # Always a full hash (under a second on a PC), never the saved cache: its size/date match would let through a
+    # same-size edit that kept the file's date. The fresh result still goes into the saved cache for check_folder.
+    fresh = {}
+    try:
+        good, _, digest = check_file(path, game, "root", revision, known, fresh)
+    except OSError as error:
+        print(f"Refusing to build: could not read {path} ({error}).\n"
+              "Check that the game folder is readable, verify the game files in Steam or GOG Galaxy, "
+              "then build again.", file=err)
+        return BUILD_INPUT_REFUSED, None
+    cache.update(fresh)
+    try:
+        cache_file.parent.mkdir(parents=True, exist_ok=True)
+        cache_file.write_text(json.dumps(cache, indent=2) + "\n", encoding="utf-8")
+    except OSError:
+        pass  # Optional cache, as in check_folder.
+    if not good:
+        print(f"Refusing to build: {path} is not an unmodified Steam or GOG copy of {game.upper()} "
+              f"(SHA-256 {digest}).\n"
+              "Modified or translated game files aren't supported. Verify the game files in Steam or GOG Galaxy "
+              "(or reinstall the game), then build again.", file=err)
+        return BUILD_INPUT_REFUSED, None
+    # The size of the row the hashed bytes matched, not a later stat of a file that may have changed since.
+    size = next(row[2] for row in known if row[:2] == (game, "root") and row[3] == digest)
+    print(f"Data version: {game}/root known (table {revision}, hashed); "
+          f"verified build input: {size} bytes; other data.win files are unsupported", file=err)
+    print(size, file=out)
+    return 0, size
+
+
+if __name__ == "__main__":
+    import argparse
+    parser = argparse.ArgumentParser(description="build.sh's data.win gate (prints the build input's size)")
+    parser.add_argument("--build-input", choices=["undertale"], required=True)
+    parser.add_argument("--data")
+    parser.add_argument("--cache", required=True)
+    args = parser.parse_args()
+    raise SystemExit(build_input(args.build_input, args.data, args.cache)[0])

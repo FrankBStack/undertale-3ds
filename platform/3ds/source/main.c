@@ -635,7 +635,11 @@ static void checkDataVersion(const CtrGameSession* session) {
     char kind[100];
     if (result == CTR_DATA_UNKNOWN) snprintf(kind, sizeof(kind), "Unknown data.win (%s)", digest);
     else snprintf(kind, sizeof(kind), "Could not verify data.win");
+#ifdef ENABLE_WAD16 // UNDERTALE warns or stops in the call below (z_datarefuse.c); same length: nothing moves
+    logWarn("%s: %s; data.win not verified\n", kind, session->dataWinPath);
+#else
     logWarn("%s: %s; continuing is allowed\n", kind, session->dataWinPath);
+#endif
     CtrNotice_report(kind, session->dataWinPath,
                      "This file version has not been checked.\nIt may work; you can continue.\nIf it fails, verify your PC game files\nand copy data.win again.");
     if (CtrNotice_pending) setupNotices(nullptr);
@@ -1788,10 +1792,36 @@ extern bool CtrScreens_consolesOnTop; // ctr_screens.c
 void CtrScreens_moveConsoles(bool top);
 void CtrScreens_flushConsoles(void); Result CtrScreens_noteConsoles(const void* fb, u32 bytes); // z_pacerflush.c
 
-// Moves the stats and log consoles to the screen without the game, that screen blank, RGB565 and single buffered
-// (the renderer's move): 50 columns on the top screen, 40 on the bottom. The menu's console stays on the bottom
-// screen. While the game is there, what it prints (the menu, a test's screens, as they open) goes to the top
-// screen's other buffer, unseen, and shows once the game has moved up for it.
+// Moves the stats and log consoles to the screen without the game: blank, RGB565 and single buffered
+// (the renderer's move), 50 columns on top or 40 on bottom. With the game below, UNDERTALE points the
+// 40-column menu at the shown top buffer, making setup notices and fatal errors visible there.
+// DELTARUNE keeps the menu on the unseen spare until the game moves up for it.
+#ifdef ENABLE_WAD16
+SCREENS_LATE CTR_COLD_OS void CtrScreens_moveConsoles(bool top) {
+    extern PrintConsole screensStats __asm__("statsConsole");
+    extern PrintConsole screensLog __asm__("logConsole");
+    extern PrintConsole screensMenu __asm__("menuConsole");
+    gfxScreen_t screen = top ? GFX_TOP : GFX_BOTTOM;
+    u16 w = 0, h = 0;
+    u16* shown = (u16*) CtrPacer_shownFramebuffer(screen, GFX_LEFT, &w, &h);
+    gfxSetDoubleBuffering(screen, false);
+    int columns = top ? 50 : 40;
+    screensStats.frameBuffer = screensLog.frameBuffer = shown;
+    screensStats.consoleWidth = screensLog.consoleWidth = columns;
+    consoleSetWindow(&screensStats, 1, 1, columns, STATS_CONSOLE_ROWS);
+    consoleSetWindow(&screensLog, 1, STATS_CONSOLE_ROWS + 1, columns, BOTTOM_CONSOLE_ROWS - STATS_CONSOLE_ROWS);
+    if (top) {
+        screensMenu.frameBuffer = shown;
+
+    } else {
+        size_t bytes = (size_t) GSP_SCREEN_WIDTH * GSP_SCREEN_HEIGHT_BOTTOM * 2u;
+        if (screensMenu.frameBuffer != shown) memcpy(shown, screensMenu.frameBuffer, bytes);
+        screensMenu.frameBuffer = shown;
+        GSPGPU_FlushDataCache(shown, (u32) bytes);
+    }
+    CtrScreens_consolesOnTop = top;
+}
+#else
 SCREENS_LATE CTR_COLD_OS void CtrScreens_moveConsoles(bool top) {
     extern PrintConsole screensStats __asm__("statsConsole");
     extern PrintConsole screensLog __asm__("logConsole");
@@ -1816,6 +1846,9 @@ SCREENS_LATE CTR_COLD_OS void CtrScreens_moveConsoles(bool top) {
     }
     CtrScreens_consolesOnTop = top;
 }
+#endif
+#line 1818
+
 
 // The consoles draw into their framebuffer with the CPU: on the top screen, flushBottomScreen writes it back for the
 // LCD at the frame's end while they show; here, each frame's start, z_pacerflush.c only notes where they are.
@@ -2045,6 +2078,25 @@ static void bootcapStart(void);
 
 // main's CtrSdMigrate_run, before the log's first line (the loading screen's, before the consoles, does nothing). It
 // returns the stub's status as given.
+#ifdef ENABLE_WAD16
+BOOTLOG_LATE BOOTLOG_OS int CtrBootlog_hide(int status) {
+    gfxScreen_t screen = CtrScreens_consolesOnTop ? GFX_TOP : GFX_BOTTOM; extern PrintConsole bootStats __asm__("statsConsole");
+    extern PrintConsole bootLog __asm__("logConsole");
+    if (bootlog.looked || bootStats.frameBuffer == nullptr || gfxGetScreenFormat(screen) != GSP_RGB565_OES) return status;
+    u16 w = 0, h = 0;
+    u16* shown = (u16*) CtrPacer_shownFramebuffer(screen, GFX_LEFT, &w, &h);
+    extern u8* Loadgame_consoleBack(gfxScreen_t, gfx3dSide_t); u16* hidden = (u16*) Loadgame_consoleBack(screen, GFX_LEFT);
+    // shownFramebuffer enables double buffering; the cold helper restores the consoles' single buffer.
+    if (shown != nullptr && hidden != nullptr && hidden != shown && bootStats.frameBuffer == shown && bootLog.frameBuffer == shown) {
+        bootlog.bytes = (u32) w * h * 2u;
+        memset(hidden, 0, bootlog.bytes); // as consoleInit cleared the shown one
+        bootlog.shown = shown;
+        bootlog.hidden = hidden;
+        bootStats.frameBuffer = bootLog.frameBuffer = hidden;
+    }
+    return status;
+}
+#else
 BOOTLOG_LATE BOOTLOG_OS int CtrBootlog_hide(int status) {
     extern PrintConsole bootStats __asm__("statsConsole");
     extern PrintConsole bootLog __asm__("logConsole");
@@ -2062,6 +2114,9 @@ BOOTLOG_LATE BOOTLOG_OS int CtrBootlog_hide(int status) {
     }
     return status;
 }
+#endif
+#line 2064
+
 
 // The renderer's move of the consoles (to the top screen with the game on the bottom one) while they print unseen:
 // they go on unseen there, into their own buffer, as large as the top screen's (the larger). Without the memory they
@@ -2314,3 +2369,23 @@ __attribute__((noinline, noipa, used, section(".text.gsfix_late"))) void CtrScre
 
 // z_overlayread.c fail-stops through the error screen (R195b): a global name for it, no code.
 __asm__(".globl CtrMain_fatalScreen\n.set CtrMain_fatalScreen, fatalScreen");
+
+#ifdef ENABLE_WAD16
+// Pointer identity survives additions/reordering of consoleInit calls. The menu
+// prints/copies a 320 px page; stats/log alone use 50 columns on the top LCD.
+PrintConsole* __real_consoleInit(gfxScreen_t, PrintConsole*);
+extern bool CtrScreens_onBottom;
+__attribute__((noinline, noipa, section(".text.late.dlgtop")))
+PrintConsole* __wrap_consoleInit(gfxScreen_t screen, PrintConsole* console) {
+    PrintConsole* result = __real_consoleInit(CtrScreens_onBottom ? GFX_TOP : screen, console);
+    if (console == &menuConsole) {
+        result->consoleWidth = result->windowWidth = 40;
+        if (CtrScreens_onBottom) {
+            CtrScreens_moveConsoles(true);
+            CtrScreens_flushConsoles();
+        }
+    }
+    return result;
+}
+
+#endif

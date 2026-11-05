@@ -4,6 +4,15 @@ Approved: content SHA-256 plus stable sprite/frame identity (10-23). The 49 entr
 Steam's coarse verdict. Validate the complete profile against the measured GOG container before emitting
 an optional 257-byte DTFV trailer. Any mismatch omits the entire trailer; ordinary GOG analysis remains.
 Atlas coordinates are used only to read a decoded crop, never to select its verdict.
+
+The profile's item_entries (gogqa, 11-05) give the item-verdict table (itemverdict.py's .dtiv) Steam's 10-byte entry
+for 59 GOG items whose art is Steam's, decoded texel for texel, but which GOG's repacked atlas puts in tiles of other
+formats, so the analysis of the stored texels ends elsewhere (two battle sprites on Azahar: smoothed on GOG, sharp on
+Steam). Each takes Steam's entry only where it is safe on GOG's stored texels: the same stored texels, or Steam's
+entry doesn't average the item, or both stores' texels are equally clean. One item fails that (sprite 2017 frame 1
+with rounded colours: 805 stored texels differ, and GOG's tile keeps 73 of them partly transparent where Steam's tile
+binarises the alpha) and keeps its own verdict. Validated like the trailer (digest, sprite/frame identity, size,
+decoded crop); any mismatch leaves the analysed table whole.
 """
 import hashlib
 import json
@@ -14,6 +23,7 @@ import zlib
 PROFILE = Path(__file__).with_name('gog-smart-1.08.json')
 COUNT = 49
 CRC32 = 0x8B0D1702  # Exact validated sprite/frame/resolved-item packet; runtime checks the same value.
+ITEM_COUNT = 59  # item_entries: [sprite, frame, width, height, GOG item, Steam's entry (20 hex), decoded crop SHA-256]
 
 
 def encode(profile):
@@ -44,25 +54,36 @@ def compatibility_tail(win, profile_path=PROFILE):
 
 
 def validated_tail(win, profile):
-    import fontverdict
+    check_container(win, profile)
+    encoded = encode(profile)
+    check_items(win, [(sprite, frame, width, height, resolved, profile['content_sha256'][content])
+                      for sprite, frame, width, height, content, resolved in profile['entries']])
+    return encoded
+
+
+def check_container(win, profile):
     # Both recognition and profile binding require the full digest; the CtrPackKey alone is insufficient.
     if (not win.gog_smart or profile['target_data_sha256'] != '946c738c6d6182f683431320a0e32470bc3deb50f3e8887e61998df0c4e3abc8'
             or hashlib.sha256(win.d).hexdigest() != profile['target_data_sha256']
             or profile['source_data_sha256'] != 'b718f8223a5bb31979ffeed10be6140c857b882fc0d0462b89d6287ae38c81c7'):
         raise ValueError('wrong container')
-    encoded = encode(profile)
+
+
+def check_items(win, rows):
+    """Each (sprite, frame, width, height, item, content SHA-256): the sprite's frame is that item, of that size, and
+    its decoded crop has that digest. Raises ValueError at the first that isn't."""
+    import fontverdict
     sprites, items = win.plist('SPRT'), win.plist('TPAG')
     blobs = fontverdict.texture_blobs(win)
     by_page = {}
-    for sprite, frame, width, height, content, resolved in profile['entries']:
+    for sprite, frame, width, height, resolved, digest in rows:
         p = sprites[sprite]
         if not p or frame >= win.u32(p + 56) or win.u32(p + 60 + frame * 4) != items[resolved]:
             raise ValueError('sprite/frame identity mismatch')
         t = fontverdict.tpag_item(win, items[resolved])
         if (t['sw'], t['sh']) != (width, height) or width <= 0 or height <= 0:
             raise ValueError('dimensions mismatch')
-        digest = profile['content_sha256'][content]
-        if len(digest) != 64 or bytes.fromhex(digest).hex() != digest:
+        if type(digest) is not str or len(digest) != 64 or bytes.fromhex(digest).hex() != digest:
             raise ValueError('invalid content digest')
         by_page.setdefault(t['page'], []).append((t, digest))
     for page, entries in sorted(by_page.items()):
@@ -79,7 +100,44 @@ def validated_tail(win, profile):
             crop = b''.join(rgba[(row * width + x) * 4:(row * width + x + w) * 4] for row in range(y, y + h))
             if hashlib.sha256(crop).hexdigest() != digest:
                 raise ValueError('decoded-content mismatch')
-    return encoded
+
+
+def item_overrides(win, table, profile_path=PROFILE):
+    """(table, entries applied): the item-verdict table with the profile's validated item_entries, or the table as it
+    was (0) for any other container or any mismatch. Steam and DELTARUNE never read the profile."""
+    if not win.gog_smart:
+        return table, 0
+    try:
+        found = validated_items(win, json.loads(Path(profile_path).read_text(encoding='utf-8')), len(table))
+    except (OSError, ValueError, KeyError, TypeError, IndexError, struct.error):
+        return table, 0  # never a partial profile
+    out = list(table)
+    for item, entry in found:
+        out[item] = entry
+    return out, len(found)
+
+
+def validated_items(win, profile, count):
+    """[(GOG item, Steam's 10-byte entry)] for the whole item profile, or ValueError."""
+    check_container(win, profile)
+    rows = profile['item_entries']
+    if len(rows) != ITEM_COUNT or rows != sorted(rows):
+        raise ValueError('incomplete or unordered item profile')
+    if len({r[4] for r in rows}) != ITEM_COUNT or len({tuple(r[:2]) for r in rows}) != ITEM_COUNT:
+        raise ValueError('duplicate item identity')
+    found = []
+    for row in rows:
+        if len(row) != 7 or any(type(v) is not int or v < 0 for v in row[:5]) or row[4] >= count:
+            raise ValueError('invalid item identity')
+        entry = row[5]
+        if type(entry) is not str or len(entry) != 20 or bytes.fromhex(entry).hex() != entry:
+            raise ValueError('invalid item entry')
+        value = bytes.fromhex(entry)
+        if not (value[0] & 0x80 and value[5] & 0x80):
+            raise ValueError('item entry not known in both colour modes')
+        found.append((row[4], value))
+    check_items(win, [(r[0], r[1], r[2], r[3], r[4], r[6]) for r in rows])
+    return found
 
 
 def build_enabled(path):

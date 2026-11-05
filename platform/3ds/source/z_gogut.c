@@ -79,7 +79,7 @@ typedef struct GogKnownFile {
 } GogKnownFile;
 
 #define DATA_VERSIONS_GOG_ONLY
-#define DATA_VERSION(game, part, size, digest) {size, game, part, digest},
+#define DATA_VERSION(game, part, size, digest) {DATA_VERSION_SIZE(size), game, part, digest},
 static const GogKnownFile gogKnownFiles[] __attribute__((aligned(8), section(".rodata.gogut_in_text"))) = {
 #include "../data_versions.inc"
 };

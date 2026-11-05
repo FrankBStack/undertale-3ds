@@ -19,9 +19,9 @@
 // the data.win's size, all of them by how fast this load's finished phases went. A phase that runs over creeps on;
 // the bar never moves back and stops at 97% until the room is ready.
 //
-// Off with game_screen = 1 (the game on the bottom screen: the top shows the consoles) or loading_screen = 0 in
-// settings.ini. Test hook: loadshot.txt in the game folder lists times (ms from each load's start); the screen is
-// then saved as loadshot-<load>-<ms>.bmp at each.
+// Off with loading_screen = 0 in settings.ini. With game_screen = 1 (the game on the bottom screen), UNDERTALE
+// draws the bar there and DELTARUNE shows none. Test hook: loadshot.txt in the game folder lists times (ms from each
+// load's start); the screen is then saved as loadshot-<load>-<ms>.bmp at each.
 //
 // Late code only (platform/3ds/late_reserve.ld, "loadscreen"); every string is a named array in the late code, and
 // this file is compiled without the printf builtins and switch tables (CMakeLists.txt).
@@ -160,6 +160,21 @@ static LsState ls LS_BSS;
 void __real_gfxScreenSwapBuffers(gfxScreen_t screen, bool hasStereo);
 extern uint8_t CtrScreens_game;
 
+
+#ifdef ENABLE_WAD16
+#include "ctr_display.h"
+#include "ctr_launch_args.h"
+#define LG_CODE __attribute__((noinline,noipa,section(".text.late.dlgtop")))
+bool Loadgame_prepare(void);
+void Loadgame_packFallback(const DataWin* dataWin);
+static GSPGPU_FramebufferFormat Loadgame_format(gfxScreen_t);
+static u8* Loadgame_framebuffer(gfxScreen_t,gfx3dSide_t,u16*,u16*);
+void Loadgame_swap(gfxScreen_t,bool);
+static void Loadgame_present(int32_t,int32_t,bool);
+static void Loadgame_layout(void);
+static void Loadgame_saveShot(const LsCanvas*,uint32_t);
+#endif
+#line 163
 // ===[ Drawing ]===
 
 CTR_H1_LS("utloop") static void lsRect(const LsCanvas* c, int32_t x, int32_t y, int32_t w, int32_t h, uint32_t rgb) {
@@ -187,6 +202,11 @@ CTR_H1_LS("utloop") static void lsRect(const LsCanvas* c, int32_t x, int32_t y, 
     }
 }
 
+#ifdef ENABLE_WAD16
+CTR_H1_LS("aotlhelp") __attribute__((used)) static void lsClear(const LsCanvas* c) {
+    lsRect(c, 0, 0, ls.firstBelow ? 320 : 400, LS_SCREEN_H, 0);
+}
+#else
 CTR_H1_LS("aotlhelp") static void lsClear(const LsCanvas* c) {
     size_t pixels = (size_t) LS_SCREEN_W * (size_t) c->scale * c->rows;
     if (c->bpp == 3) {
@@ -196,7 +216,33 @@ CTR_H1_LS("aotlhelp") static void lsClear(const LsCanvas* c) {
     uint32_t* p = (uint32_t*) c->fb;
     for (size_t i = 0; pixels > i; i++) p[i] = 0xFFu;
 }
+#endif
+#line 198
 
+
+#ifdef ENABLE_WAD16
+CTR_H1_LS("utstall") __attribute__((used,noipa)) static void lsDrawText(const LsCanvas* c) {
+#if !LS_DELTARUNE
+    // UNDERTALE never loads chapter text (lsPickText is DELTARUNE-only).
+    (void)c;
+    return;
+#else
+    if (ls.text == nullptr) return;
+    uint32_t stride = (ls.textW + 7) / 8;
+    for (uint32_t y = 0; ls.textH > y; y++) {
+        const uint8_t* row = ls.text + y * stride;
+        for (uint32_t x = 0; ls.textW > x; x++) {
+            if (row[x >> 3] & (0x80u >> (x & 7)))
+#if LS_DELTARUNE
+                Loadgame_rect(c, ls.textX + (int32_t) x, ls.textY + (int32_t) y, 1, 1, 0xFFFFFFu);
+#else
+                lsRect(c, ls.textX + (int32_t) x, ls.textY + (int32_t) y, 1, 1, 0xFFFFFFu);
+#endif
+        }
+    }
+#endif
+}
+#else
 CTR_H1_LS("utstall") static void lsDrawText(const LsCanvas* c) {
     if (ls.text == nullptr) return;
     uint32_t stride = (ls.textW + 7) / 8;
@@ -207,7 +253,33 @@ CTR_H1_LS("utstall") static void lsDrawText(const LsCanvas* c) {
         }
     }
 }
+#endif
+#line 209
 
+
+#ifdef ENABLE_WAD16
+LS_CODE __attribute__((used,noipa)) static void lsDrawDog(const LsCanvas* c, int32_t frame) {
+#if !LS_DELTARUNE
+    // UNDERTALE never loads the chapter dog (lsReadArt is DELTARUNE-only).
+    (void)c; (void)frame;
+    return;
+#else
+    LS_DOG_HOOK(c, frame) if (ls.frames == nullptr) return;
+    const uint8_t* f = ls.frames + (size_t) frame * ls.dogW * ls.dogH;
+    for (uint32_t y = 0; ls.dogH > y; y++) {
+        for (uint32_t x = 0; ls.dogW > x; x++) {
+            uint32_t i = f[y * ls.dogW + x];
+            uint32_t rgb = 0;
+            if (i != 0 && i <= ls.colours) {
+                const uint8_t* p = ls.palette + (i - 1) * 3;
+                rgb = (uint32_t) p[0] << 16 | (uint32_t) p[1] << 8 | p[2];
+            }
+            lsRect(c, ls.dogX + (int32_t) x * 2, ls.dogY + (int32_t) y * 2, 2, 2, rgb);
+        }
+    }
+#endif
+}
+#else
 LS_CODE static void lsDrawDog(const LsCanvas* c, int32_t frame) {
     LS_DOG_HOOK(c, frame) if (ls.frames == nullptr) return;
     const uint8_t* f = ls.frames + (size_t) frame * ls.dogW * ls.dogH;
@@ -223,7 +295,29 @@ LS_CODE static void lsDrawDog(const LsCanvas* c, int32_t frame) {
         }
     }
 }
+#endif
+#line 225
 
+
+#ifdef ENABLE_WAD16
+CTR_H1_LS("utstall") static void lsDrawEye(gfx3dSide_t side, bool full, int32_t fillW, int32_t frame, LsCanvas* out) {
+    u16 width = 0, height = 0;
+    GSPGPU_FramebufferFormat format = Loadgame_format(GFX_TOP);
+    LsCanvas c = { Loadgame_framebuffer(GFX_TOP, side, &width, &height), width, height >= 2 * LS_SCREEN_W ? 2 : 1,
+                   format == GSP_RGBA8_OES ? 4u : 3u };
+    if (full) {
+        lsClear(&c);
+        lsDrawText(&c);
+        lsRect(&c, ls.barX, ls.barY, ls.barW, ls.barH, 0xFFFFFFu);
+        lsRect(&c, ls.barX + ls.frameT, ls.barY + ls.frameT, ls.barW - 2 * ls.frameT, ls.barH - 2 * ls.frameT, 0);
+    }
+    lsRect(&c, ls.fillX, ls.fillY, fillW, ls.fillH, 0xFFFFFFu);
+    lsRect(&c, ls.fillX + fillW, ls.fillY, ls.fillMax - fillW, ls.fillH, 0);
+    lsDrawDog(&c, frame);
+    GSPGPU_FlushDataCache(c.fb, (u32) width * height * c.bpp);
+    if (out != nullptr) *out = c;
+}
+#else
 CTR_H1_LS("utstall") static void lsDrawEye(gfx3dSide_t side, bool full, int32_t fillW, int32_t frame, LsCanvas* out) {
     u16 width = 0, height = 0;
     GSPGPU_FramebufferFormat format = gfxGetScreenFormat(GFX_TOP);
@@ -241,6 +335,9 @@ CTR_H1_LS("utstall") static void lsDrawEye(gfx3dSide_t side, bool full, int32_t 
     GSPGPU_FlushDataCache(c.fb, (u32) width * height * c.bpp);
     if (out != nullptr) *out = c;
 }
+#endif
+#line 243
+
 
 CTR_H1_LS("bxreview") static void lsPut32(uint8_t* p, uint32_t v) {
     p[0] = (uint8_t) v;
@@ -292,6 +389,44 @@ CTR_H1_LS("asgborder") static void lsSaveShot(const LsCanvas* c, uint32_t ms) {
 }
 
 // Draws what changed into the back buffer and shows it. Under the lock.
+#ifdef ENABLE_WAD16
+LS_CODE static void lsPresent(int32_t fillW, int32_t frame, bool force) {
+    GSPGPU_FramebufferFormat format = Loadgame_format(GFX_TOP);
+    if (format != GSP_BGR8_OES && format != GSP_RGBA8_OES) return;
+    u16 width = 0, height = 0;
+    u8* fb = Loadgame_framebuffer(GFX_TOP, GFX_LEFT, &width, &height);
+    bool stereo = gfxIs3D();
+    if (fb == nullptr || width != LS_SCREEN_H || height < 320) return;
+    uint32_t key = (uint32_t) format | (uint32_t) height << 4 | (uint32_t) stereo << 16;
+    if (key != ls.key) {
+        ls.key = key;
+        ls.gen++;
+    }
+    int32_t slot = ls.drawnFb[0] == fb ? 0 : ls.drawnFb[1] == fb ? 1 : -1;
+    bool full = slot < 0 || ls.drawnGen[slot] != ls.gen;
+    if (!full && !force && fillW == ls.fillW && frame == ls.frame) return;
+    if (slot < 0) {
+        slot = ls.drawnFb[0] == nullptr ? 0 : 1;
+        if (ls.drawnFb[0] != nullptr && ls.drawnFb[1] != nullptr) slot = 0;
+    }
+    LsCanvas shot;
+    lsDrawEye(GFX_LEFT, full, fillW, frame, &shot);
+    if (stereo) lsDrawEye(GFX_RIGHT, full, fillW, frame, nullptr);
+    ls.drawnFb[slot] = fb;
+    ls.drawnGen[slot] = ls.gen;
+    ls.fillW = fillW;
+    ls.frame = frame;
+    ls.pictures++;
+    if (ls.shotNext < ls.shotCount) {
+        uint32_t ms = (uint32_t) ((svcGetSystemTick() - ls.loadStart) / LS_TICKS_PER_MS);
+        if (ms >= ls.shots[ls.shotNext]) {
+            Loadgame_saveShot(&shot, ls.shots[ls.shotNext]);
+            ls.shotNext++;
+        }
+    }
+    Loadgame_swap(GFX_TOP, stereo);
+}
+#else
 LS_CODE static void lsPresent(int32_t fillW, int32_t frame, bool force) {
     GSPGPU_FramebufferFormat format = gfxGetScreenFormat(GFX_TOP);
     if (format != GSP_BGR8_OES && format != GSP_RGBA8_OES) return;
@@ -328,6 +463,9 @@ LS_CODE static void lsPresent(int32_t fillW, int32_t frame, bool force) {
     }
     __real_gfxScreenSwapBuffers(GFX_TOP, stereo);
 }
+#endif
+#line 330
+
 
 // ===[ Progress ]===
 
@@ -404,6 +542,17 @@ CTR_H1_LS("utlhelp") static void lsPhase(int32_t p) {
 }
 
 // One step of the thread, under the lock.
+#ifdef ENABLE_WAD16
+CTR_H1_LS("utstall") static void lsStep(bool force) {
+    uint64_t now = svcGetSystemTick();
+    uint32_t t = lsTarget(now);
+    if (t > LS_CAP) t = LS_CAP;
+    if (t > ls.shown) ls.shown += (t - ls.shown + 3) / 4;
+    int32_t frame = 0;
+    if (ls.frames != nullptr && ls.frameMs > 0) frame = (int32_t) ((lsMs(ls.loadStart, now) / ls.frameMs) % ls.frameCount);
+    Loadgame_present((int32_t) ((uint32_t) ls.fillMax * ls.shown / 1000u), frame, force);
+}
+#else
 CTR_H1_LS("utstall") static void lsStep(bool force) {
     uint64_t now = svcGetSystemTick();
     uint32_t t = lsTarget(now);
@@ -413,6 +562,9 @@ CTR_H1_LS("utstall") static void lsStep(bool force) {
     if (ls.frames != nullptr && ls.frameMs > 0) frame = (int32_t) ((lsMs(ls.loadStart, now) / ls.frameMs) % ls.frameCount);
     lsPresent((int32_t) ((uint32_t) ls.fillMax * ls.shown / 1000u), frame, force);
 }
+#endif
+#line 415
+
 
 LS_CODE static void lsThread(void* arg) {
     (void) arg;
@@ -571,6 +723,40 @@ CTR_H1_LS("asgborder") static void lsDecide(void) {
     ls.enabled = true;
 }
 
+#ifdef ENABLE_WAD16
+CTR_H1_LS("utloop") static void lsBegin(uint32_t load, const char* path) {
+    if (!ls.decided) lsDecide();
+    if (!Loadgame_prepare()) return;
+    LightLock_Lock(&ls.lock);
+    ls.load = load;
+    ls.loadStart = ls.phaseStart = svcGetSystemTick();
+    ls.phase = load == 1 ? P_BOOT : P_HASH;
+    memset(ls.actual, 0, sizeof(ls.actual));
+    bool isNew = false;
+    APT_CheckNew3DS(&isNew);
+    ls.ratio = isNew ? 600 : 1000;
+    ls.sizeBytes = 0;
+    ls.hashCalls = 0;
+    struct stat st;
+    if (path != nullptr && stat(path, &st) == 0) ls.sizeBytes = (uint32_t) st.st_size;
+    // Before the first data.win is known: UNDERTALE's, or DELTARUNE's launcher.
+    lsBase(ls.sizeBytes != 0 ? ls.sizeBytes : LS_DELTARUNE ? 3u << 20 : 63u << 20);
+    ls.shown = 0;
+    ls.fillW = -1;
+    ls.frame = -1;
+    ls.pictures = 0;
+    ls.shotNext = 0;
+    ls.gen++;
+#if LS_DELTARUNE
+    lsPickText(path);
+#endif
+    Loadgame_layout();
+    ls.paused = false;
+    ls.running = true;
+    LightLock_Unlock(&ls.lock);
+    LightEvent_Signal(&ls.wake);
+}
+#else
 CTR_H1_LS("utloop") static void lsBegin(uint32_t load, const char* path) {
     if (!ls.decided) lsDecide();
     bool below = ls.firstDone ? CtrScreens_game == 1 : ls.firstBelow;
@@ -604,6 +790,9 @@ CTR_H1_LS("utloop") static void lsBegin(uint32_t load, const char* path) {
     LightLock_Unlock(&ls.lock);
     LightEvent_Signal(&ls.wake);
 }
+#endif
+#line 606
+
 
 static uint32_t lsLoads LS_BSS;
 
@@ -639,6 +828,26 @@ CTR_H1_LS("end") static void lsPause(bool paused) {
 }
 
 // The room is ready: the full bar, then the thread idles until the next load.
+#ifdef ENABLE_WAD16
+CTR_H1_LS("utloop") static void lsFinish(void) {
+    if (!ls.running) return;
+    LightLock_Lock(&ls.lock);
+    lsPhaseLocked(P_COUNT - 1);
+    uint64_t now = svcGetSystemTick();
+    ls.actual[P_ROOM] = lsMs(ls.phaseStart, now);
+    uint32_t before = ls.shown;
+    if (!ls.paused) {
+        ls.shown = 1000;
+        Loadgame_present(ls.fillMax, ls.frame < 0 ? 0 : ls.frame, true);
+    }
+    ls.running = false;
+    LightLock_Unlock(&ls.lock);
+    logInfo(lsLogDone, (unsigned) ls.load, (unsigned) lsMs(ls.loadStart, now), (unsigned) ls.pictures, (unsigned) before,
+            (unsigned) ls.actual[P_BOOT], (unsigned) ls.actual[P_HASH], (unsigned) ls.actual[P_PARSE],
+            (unsigned) ls.actual[P_PACK], (unsigned) ls.actual[P_VM], (unsigned) ls.actual[P_FS],
+            (unsigned) ls.actual[P_GAP], (unsigned) ls.actual[P_RUNNER], (unsigned) ls.actual[P_ROOM]);
+}
+#else
 CTR_H1_LS("utloop") static void lsFinish(void) {
     if (!ls.running) return;
     LightLock_Lock(&ls.lock);
@@ -657,6 +866,9 @@ CTR_H1_LS("utloop") static void lsFinish(void) {
             (unsigned) ls.actual[P_PACK], (unsigned) ls.actual[P_VM], (unsigned) ls.actual[P_FS],
             (unsigned) ls.actual[P_GAP], (unsigned) ls.actual[P_RUNNER], (unsigned) ls.actual[P_ROOM]);
 }
+#endif
+#line 659
+
 
 // The first load's notes: the log wasn't open when they were made.
 CTR_H1_LS("bxreview") static void lsNotes(void) {
@@ -1135,6 +1347,38 @@ PS_CODE static void psBits(const LsCanvas* c, const uint8_t* bits, uint32_t w, u
 }
 
 // lsDrawEye with the setup line under the bar.
+#ifdef ENABLE_WAD16
+PS_CODE static void psDrawEye(gfx3dSide_t side, bool full, int32_t fillW, int32_t frame, LsCanvas* out) {
+    u16 width = 0, height = 0;
+    GSPGPU_FramebufferFormat format = Loadgame_format(GFX_TOP);
+    LsCanvas c = { Loadgame_framebuffer(GFX_TOP, side, &width, &height), width, height >= 2 * LS_SCREEN_W ? 2 : 1,
+                   format == GSP_RGBA8_OES ? 4u : 3u };
+    if (full) {
+        lsClear(&c);
+        if (ls.text != nullptr) psBits(&c, ls.text, ls.textW, ls.textH, ls.textX, ls.textY);
+        psRect(&c, ls.barX, ls.barY, ls.barW, ls.barH, 0xFFFFFFu);
+        psRect(&c, ls.barX + ls.frameT, ls.barY + ls.frameT, ls.barW - 2 * ls.frameT, ls.barH - 2 * ls.frameT, 0);
+        if (psLine != nullptr)
+            psBits(&c, psLine, psLineW, psLineH, ((ls.firstBelow ? 320 : 400) - (int32_t) psLineW) / 2, ls.barY + ls.barH + PS_LINE_GAP);
+    }
+    psRect(&c, ls.fillX, ls.fillY, fillW, ls.fillH, 0xFFFFFFu);
+    psRect(&c, ls.fillX + fillW, ls.fillY, ls.fillMax - fillW, ls.fillH, 0);
+#if LS_DELTARUNE
+    // From inline assembly, as lsDrawDog does: a C call would be a call graph edge main does not have, and GCC then
+    // orders the loading screen's existing functions differently (the __wrap_ functions moved by 44-180 B).
+    register u8* a0 __asm__("r0") = c.fb;
+    register uint32_t a1 __asm__("r1") = c.rows;
+    register int32_t a2 __asm__("r2") = c.scale;
+    register uint32_t a3 __asm__("r3") = c.bpp << 16 | (uint32_t) frame;
+    __asm__ volatile("bl lsDogDraw" : "+r"(a0), "+r"(a1), "+r"(a2), "+r"(a3) : : "ip", "lr", "memory", "cc", "d0", "d1",
+                     "d2", "d3", "d4", "d5", "d6", "d7");
+#else
+    (void) frame;
+#endif
+    GSPGPU_FlushDataCache(c.fb, (u32) width * height * c.bpp);
+    if (out != nullptr) *out = c;
+}
+#else
 PS_CODE static void psDrawEye(gfx3dSide_t side, bool full, int32_t fillW, int32_t frame, LsCanvas* out) {
     u16 width = 0, height = 0;
     GSPGPU_FramebufferFormat format = gfxGetScreenFormat(GFX_TOP);
@@ -1171,6 +1415,9 @@ PS_CODE static void psDrawEye(gfx3dSide_t side, bool full, int32_t fillW, int32_
     GSPGPU_FlushDataCache(c.fb, (u32) width * height * c.bpp);
     if (out != nullptr) *out = c;
 }
+#endif
+#line 1173
+
 
 PS_CODE static void psPut32(uint8_t* p, uint32_t v) {
     p[0] = (uint8_t) v;
@@ -1180,6 +1427,13 @@ PS_CODE static void psPut32(uint8_t* p, uint32_t v) {
 }
 
 // lsSaveShot's copy: the loadshot.txt picture as a 400 x 240 BMP.
+#ifdef ENABLE_WAD16
+PS_CODE __attribute__((used)) static void psSaveShot(const LsCanvas* c, uint32_t ms) {
+    (void)c; (void)ms;
+    // Keep the original disconnected helper and its literal slot linked.
+    __asm__ volatile("" : : "r"(psPut32));
+}
+#else
 PS_CODE static void psSaveShot(const LsCanvas* c, uint32_t ms) {
     char name[96];
     snprintf(name, sizeof(name), lsShotFormat, (unsigned) ls.load, (unsigned) ms);
@@ -1214,6 +1468,9 @@ PS_CODE static void psSaveShot(const LsCanvas* c, uint32_t ms) {
     }
     fclose(f);
 }
+#endif
+#line 1448
+
 
 // The picture's key for the dog: lsDogDraw's own frame (the trailer's animation time, 133 ms for Chapter 3's dog; every
 // 33 ms while it swings), so that the game thread draws only when the dog changes. Each picture costs the core that
@@ -1239,6 +1496,44 @@ PS_CODE static int32_t psDogKey(uint32_t ms) {
 }
 
 // lsPresent's way: what changed, into the back buffer, then shown. Under the lock, the thread paused.
+#ifdef ENABLE_WAD16
+PS_CODE static void psPresent(int32_t fillW, int32_t frame) {
+    GSPGPU_FramebufferFormat format = Loadgame_format(GFX_TOP);
+    if (format != GSP_BGR8_OES && format != GSP_RGBA8_OES) return;
+    u16 width = 0, height = 0;
+    u8* fb = Loadgame_framebuffer(GFX_TOP, GFX_LEFT, &width, &height);
+    bool stereo = gfxIs3D();
+    if (fb == nullptr || width != LS_SCREEN_H || height < 320) return;
+    uint32_t key = (uint32_t) format | (uint32_t) height << 4 | (uint32_t) stereo << 16;
+    if (key != ls.key) {
+        ls.key = key;
+        ls.gen++;
+    }
+    int32_t slot = ls.drawnFb[0] == fb ? 0 : ls.drawnFb[1] == fb ? 1 : -1;
+    bool full = slot < 0 || ls.drawnGen[slot] != ls.gen;
+    if (!full && fillW == ls.fillW && frame == ls.frame) return;
+    if (slot < 0) {
+        slot = ls.drawnFb[0] == nullptr ? 0 : 1;
+        if (ls.drawnFb[0] != nullptr && ls.drawnFb[1] != nullptr) slot = 0;
+    }
+    LsCanvas shot;
+    psDrawEye(GFX_LEFT, full, fillW, frame, &shot);
+    if (stereo) psDrawEye(GFX_RIGHT, full, fillW, frame, nullptr);
+    ls.drawnFb[slot] = fb;
+    ls.drawnGen[slot] = ls.gen;
+    ls.fillW = fillW;
+    ls.frame = frame;
+    ls.pictures++;
+    if (ls.shotNext < ls.shotCount) {
+        uint32_t ms = (uint32_t) ((svcGetSystemTick() - ls.loadStart) / LS_TICKS_PER_MS);
+        if (ms >= ls.shots[ls.shotNext]) {
+            Loadgame_saveShot(&shot, ls.shots[ls.shotNext]);
+            ls.shotNext++;
+        }
+    }
+    Loadgame_swap(GFX_TOP, stereo);
+}
+#else
 PS_CODE static void psPresent(int32_t fillW, int32_t frame) {
     GSPGPU_FramebufferFormat format = gfxGetScreenFormat(GFX_TOP);
     if (format != GSP_BGR8_OES && format != GSP_RGBA8_OES) return;
@@ -1275,8 +1570,118 @@ PS_CODE static void psPresent(int32_t fillW, int32_t frame) {
     }
     __real_gfxScreenSwapBuffers(GFX_TOP, stereo);
 }
+#endif
+#line 1277
+
 
 // __wrap_CtrPackScreen_run's call, the loading screen's thread paused: CtrPackScreen_run inside the loading screen.
+#ifdef ENABLE_WAD16
+PS_CODE static void lsPackRun(const DataWin* dataWin) {
+    if (!ls.running) {
+        Loadgame_packFallback(dataWin);
+        return;
+    }
+    CtrPack_init();
+    CtrPackKey key = CtrPack_keyFor(dataWin);
+    if (CtrPack_isComplete(&key, dataWin->txtr.count)) return;
+    CtrPackWorker* worker = CtrPackWorker_start(dataWin, &key, true);
+    if (worker == nullptr) return;
+
+    uint64_t start = nowNanos();
+    // The bar: source bytes and a fixed allowance per page, as CtrPackScreen_run's estimate weighs the work. It is the
+    // setup's own bar, from empty (when the line appears) to LS_CAP, and ls.shown is left there: it only grows, so the
+    // load's bar then holds at LS_CAP and is full at the end. (Going on from the load's bar instead left the setup
+    // nothing to show after a first data.win hash, whose time had already taken that bar past 90%.)
+    uint64_t totalWork = 0, finishedWork = 0;
+    for (uint32_t i = 0; i < dataWin->txtr.count; i++) {
+        const Texture* texture = &dataWin->txtr.textures[i];
+        if (texture->externalPath == nullptr && texture->blobOffset > 0 && texture->blobSize > 0)
+            totalWork += (uint64_t) texture->blobSize + PS_PAGE_SLACK;
+    }
+    uint32_t done = 0, total = 0, built = 0, pictures = ls.pictures;
+    bool skipped = false;
+    double bytesWritten = 0, writingMs = 0, waitingMs = 0;
+#if LS_DELTARUNE
+    psFindLine(ls.art, ls.artSize);
+#else
+    psReadArt();
+#endif
+    bool line = psLine != nullptr;
+    logInfo(psLogThreads, (unsigned) CtrPackWorker_threadCount(worker));
+    CtrLog_flush();
+    LightLock_Lock(&ls.lock);
+    ls.gen++;
+    uint32_t barAt = 0;
+    LightLock_Unlock(&ls.lock);
+    u64 lastDisplay = 0;
+    while (aptMainLoop()) {
+        CtrWatchdog_mark(psWatchPhase);
+        hidScanInput();
+        if (hidKeysDown() & KEY_B) {
+            skipped = true;
+            break;
+        }
+        CtrPackResult result;
+        while (CtrPackWorker_poll(worker, &result)) {
+            finishedWork += (uint64_t) dataWin->txtr.textures[result.pageId].blobSize + PS_PAGE_SLACK;
+            if (result.built) {
+                built++;
+                logInfo(psLogPage, (unsigned) result.pageId, (unsigned) (result.size / 1024), (double) result.decodeMs,
+                        (double) result.packMs, (double) result.readMs, (double) result.inflateMs, (double) result.convertMs,
+                        (double) result.compressMs, (double) result.writeMs, (int) result.thread, (int) result.core,
+                        (double) (nowNanos() - start) / 1e9);
+                const CtrPackWriteStats* io = &result.io;
+                double ms = (double) (io->openMs + io->sizeMs + io->dataMs + io->flushMs + io->closeMs + io->renameMs);
+                logInfo(psLogWrote, (unsigned) (result.size / 1024), io->streamed ? psStreamed : io->staged ? psStaged : psWhole,
+                        (unsigned) io->calls, (double) io->callMinMs, (double) io->callMaxMs,
+                        ms > 0 ? (double) result.size / (1024.0 * 1024.0) / (ms / 1000.0) : 0.0, (double) io->openMs,
+                        (double) io->sizeMs, (double) io->dataMs, (double) io->flushMs, (double) io->closeMs, (double) io->renameMs,
+                        (double) io->waitMs);
+                bytesWritten += (double) result.size;
+                logInfo(psLogPublication, io->publication.direct ? psSdArchive : psStdio, (double) io->publication.deleteMs,
+                        (double) io->publication.renameMs);
+                writingMs += ms;
+                waitingMs += (double) io->waitMs;
+            }
+            CtrPacked_free(result.packed);
+        }
+        CtrPackWorker_progress(worker, &done, &total);
+        bool last = done >= total;
+        u64 tick = svcGetSystemTick();
+        if (last || lastDisplay == 0 || tick - lastDisplay >= 33ull * LS_TICKS_PER_MS) {
+            uint64_t share = last || totalWork == 0 ? 1000u : finishedWork * 1000u / totalWork;
+            if (share > 1000u) share = 1000u;
+            LightLock_Lock(&ls.lock);
+            int32_t frame = psDogKey((uint32_t) ((tick - ls.loadStart) / LS_TICKS_PER_MS));
+            barAt = (uint32_t) (LS_CAP * share / 1000u);
+            psPresent((int32_t) ((uint32_t) ls.fillMax * barAt / 1000u), frame);
+            LightLock_Unlock(&ls.lock);
+            lastDisplay = tick;
+        }
+        if (last) break;
+        gspWaitForVBlank();
+    }
+    LightLock_Lock(&ls.lock);
+    if (barAt > ls.shown) ls.shown = barAt;
+    LightLock_Unlock(&ls.lock);
+    uint32_t memoryWaits = 0, deferred = 0;
+    CtrPackWorker_memoryStats(worker, &memoryWaits, &deferred);
+    CtrPackWorker_stop(worker);
+    CtrQoi_releaseWorkspace();
+    psLine = nullptr;
+    free(psOwned);
+    psOwned = nullptr;
+    // The heap is never trimmed (ctr_memory.c), so its arena is the peak so far.
+    struct mallinfo mi = mallinfo();
+    logInfo(psLogReady, (unsigned) (done - deferred), (unsigned) total, (unsigned) built, (double) (nowNanos() - start) / 1e9,
+            skipped ? psSkipped : psNothing, (double) mi.arena / (1024.0 * 1024.0), (unsigned) memoryWaits, (unsigned) deferred);
+    if (built > 0) {
+        logInfo(psLogWritten, bytesWritten / (1024.0 * 1024.0), writingMs / 1000.0,
+                writingMs > 0 ? bytesWritten / (1024.0 * 1024.0) / (writingMs / 1000.0) : 0.0, waitingMs / 1000.0);
+    }
+    logInfo(psLogScreen, line ? psWithLine : psWithoutLine, (unsigned) (ls.pictures - pictures));
+}
+#else
 PS_CODE static void lsPackRun(const DataWin* dataWin) {
     if (!ls.running) {
         __real_CtrPackScreen_run(dataWin);
@@ -1382,6 +1787,9 @@ PS_CODE static void lsPackRun(const DataWin* dataWin) {
     }
     logInfo(psLogScreen, line ? psWithLine : psWithoutLine, (unsigned) (ls.pictures - pictures));
 }
+#endif
+#line 1384
+
 
 // DR chapter preflight deliberately bypasses the digest-consumer wrap chain. Cached receipts cause no
 // callback and no setup screen. For a real hash, reuse the packscreen line and renderer, without changing
@@ -1454,5 +1862,97 @@ BH_CODE CtrDataVersionResult BxChapterHash_check(const char* path, const char* g
         BxHash_pause(false);
     }
     return result;
+}
+#endif
+
+#ifdef ENABLE_WAD16
+#include "ctr_frame_pacer.h"
+#include "ctr_log.h"
+extern bool CtrScreens_onBottom, CtrScreens_consolesOnTop;
+CtrLaunchArgs* CtrBenchIo_launch(void);
+void CtrScreens_moveConsoles(bool top);
+void CtrPacer_setGameScreen(gfxScreen_t screen);
+
+// Reuse the ordinary settings parser, including bench default and ordered CLI
+// overrides. Only startup calls this; no frame or ordinary room hook is added.
+LG_CODE bool Loadgame_prepare(void) {
+    if (!ls.firstDone) {
+        CtrDisplaySettings settings;
+        CtrDisplay_defaults(&settings);
+        CtrDisplay_load(&settings, lsSettingsPath, (CtrDisplayCaps){true,true});
+        CtrLaunchArgs* args = CtrBenchIo_launch();
+        for (int i=0; i<args->iniCount; i++)
+            CtrDisplay_override(&settings,args->ini[i],(CtrDisplayCaps){true,true});
+        ls.firstBelow = CtrScreens_game == 1;
+        if (ls.firstBelow) {
+            CtrScreens_onBottom = true;
+            CtrPacer_setGameScreen(GFX_BOTTOM);
+        }
+    }
+    return ls.enabled && !ls.running;
+}
+LG_CODE void Loadgame_packFallback(const DataWin* dataWin) {
+    if (!ls.firstBelow) { __real_CtrPackScreen_run(dataWin); return; }
+    // keyFor/isComplete only read key/file metadata. The real setup initializes
+    // conversion tables itself if work is needed; avoid that duplicate pass.
+    CtrPackKey key = CtrPack_keyFor(dataWin);
+    if (CtrPack_isComplete(&key, dataWin->txtr.count)) return;
+    bool enabled = CtrLog_consoleEnabled();
+    CtrLog_setConsoleEnabled(false);
+    if (R_SUCCEEDED(gspLcdInit())) {
+        GSPLCD_PowerOnBacklight(GSPLCD_SCREEN_TOP);
+        gspLcdExit();
+        extern bool CtrScreens_topBacklightOff;
+        CtrScreens_topBacklightOff = false;
+    }
+    gfxSetScreenFormat(GFX_TOP, GSP_BGR8_OES);
+    gfxSetDoubleBuffering(GFX_TOP, true);
+    __real_CtrPackScreen_run(dataWin);
+    gfxSetScreenFormat(GFX_TOP, GSP_RGB565_OES);
+    gfxSetDoubleBuffering(GFX_TOP, false);
+    CtrScreens_moveConsoles(true);
+    CtrLog_setConsoleEnabled(enabled);
+}
+LG_CODE u8* Loadgame_consoleBack(gfxScreen_t screen, gfx3dSide_t side) {
+    u8* buffer = CtrPacer_backFramebuffer(screen, side);
+    gfxSetDoubleBuffering(screen, false);
+    return buffer;
+}
+LG_CODE static GSPGPU_FramebufferFormat Loadgame_format(gfxScreen_t ignored) {
+    (void)ignored; return gfxGetScreenFormat(ls.firstBelow ? GFX_BOTTOM : GFX_TOP);
+}
+LG_CODE static u8* Loadgame_framebuffer(gfxScreen_t ignored,gfx3dSide_t eye,u16* w,u16* h) {
+    (void)ignored;
+    gfxScreen_t screen=ls.firstBelow ? GFX_BOTTOM : GFX_TOP;
+    while(!CtrPacer_screenReady(screen)) gspWaitForVBlank();
+    return gfxGetFramebuffer(screen,eye,w,h);
+}
+LG_CODE static void Loadgame_layout(void) {
+    lsLayout();
+    if(ls.firstBelow) {
+        ls.barX-=40;ls.fillX-=40;
+#if LS_DELTARUNE
+        ls.dogX-=40;ls.textX-=40;
+#endif
+    }
+}
+LG_CODE static void Loadgame_present(int32_t fillW,int32_t frame,bool force) {
+    if(force ? !ls.pictures : lsMs(ls.loadStart,svcGetSystemTick())<200) return;
+    lsPresent(fillW,frame,force);
+}
+LG_CODE static void Loadgame_saveShot(const LsCanvas* c,uint32_t ms) {
+    // The retained capture body is 400 px wide. Bottom diagnostic captures read
+    // the actual LCD buffer from the emulator instead; never read past 320 px.
+    if(!ls.firstBelow) lsSaveShot(c,ms);
+}
+
+// Bottom loading swaps use the existing locked, uncounted CPU-present helper.
+// Top keeps the original stereo path. Neither path is called during gameplay.
+LG_CODE void Loadgame_swap(gfxScreen_t ignored, bool stereo) {
+    (void)ignored;
+    if (ls.firstBelow) {
+        void CtrScreens_pacerShow(gfxScreen_t);
+        CtrScreens_pacerShow(GFX_BOTTOM);
+    } else __real_gfxScreenSwapBuffers(GFX_TOP, stereo);
 }
 #endif

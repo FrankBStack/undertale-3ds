@@ -98,6 +98,8 @@
 # every build.
 # "rosaprobe" logs each pause and backlight switch of the Rosalina watcher (source/ctr_rosalina.c), for hardware
 # test kits, and builds into build/3ds-<game>-<target>-rosaprobe/.
+# "utfadeprobe" (UNDERTALE, tests only) writes the game screen's picture during each room change's load to the game
+# folder (source/z_utfade.c), and builds into build/3ds-<game>-<target>-utfadeprobe/; never a Release build.
 # "bubblecheck" (UNDERTALE, with smalltext) logs every Crisp line, any font, that comes closer to its bubble's or the
 # battle box's right edge than PC's ink allows, leaves the screen where PC's stays on it, or comes closer to the line
 # below it than PC's (source/z_smalltext.c; tools/analysis/bubblecheck_report.py makes the table), for tours and
@@ -216,6 +218,7 @@ openh264_skip= # set when the openh264 build failed
 reachgate=OFF
 shots=OFF
 rosaprobe=OFF
+utfadeprobe=OFF
 bubblecheck=OFF
 roomplan=ON
 roomplan_rec=OFF
@@ -316,6 +319,7 @@ for arg in "$@"; do
         reachgate) reachgate=ON ;;
         shots) shots=ON ;;
         rosaprobe) rosaprobe=ON ;;
+        utfadeprobe) utfadeprobe=ON ;;
         bubblecheck) bubblecheck=ON ;;
         pacer-observe) pacer_observe=ON ;;
         pacer) pacer_observe=ON; pacer_rule=ON ;;
@@ -609,6 +613,9 @@ fi
 if [ "$rosaprobe" = ON ]; then
     build="$build-rosaprobe"
 fi
+if [ "$utfadeprobe" = ON ]; then
+    build="$build-utfadeprobe"
+fi
 if [ "$bubblecheck" = ON ]; then
     build="$build-bubblecheck"
 fi
@@ -715,6 +722,22 @@ else
     export CTRPORT_WEIRDSHD_PINWHEEL=0
 fi
 python_executable=$(release_python_executable)
+# datarefuse (playblocker #8): UNDERTALE builds only from an unmodified Steam or GOG data.win; the console supports
+# only that file and warns about any other (CTRPORT_DATA_SIZE, CMakeLists.txt). Anything else stops here with the
+# reason; no data folder found (exit 3) leaves the size empty, as before.
+data_size=
+if [ "$game" = undertale ]; then
+    input_args=(--build-input undertale --cache "$(native_path "$repo/build/data-versions-$game")")
+    if [ -n "$data_dir" ]; then input_args+=(--data "$(native_path "$data_dir")"); fi
+    set +e
+    data_size=$("${python[@]}" -I "$(native_path "$repo/tools/aot/data_versions.py")" "${input_args[@]}")
+    rc=$?
+    set -e
+    data_size=$(printf '%s' "$data_size" | tr -d '\r')
+    if [ "$rc" = 3 ]; then data_size=
+    elif [ "$rc" != 0 ]; then exit "$rc"
+    fi
+fi
 # prepare.py checks the same version table before using even an up-to-date AOT
 # result. Check non-AOT/custom-code builds too, without generating anything.
 if [ "$aot_mode" != auto ] && [ -n "${python:-}" ]; then
@@ -1113,6 +1136,7 @@ cmake -S "$here" -B "$build" -G "Unix Makefiles" \
     -DCTRPORT_FLOWCODE="$flowcode" -DCTRPORT_FLOWCODE_PLAN="$flowcode_plan" \
     -DCTRPORT_GAME="$game" \
     -DCTRPORT_GOG_COMPAT="$gog_compat" \
+    -DCTRPORT_DATA_SIZE="$data_size" \
     -DCTRPORT_TARGET="$target" \
     -DCTRPORT_PROFILE="$profile" \
     -DCTRPORT_DEBUG_RECORD_FAIL_AFTER="$record_fail_after" \
@@ -1151,7 +1175,7 @@ cmake -S "$here" -B "$build" -G "Unix Makefiles" \
     -DCTRPORT_AOT_STRESS="$aot_stress" \
     -DCTRPORT_VIDEO_OPENH264="$openh264" \
     -DCTRPORT_REACH_GATE="$reachgate" \
-    -DCTRPORT_PLAYER_SHOTS="$shots" -DCTRPORT_ROSALINA_PROBE="$rosaprobe" -DCTRPORT_BUBBLE_CHECK="$bubblecheck" \
+    -DCTRPORT_PLAYER_SHOTS="$shots" -DCTRPORT_ROSALINA_PROBE="$rosaprobe" -DCTRPORT_UTFADE_PROBE="$utfadeprobe" -DCTRPORT_BUBBLE_CHECK="$bubblecheck" \
     -DCTRPORT_PACER_OBSERVE="$pacer_observe" -DCTRPORT_PACER_R2R3A="$pacer_rule" \
     -DCTRPORT_PACER_CSV_DIAG="$pacer_csv_diag" \
     -DCTRPORT_ROOMPLAN_FILE="$roomplan_file" -DCTRPORT_SFXPLAN_FILE="$sfxplan_file" -DCTRPORT_PHASEPLAN_FILE="$phaseplan_file" -DCTRPORT_ROOMPLAN_DIR="$roomplan_dir" -DCTRPORT_ROOMPLAN_RECORDER="$roomplan_rec" \

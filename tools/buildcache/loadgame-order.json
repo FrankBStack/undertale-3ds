@@ -1,0 +1,1836 @@
+{
+  "undertale-o3ds": {
+    ".text.h1hole.utloop": [
+      {
+        "name": "lsRect",
+        "offset": 0,
+        "size": 204
+      },
+      {
+        "name": "lsTarget",
+        "offset": 204,
+        "size": 308
+      },
+      {
+        "name": "lsBegin",
+        "offset": 512,
+        "size": 340
+      },
+      {
+        "name": "lsFinish",
+        "offset": 852,
+        "size": 260
+      }
+    ],
+    ".text.h1hole.utstall": [
+      {
+        "name": "lsDrawText",
+        "offset": 0,
+        "size": 156
+      },
+      {
+        "name": "lsDrawEye",
+        "offset": 156,
+        "size": 384
+      },
+      {
+        "name": "lsStep.constprop.0",
+        "offset": 540,
+        "size": 168
+      },
+      {
+        "name": "__wrap_CtrDataVersion_check",
+        "offset": 708,
+        "size": 100
+      },
+      {
+        "name": "__wrap_DataWin_parse",
+        "offset": 808,
+        "size": 116
+      }
+    ],
+    ".text.late.loadscreen": [
+      {
+        "name": "lsDrawDog",
+        "offset": 0,
+        "size": 208
+      },
+      {
+        "name": "lsMs",
+        "offset": 208,
+        "size": 40
+      },
+      {
+        "name": "lsPhaseLocked",
+        "offset": 248,
+        "size": 264
+      },
+      {
+        "name": "lsPresent",
+        "offset": 512,
+        "size": 492
+      },
+      {
+        "name": "lsThread",
+        "offset": 1004,
+        "size": 132
+      },
+      {
+        "name": "__wrap_CtrPackScreen_run",
+        "offset": 1136,
+        "size": 44
+      },
+      {
+        "name": "__wrap_CtrPacer_loadStress",
+        "offset": 1180,
+        "size": 36
+      }
+    ],
+    ".text.h1hole.bxreview": [
+      {
+        "name": "lsPut32",
+        "offset": 0,
+        "size": 24
+      },
+      {
+        "name": "lsHashProgress",
+        "offset": 24,
+        "size": 36
+      },
+      {
+        "name": "lsNotes",
+        "offset": 60,
+        "size": 32
+      }
+    ],
+    ".text.h1hole.end": [
+      {
+        "name": "lsExpected",
+        "offset": 0,
+        "size": 148
+      },
+      {
+        "name": "lsPause",
+        "offset": 148,
+        "size": 88
+      }
+    ],
+    ".text.h1hole.aotlhelp": [
+      {
+        "name": "lsBase",
+        "offset": 0,
+        "size": 80
+      },
+      {
+        "name": "lsClear",
+        "offset": 80,
+        "size": 84
+      }
+    ],
+    ".text.h1hole.utlhelp": [
+      {
+        "name": "lsLayout",
+        "offset": 0,
+        "size": 72
+      },
+      {
+        "name": "lsPhase",
+        "offset": 72,
+        "size": 68
+      },
+      {
+        "name": "__wrap_Runner_initFirstRoom",
+        "offset": 140,
+        "size": 64
+      }
+    ],
+    ".text.late.packscreen": [
+      {
+        "name": "psBits",
+        "offset": 0,
+        "size": 144
+      },
+      {
+        "name": "psPut32",
+        "offset": 144,
+        "size": 32
+      },
+      {
+        "name": "psDogKey",
+        "offset": 176,
+        "size": 8
+      },
+      {
+        "name": "psDrawEye",
+        "offset": 184,
+        "size": 520
+      },
+      {
+        "name": "psSaveShot",
+        "offset": 704,
+        "size": 408
+      },
+      {
+        "name": "psPresent",
+        "offset": 1112,
+        "size": 476
+      },
+      {
+        "name": "psFindLine",
+        "offset": 1588,
+        "size": 244
+      },
+      {
+        "name": "psReadArt",
+        "offset": 1832,
+        "size": 184
+      },
+      {
+        "name": "lsPackRun",
+        "offset": 2016,
+        "size": 1844
+      }
+    ],
+    ".text.h1hole.asgborder": [
+      {
+        "name": "lsDecide",
+        "offset": 0,
+        "size": 532
+      },
+      {
+        "name": "lsDataWin",
+        "offset": 532,
+        "size": 160
+      },
+      {
+        "name": "lsSaveShot",
+        "offset": 692,
+        "size": 408
+      }
+    ],
+    ".text.h1hole.relprep": [
+      {
+        "name": "lsQuit",
+        "offset": 0,
+        "size": 96
+      },
+      {
+        "name": "__wrap_SandboxFileSystem_create",
+        "offset": 96,
+        "size": 36
+      }
+    ],
+    ".text.h1hole.loadtime": [
+      {
+        "name": "__wrap_C3D_Init",
+        "offset": 0,
+        "size": 72
+      }
+    ],
+    ".text.h1hole.coverage": [
+      {
+        "name": "__wrap_CtrPack_setDataWinPath",
+        "offset": 0,
+        "size": 24
+      },
+      {
+        "name": "__wrap_VM_create",
+        "offset": 24,
+        "size": 28
+      }
+    ],
+    ".text.h1hole.aotlate": [
+      {
+        "name": "__wrap_CtrWatchdog_stop",
+        "offset": 0,
+        "size": 16
+      }
+    ],
+    "__constants": {
+      ".rodata.loadscreen_in_text": [
+        {
+          "name": "lsFixedMs",
+          "offset": 0,
+          "size": 18
+        },
+        {
+          "name": "lsPerMb10",
+          "offset": 18,
+          "size": 18
+        },
+        {
+          "name": "lsMeasured",
+          "offset": 36,
+          "size": 9
+        },
+        {
+          "name": "lsWhySetting",
+          "offset": 45,
+          "size": 20
+        },
+        {
+          "name": "lsWhyThread",
+          "offset": 65,
+          "size": 12
+        },
+        {
+          "name": "lsRead",
+          "offset": 77,
+          "size": 4
+        },
+        {
+          "name": "LoadScreen_settingsPath",
+          "offset": 81,
+          "size": 40
+        },
+        {
+          "name": "lsKeyFormat",
+          "offset": 121,
+          "size": 16
+        },
+        {
+          "name": "lsGameKey",
+          "offset": 137,
+          "size": 12
+        },
+        {
+          "name": "lsOnKey",
+          "offset": 149,
+          "size": 16
+        },
+        {
+          "name": "lsShotsPath",
+          "offset": 165,
+          "size": 40
+        },
+        {
+          "name": "lsShotFormat",
+          "offset": 205,
+          "size": 48
+        },
+        {
+          "name": "lsWriteBinary",
+          "offset": 253,
+          "size": 4
+        },
+        {
+          "name": "lsLogDone",
+          "offset": 257,
+          "size": 176
+        },
+        {
+          "name": "lsLogOff",
+          "offset": 433,
+          "size": 28
+        }
+      ],
+      ".rodata.packscreen_in_text": [
+        {
+          "name": "psMagic",
+          "offset": 0,
+          "size": 8
+        },
+        {
+          "name": "psRomfsName",
+          "offset": 8,
+          "size": 8
+        },
+        {
+          "name": "psArtPath",
+          "offset": 16,
+          "size": 24
+        },
+        {
+          "name": "psReadBinary",
+          "offset": 40,
+          "size": 4
+        },
+        {
+          "name": "psStreamed",
+          "offset": 44,
+          "size": 12
+        },
+        {
+          "name": "psStaged",
+          "offset": 56,
+          "size": 16
+        },
+        {
+          "name": "psWhole",
+          "offset": 72,
+          "size": 8
+        },
+        {
+          "name": "psSdArchive",
+          "offset": 80,
+          "size": 12
+        },
+        {
+          "name": "psStdio",
+          "offset": 92,
+          "size": 8
+        },
+        {
+          "name": "psSkipped",
+          "offset": 100,
+          "size": 32
+        },
+        {
+          "name": "psNothing",
+          "offset": 132,
+          "size": 4
+        },
+        {
+          "name": "psWithLine",
+          "offset": 136,
+          "size": 12
+        },
+        {
+          "name": "psWithoutLine",
+          "offset": 148,
+          "size": 48
+        },
+        {
+          "name": "psLogThreads",
+          "offset": 196,
+          "size": 52
+        },
+        {
+          "name": "psWatchPhase",
+          "offset": 248,
+          "size": 20
+        },
+        {
+          "name": "psLogPage",
+          "offset": 268,
+          "size": 136
+        },
+        {
+          "name": "psLogWrote",
+          "offset": 404,
+          "size": 152
+        },
+        {
+          "name": "psLogPublication",
+          "offset": 556,
+          "size": 52
+        },
+        {
+          "name": "psLogReady",
+          "offset": 608,
+          "size": 136
+        },
+        {
+          "name": "psLogWritten",
+          "offset": 744,
+          "size": 108
+        },
+        {
+          "name": "psLogScreen",
+          "offset": 852,
+          "size": 56
+        }
+      ]
+    }
+  },
+  "undertale-n3ds": {
+    ".text.late.loadscreen": [
+      {
+        "name": "lsRect",
+        "offset": 0,
+        "size": 204
+      },
+      {
+        "name": "lsDrawText",
+        "offset": 204,
+        "size": 156
+      },
+      {
+        "name": "lsDrawDog",
+        "offset": 360,
+        "size": 208
+      },
+      {
+        "name": "lsPut32",
+        "offset": 568,
+        "size": 24
+      },
+      {
+        "name": "lsMs",
+        "offset": 592,
+        "size": 40
+      },
+      {
+        "name": "lsExpected",
+        "offset": 632,
+        "size": 148
+      },
+      {
+        "name": "lsTarget",
+        "offset": 780,
+        "size": 308
+      },
+      {
+        "name": "lsBase",
+        "offset": 1088,
+        "size": 80
+      },
+      {
+        "name": "lsLayout",
+        "offset": 1168,
+        "size": 72
+      },
+      {
+        "name": "lsHashProgress",
+        "offset": 1240,
+        "size": 36
+      },
+      {
+        "name": "lsPhaseLocked",
+        "offset": 1276,
+        "size": 264
+      },
+      {
+        "name": "lsClear",
+        "offset": 1540,
+        "size": 84
+      },
+      {
+        "name": "lsPhase",
+        "offset": 1624,
+        "size": 68
+      },
+      {
+        "name": "lsPause",
+        "offset": 1692,
+        "size": 88
+      },
+      {
+        "name": "lsDecide",
+        "offset": 1780,
+        "size": 532
+      },
+      {
+        "name": "lsBegin",
+        "offset": 2312,
+        "size": 340
+      },
+      {
+        "name": "lsDataWin",
+        "offset": 2652,
+        "size": 160
+      },
+      {
+        "name": "lsDrawEye",
+        "offset": 2812,
+        "size": 384
+      },
+      {
+        "name": "lsSaveShot",
+        "offset": 3196,
+        "size": 408
+      },
+      {
+        "name": "lsPresent",
+        "offset": 3604,
+        "size": 488
+      },
+      {
+        "name": "lsFinish",
+        "offset": 4092,
+        "size": 260
+      },
+      {
+        "name": "lsNotes",
+        "offset": 4352,
+        "size": 32
+      },
+      {
+        "name": "lsQuit",
+        "offset": 4384,
+        "size": 96
+      },
+      {
+        "name": "lsStep.constprop.0",
+        "offset": 4480,
+        "size": 168
+      },
+      {
+        "name": "lsThread",
+        "offset": 4648,
+        "size": 128
+      },
+      {
+        "name": "__wrap_C3D_Init",
+        "offset": 4776,
+        "size": 72
+      },
+      {
+        "name": "__wrap_CtrPack_setDataWinPath",
+        "offset": 4848,
+        "size": 24
+      },
+      {
+        "name": "__wrap_CtrDataVersion_check",
+        "offset": 4872,
+        "size": 100
+      },
+      {
+        "name": "__wrap_DataWin_parse",
+        "offset": 4972,
+        "size": 116
+      },
+      {
+        "name": "__wrap_CtrPackScreen_run",
+        "offset": 5088,
+        "size": 44
+      },
+      {
+        "name": "__wrap_VM_create",
+        "offset": 5132,
+        "size": 28
+      },
+      {
+        "name": "__wrap_SandboxFileSystem_create",
+        "offset": 5160,
+        "size": 36
+      },
+      {
+        "name": "__wrap_CtrPacer_loadStress",
+        "offset": 5196,
+        "size": 36
+      },
+      {
+        "name": "__wrap_Runner_initFirstRoom",
+        "offset": 5232,
+        "size": 64
+      },
+      {
+        "name": "__wrap_CtrWatchdog_stop",
+        "offset": 5296,
+        "size": 16
+      }
+    ],
+    ".text.late.packscreen": [
+      {
+        "name": "psBits",
+        "offset": 0,
+        "size": 144
+      },
+      {
+        "name": "psPut32",
+        "offset": 144,
+        "size": 32
+      },
+      {
+        "name": "psDogKey",
+        "offset": 176,
+        "size": 8
+      },
+      {
+        "name": "psDrawEye",
+        "offset": 184,
+        "size": 520
+      },
+      {
+        "name": "psSaveShot",
+        "offset": 704,
+        "size": 408
+      },
+      {
+        "name": "psPresent",
+        "offset": 1112,
+        "size": 476
+      },
+      {
+        "name": "psFindLine",
+        "offset": 1588,
+        "size": 244
+      },
+      {
+        "name": "psReadArt",
+        "offset": 1832,
+        "size": 184
+      },
+      {
+        "name": "lsPackRun",
+        "offset": 2016,
+        "size": 1844
+      }
+    ],
+    "__constants": {
+      ".rodata.loadscreen_in_text": [
+        {
+          "name": "lsFixedMs",
+          "offset": 0,
+          "size": 18
+        },
+        {
+          "name": "lsPerMb10",
+          "offset": 18,
+          "size": 18
+        },
+        {
+          "name": "lsMeasured",
+          "offset": 36,
+          "size": 9
+        },
+        {
+          "name": "lsWhySetting",
+          "offset": 45,
+          "size": 20
+        },
+        {
+          "name": "lsWhyThread",
+          "offset": 65,
+          "size": 12
+        },
+        {
+          "name": "lsRead",
+          "offset": 77,
+          "size": 4
+        },
+        {
+          "name": "LoadScreen_settingsPath",
+          "offset": 81,
+          "size": 40
+        },
+        {
+          "name": "lsKeyFormat",
+          "offset": 121,
+          "size": 16
+        },
+        {
+          "name": "lsGameKey",
+          "offset": 137,
+          "size": 12
+        },
+        {
+          "name": "lsOnKey",
+          "offset": 149,
+          "size": 16
+        },
+        {
+          "name": "lsShotsPath",
+          "offset": 165,
+          "size": 40
+        },
+        {
+          "name": "lsShotFormat",
+          "offset": 205,
+          "size": 48
+        },
+        {
+          "name": "lsWriteBinary",
+          "offset": 253,
+          "size": 4
+        },
+        {
+          "name": "lsLogDone",
+          "offset": 257,
+          "size": 176
+        },
+        {
+          "name": "lsLogOff",
+          "offset": 433,
+          "size": 28
+        }
+      ],
+      ".rodata.packscreen_in_text": [
+        {
+          "name": "psMagic",
+          "offset": 0,
+          "size": 8
+        },
+        {
+          "name": "psRomfsName",
+          "offset": 8,
+          "size": 8
+        },
+        {
+          "name": "psArtPath",
+          "offset": 16,
+          "size": 24
+        },
+        {
+          "name": "psReadBinary",
+          "offset": 40,
+          "size": 4
+        },
+        {
+          "name": "psStreamed",
+          "offset": 44,
+          "size": 12
+        },
+        {
+          "name": "psStaged",
+          "offset": 56,
+          "size": 16
+        },
+        {
+          "name": "psWhole",
+          "offset": 72,
+          "size": 8
+        },
+        {
+          "name": "psSdArchive",
+          "offset": 80,
+          "size": 12
+        },
+        {
+          "name": "psStdio",
+          "offset": 92,
+          "size": 8
+        },
+        {
+          "name": "psSkipped",
+          "offset": 100,
+          "size": 32
+        },
+        {
+          "name": "psNothing",
+          "offset": 132,
+          "size": 4
+        },
+        {
+          "name": "psWithLine",
+          "offset": 136,
+          "size": 12
+        },
+        {
+          "name": "psWithoutLine",
+          "offset": 148,
+          "size": 48
+        },
+        {
+          "name": "psLogThreads",
+          "offset": 196,
+          "size": 52
+        },
+        {
+          "name": "psWatchPhase",
+          "offset": 248,
+          "size": 20
+        },
+        {
+          "name": "psLogPage",
+          "offset": 268,
+          "size": 136
+        },
+        {
+          "name": "psLogWrote",
+          "offset": 404,
+          "size": 152
+        },
+        {
+          "name": "psLogPublication",
+          "offset": 556,
+          "size": 52
+        },
+        {
+          "name": "psLogReady",
+          "offset": 608,
+          "size": 136
+        },
+        {
+          "name": "psLogWritten",
+          "offset": 744,
+          "size": 108
+        },
+        {
+          "name": "psLogScreen",
+          "offset": 852,
+          "size": 56
+        }
+      ]
+    }
+  },
+  "deltarune-o3ds": {
+    ".text.late.loadscreen": [
+      {
+        "name": "lsRect",
+        "offset": 0,
+        "size": 204
+      },
+      {
+        "name": "lsDrawText",
+        "offset": 204,
+        "size": 156
+      },
+      {
+        "name": "lsDrawDog",
+        "offset": 360,
+        "size": 208
+      },
+      {
+        "name": "lsPut32",
+        "offset": 568,
+        "size": 24
+      },
+      {
+        "name": "lsMs",
+        "offset": 592,
+        "size": 40
+      },
+      {
+        "name": "lsExpected",
+        "offset": 632,
+        "size": 148
+      },
+      {
+        "name": "lsTarget",
+        "offset": 780,
+        "size": 308
+      },
+      {
+        "name": "lsBase",
+        "offset": 1088,
+        "size": 80
+      },
+      {
+        "name": "lsLayout",
+        "offset": 1168,
+        "size": 216
+      },
+      {
+        "name": "lsHashProgress",
+        "offset": 1384,
+        "size": 36
+      },
+      {
+        "name": "lsPhaseLocked",
+        "offset": 1420,
+        "size": 264
+      },
+      {
+        "name": "lsClear",
+        "offset": 1684,
+        "size": 84
+      },
+      {
+        "name": "lsPhase",
+        "offset": 1768,
+        "size": 68
+      },
+      {
+        "name": "lsPause",
+        "offset": 1836,
+        "size": 88
+      },
+      {
+        "name": "BxHash_pause",
+        "offset": 1836,
+        "size": 88
+      },
+      {
+        "name": "lsDrawEye",
+        "offset": 1924,
+        "size": 384
+      },
+      {
+        "name": "lsSaveShot",
+        "offset": 2308,
+        "size": 408
+      },
+      {
+        "name": "lsPresent",
+        "offset": 2716,
+        "size": 488
+      },
+      {
+        "name": "lsReadArt",
+        "offset": 3204,
+        "size": 528
+      },
+      {
+        "name": "lsDecide",
+        "offset": 3732,
+        "size": 536
+      },
+      {
+        "name": "lsPickText",
+        "offset": 4268,
+        "size": 216
+      },
+      {
+        "name": "lsBegin",
+        "offset": 4484,
+        "size": 348
+      },
+      {
+        "name": "lsDataWin",
+        "offset": 4832,
+        "size": 184
+      },
+      {
+        "name": "lsFinish",
+        "offset": 5016,
+        "size": 260
+      },
+      {
+        "name": "lsNotes",
+        "offset": 5276,
+        "size": 112
+      },
+      {
+        "name": "lsQuit",
+        "offset": 5388,
+        "size": 96
+      },
+      {
+        "name": "lsStep.constprop.0",
+        "offset": 5484,
+        "size": 168
+      },
+      {
+        "name": "lsThread",
+        "offset": 5652,
+        "size": 132
+      },
+      {
+        "name": "__wrap_C3D_Init",
+        "offset": 5784,
+        "size": 72
+      },
+      {
+        "name": "__wrap_CtrPack_setDataWinPath",
+        "offset": 5856,
+        "size": 24
+      },
+      {
+        "name": "__wrap_CtrDataVersion_check",
+        "offset": 5880,
+        "size": 100
+      },
+      {
+        "name": "__wrap_DataWin_parse",
+        "offset": 5980,
+        "size": 116
+      },
+      {
+        "name": "__wrap_CtrPackScreen_run",
+        "offset": 6096,
+        "size": 44
+      },
+      {
+        "name": "__wrap_VM_create",
+        "offset": 6140,
+        "size": 28
+      },
+      {
+        "name": "__wrap_SandboxFileSystem_create",
+        "offset": 6168,
+        "size": 36
+      },
+      {
+        "name": "__wrap_CtrPacer_loadStress",
+        "offset": 6204,
+        "size": 36
+      },
+      {
+        "name": "__wrap_Runner_initFirstRoom",
+        "offset": 6240,
+        "size": 64
+      },
+      {
+        "name": "__wrap_CtrWatchdog_stop",
+        "offset": 6304,
+        "size": 16
+      }
+    ],
+    ".text.late.packscreen": [
+      {
+        "name": "psRect",
+        "offset": 0,
+        "size": 204
+      },
+      {
+        "name": "psBits",
+        "offset": 204,
+        "size": 152
+      },
+      {
+        "name": "psPut32",
+        "offset": 356,
+        "size": 32
+      },
+      {
+        "name": "psDogKey",
+        "offset": 388,
+        "size": 204
+      },
+      {
+        "name": "BxHash_dogKey",
+        "offset": 388,
+        "size": 204
+      },
+      {
+        "name": "psDrawEye",
+        "offset": 592,
+        "size": 556
+      },
+      {
+        "name": "psSaveShot",
+        "offset": 1148,
+        "size": 408
+      },
+      {
+        "name": "psPresent",
+        "offset": 1556,
+        "size": 480
+      },
+      {
+        "name": "BxHash_present",
+        "offset": 1556,
+        "size": 480
+      },
+      {
+        "name": "psFindLine",
+        "offset": 2036,
+        "size": 244
+      },
+      {
+        "name": "BxHash_findLine",
+        "offset": 2036,
+        "size": 244
+      },
+      {
+        "name": "lsPackRun",
+        "offset": 2280,
+        "size": 1844
+      }
+    ],
+    "__constants": {
+      ".rodata.loadscreen_in_text": [
+        {
+          "name": "lsFixedMs",
+          "offset": 0,
+          "size": 18
+        },
+        {
+          "name": "lsPerMb10",
+          "offset": 18,
+          "size": 18
+        },
+        {
+          "name": "lsMeasured",
+          "offset": 36,
+          "size": 9
+        },
+        {
+          "name": "lsShotFormat",
+          "offset": 45,
+          "size": 48
+        },
+        {
+          "name": "lsWriteBinary",
+          "offset": 93,
+          "size": 4
+        },
+        {
+          "name": "lsRomfsName",
+          "offset": 97,
+          "size": 8
+        },
+        {
+          "name": "lsArtPath",
+          "offset": 105,
+          "size": 24
+        },
+        {
+          "name": "lsReadBinary",
+          "offset": 129,
+          "size": 4
+        },
+        {
+          "name": "lsMagic",
+          "offset": 133,
+          "size": 8
+        },
+        {
+          "name": "lsWhySetting",
+          "offset": 141,
+          "size": 20
+        },
+        {
+          "name": "lsWhyThread",
+          "offset": 161,
+          "size": 12
+        },
+        {
+          "name": "lsRead",
+          "offset": 173,
+          "size": 4
+        },
+        {
+          "name": "lsSettingsPath",
+          "offset": 177,
+          "size": 40
+        },
+        {
+          "name": "lsKeyFormat",
+          "offset": 217,
+          "size": 16
+        },
+        {
+          "name": "lsGameKey",
+          "offset": 233,
+          "size": 12
+        },
+        {
+          "name": "lsOnKey",
+          "offset": 245,
+          "size": 16
+        },
+        {
+          "name": "lsShotsPath",
+          "offset": 261,
+          "size": 40
+        },
+        {
+          "name": "lsChapterWord",
+          "offset": 301,
+          "size": 12
+        },
+        {
+          "name": "lsLogDone",
+          "offset": 313,
+          "size": 176
+        },
+        {
+          "name": "lsLogDog",
+          "offset": 489,
+          "size": 20
+        },
+        {
+          "name": "lsNothing",
+          "offset": 509,
+          "size": 4
+        },
+        {
+          "name": "lsLogOff",
+          "offset": 513,
+          "size": 28
+        },
+        {
+          "name": "lsLogNoArt",
+          "offset": 541,
+          "size": 64
+        },
+        {
+          "name": "lsLogArt",
+          "offset": 605,
+          "size": 32
+        }
+      ],
+      ".rodata.packscreen_in_text": [
+        {
+          "name": "psMagic",
+          "offset": 0,
+          "size": 8
+        },
+        {
+          "name": "psStreamed",
+          "offset": 8,
+          "size": 12
+        },
+        {
+          "name": "psStaged",
+          "offset": 20,
+          "size": 16
+        },
+        {
+          "name": "psWhole",
+          "offset": 36,
+          "size": 8
+        },
+        {
+          "name": "psSdArchive",
+          "offset": 44,
+          "size": 12
+        },
+        {
+          "name": "psStdio",
+          "offset": 56,
+          "size": 8
+        },
+        {
+          "name": "psSkipped",
+          "offset": 64,
+          "size": 32
+        },
+        {
+          "name": "psNothing",
+          "offset": 96,
+          "size": 4
+        },
+        {
+          "name": "psWithLine",
+          "offset": 100,
+          "size": 12
+        },
+        {
+          "name": "psWithoutLine",
+          "offset": 112,
+          "size": 48
+        },
+        {
+          "name": "psLogThreads",
+          "offset": 160,
+          "size": 52
+        },
+        {
+          "name": "psWatchPhase",
+          "offset": 212,
+          "size": 20
+        },
+        {
+          "name": "psLogPage",
+          "offset": 232,
+          "size": 136
+        },
+        {
+          "name": "psLogWrote",
+          "offset": 368,
+          "size": 152
+        },
+        {
+          "name": "psLogPublication",
+          "offset": 520,
+          "size": 52
+        },
+        {
+          "name": "psLogReady",
+          "offset": 572,
+          "size": 136
+        },
+        {
+          "name": "psLogWritten",
+          "offset": 708,
+          "size": 108
+        },
+        {
+          "name": "psLogScreen",
+          "offset": 816,
+          "size": 56
+        }
+      ]
+    },
+    ".text.late.dogcheck": [
+      {
+        "name": "lsDogRect",
+        "offset": 0,
+        "size": 204
+      },
+      {
+        "name": "lsDogFloor",
+        "offset": 204,
+        "size": 32
+      },
+      {
+        "name": "lsDogSettings",
+        "offset": 236,
+        "size": 248
+      },
+      {
+        "name": "lsDogDraw",
+        "offset": 484,
+        "size": 1720
+      }
+    ]
+  },
+  "deltarune-n3ds": {
+    ".text.late.loadscreen": [
+      {
+        "name": "lsRect",
+        "offset": 0,
+        "size": 204
+      },
+      {
+        "name": "lsDrawText",
+        "offset": 204,
+        "size": 156
+      },
+      {
+        "name": "lsDrawDog",
+        "offset": 360,
+        "size": 208
+      },
+      {
+        "name": "lsPut32",
+        "offset": 568,
+        "size": 24
+      },
+      {
+        "name": "lsMs",
+        "offset": 592,
+        "size": 40
+      },
+      {
+        "name": "lsExpected",
+        "offset": 632,
+        "size": 148
+      },
+      {
+        "name": "lsTarget",
+        "offset": 780,
+        "size": 308
+      },
+      {
+        "name": "lsBase",
+        "offset": 1088,
+        "size": 80
+      },
+      {
+        "name": "lsLayout",
+        "offset": 1168,
+        "size": 216
+      },
+      {
+        "name": "lsHashProgress",
+        "offset": 1384,
+        "size": 36
+      },
+      {
+        "name": "lsPhaseLocked",
+        "offset": 1420,
+        "size": 264
+      },
+      {
+        "name": "lsClear",
+        "offset": 1684,
+        "size": 84
+      },
+      {
+        "name": "lsPhase",
+        "offset": 1768,
+        "size": 68
+      },
+      {
+        "name": "lsPause",
+        "offset": 1836,
+        "size": 88
+      },
+      {
+        "name": "BxHash_pause",
+        "offset": 1836,
+        "size": 88
+      },
+      {
+        "name": "lsDrawEye",
+        "offset": 1924,
+        "size": 384
+      },
+      {
+        "name": "lsSaveShot",
+        "offset": 2308,
+        "size": 408
+      },
+      {
+        "name": "lsPresent",
+        "offset": 2716,
+        "size": 488
+      },
+      {
+        "name": "lsReadArt",
+        "offset": 3204,
+        "size": 528
+      },
+      {
+        "name": "lsDecide",
+        "offset": 3732,
+        "size": 536
+      },
+      {
+        "name": "lsPickText",
+        "offset": 4268,
+        "size": 216
+      },
+      {
+        "name": "lsBegin",
+        "offset": 4484,
+        "size": 348
+      },
+      {
+        "name": "lsDataWin",
+        "offset": 4832,
+        "size": 184
+      },
+      {
+        "name": "lsFinish",
+        "offset": 5016,
+        "size": 260
+      },
+      {
+        "name": "lsNotes",
+        "offset": 5276,
+        "size": 112
+      },
+      {
+        "name": "lsQuit",
+        "offset": 5388,
+        "size": 96
+      },
+      {
+        "name": "lsStep.constprop.0",
+        "offset": 5484,
+        "size": 168
+      },
+      {
+        "name": "lsThread",
+        "offset": 5652,
+        "size": 132
+      },
+      {
+        "name": "__wrap_C3D_Init",
+        "offset": 5784,
+        "size": 72
+      },
+      {
+        "name": "__wrap_CtrPack_setDataWinPath",
+        "offset": 5856,
+        "size": 24
+      },
+      {
+        "name": "__wrap_CtrDataVersion_check",
+        "offset": 5880,
+        "size": 100
+      },
+      {
+        "name": "__wrap_DataWin_parse",
+        "offset": 5980,
+        "size": 116
+      },
+      {
+        "name": "__wrap_CtrPackScreen_run",
+        "offset": 6096,
+        "size": 44
+      },
+      {
+        "name": "__wrap_VM_create",
+        "offset": 6140,
+        "size": 28
+      },
+      {
+        "name": "__wrap_SandboxFileSystem_create",
+        "offset": 6168,
+        "size": 36
+      },
+      {
+        "name": "__wrap_CtrPacer_loadStress",
+        "offset": 6204,
+        "size": 36
+      },
+      {
+        "name": "__wrap_Runner_initFirstRoom",
+        "offset": 6240,
+        "size": 64
+      },
+      {
+        "name": "__wrap_CtrWatchdog_stop",
+        "offset": 6304,
+        "size": 16
+      }
+    ],
+    ".text.late.packscreen": [
+      {
+        "name": "psRect",
+        "offset": 0,
+        "size": 204
+      },
+      {
+        "name": "psBits",
+        "offset": 204,
+        "size": 152
+      },
+      {
+        "name": "psPut32",
+        "offset": 356,
+        "size": 32
+      },
+      {
+        "name": "psDogKey",
+        "offset": 388,
+        "size": 204
+      },
+      {
+        "name": "BxHash_dogKey",
+        "offset": 388,
+        "size": 204
+      },
+      {
+        "name": "psDrawEye",
+        "offset": 592,
+        "size": 556
+      },
+      {
+        "name": "psSaveShot",
+        "offset": 1148,
+        "size": 408
+      },
+      {
+        "name": "psPresent",
+        "offset": 1556,
+        "size": 480
+      },
+      {
+        "name": "BxHash_present",
+        "offset": 1556,
+        "size": 480
+      },
+      {
+        "name": "psFindLine",
+        "offset": 2036,
+        "size": 244
+      },
+      {
+        "name": "BxHash_findLine",
+        "offset": 2036,
+        "size": 244
+      },
+      {
+        "name": "lsPackRun",
+        "offset": 2280,
+        "size": 1844
+      }
+    ],
+    "__constants": {
+      ".rodata.loadscreen_in_text": [
+        {
+          "name": "lsFixedMs",
+          "offset": 0,
+          "size": 18
+        },
+        {
+          "name": "lsPerMb10",
+          "offset": 18,
+          "size": 18
+        },
+        {
+          "name": "lsMeasured",
+          "offset": 36,
+          "size": 9
+        },
+        {
+          "name": "lsShotFormat",
+          "offset": 45,
+          "size": 48
+        },
+        {
+          "name": "lsWriteBinary",
+          "offset": 93,
+          "size": 4
+        },
+        {
+          "name": "lsRomfsName",
+          "offset": 97,
+          "size": 8
+        },
+        {
+          "name": "lsArtPath",
+          "offset": 105,
+          "size": 24
+        },
+        {
+          "name": "lsReadBinary",
+          "offset": 129,
+          "size": 4
+        },
+        {
+          "name": "lsMagic",
+          "offset": 133,
+          "size": 8
+        },
+        {
+          "name": "lsWhySetting",
+          "offset": 141,
+          "size": 20
+        },
+        {
+          "name": "lsWhyThread",
+          "offset": 161,
+          "size": 12
+        },
+        {
+          "name": "lsRead",
+          "offset": 173,
+          "size": 4
+        },
+        {
+          "name": "lsSettingsPath",
+          "offset": 177,
+          "size": 40
+        },
+        {
+          "name": "lsKeyFormat",
+          "offset": 217,
+          "size": 16
+        },
+        {
+          "name": "lsGameKey",
+          "offset": 233,
+          "size": 12
+        },
+        {
+          "name": "lsOnKey",
+          "offset": 245,
+          "size": 16
+        },
+        {
+          "name": "lsShotsPath",
+          "offset": 261,
+          "size": 40
+        },
+        {
+          "name": "lsChapterWord",
+          "offset": 301,
+          "size": 12
+        },
+        {
+          "name": "lsLogDone",
+          "offset": 313,
+          "size": 176
+        },
+        {
+          "name": "lsLogDog",
+          "offset": 489,
+          "size": 20
+        },
+        {
+          "name": "lsNothing",
+          "offset": 509,
+          "size": 4
+        },
+        {
+          "name": "lsLogOff",
+          "offset": 513,
+          "size": 28
+        },
+        {
+          "name": "lsLogNoArt",
+          "offset": 541,
+          "size": 64
+        },
+        {
+          "name": "lsLogArt",
+          "offset": 605,
+          "size": 32
+        }
+      ],
+      ".rodata.packscreen_in_text": [
+        {
+          "name": "psMagic",
+          "offset": 0,
+          "size": 8
+        },
+        {
+          "name": "psStreamed",
+          "offset": 8,
+          "size": 12
+        },
+        {
+          "name": "psStaged",
+          "offset": 20,
+          "size": 16
+        },
+        {
+          "name": "psWhole",
+          "offset": 36,
+          "size": 8
+        },
+        {
+          "name": "psSdArchive",
+          "offset": 44,
+          "size": 12
+        },
+        {
+          "name": "psStdio",
+          "offset": 56,
+          "size": 8
+        },
+        {
+          "name": "psSkipped",
+          "offset": 64,
+          "size": 32
+        },
+        {
+          "name": "psNothing",
+          "offset": 96,
+          "size": 4
+        },
+        {
+          "name": "psWithLine",
+          "offset": 100,
+          "size": 12
+        },
+        {
+          "name": "psWithoutLine",
+          "offset": 112,
+          "size": 48
+        },
+        {
+          "name": "psLogThreads",
+          "offset": 160,
+          "size": 52
+        },
+        {
+          "name": "psWatchPhase",
+          "offset": 212,
+          "size": 20
+        },
+        {
+          "name": "psLogPage",
+          "offset": 232,
+          "size": 136
+        },
+        {
+          "name": "psLogWrote",
+          "offset": 368,
+          "size": 152
+        },
+        {
+          "name": "psLogPublication",
+          "offset": 520,
+          "size": 52
+        },
+        {
+          "name": "psLogReady",
+          "offset": 572,
+          "size": 136
+        },
+        {
+          "name": "psLogWritten",
+          "offset": 708,
+          "size": 108
+        },
+        {
+          "name": "psLogScreen",
+          "offset": 816,
+          "size": 56
+        }
+      ]
+    },
+    ".text.late.dogcheck": [
+      {
+        "name": "lsDogRect",
+        "offset": 0,
+        "size": 204
+      },
+      {
+        "name": "lsDogFloor",
+        "offset": 204,
+        "size": 32
+      },
+      {
+        "name": "lsDogSettings",
+        "offset": 236,
+        "size": 248
+      },
+      {
+        "name": "lsDogDraw",
+        "offset": 484,
+        "size": 1720
+      }
+    ]
+  }
+}

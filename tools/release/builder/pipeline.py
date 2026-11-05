@@ -165,6 +165,10 @@ def source_wanted(relative, game=None):
         return False  # Packages have one game-specific launcher at their root.
     parts = relative.replace("\\", "/").split("/")
     game_only = {
+        # dlgtop's compiler adapter and retained slots are selected only by UT CMake.
+        'tools/buildcache/loadgame_compile.py': 'undertale',
+        'tools/buildcache/loadgame-order.json': 'undertale',
+        'tools/buildcache/test_loadgame_compile.py': 'undertale',
         'tools/release/sfxpack-versions.json': 'undertale',
         'tools/release/music-versions.json': 'undertale',
         'tools/release/manifest-ut.txt': 'undertale',

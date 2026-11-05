@@ -2,10 +2,11 @@
 //
 // ctr_renderer.c's itemVerdict looks at each texture page item once, at its first draw under Smart smoothing: several
 // milliseconds an item on the Old 3DS, eight items on UNDERTALE's first battle frame (about 11 ms on Azahar, the
-// probe). The build works the same verdicts out from the game data (tools/aot/itemverdict.py, through
-// fontverdict.py's build mode) into romfs:/fonts/<data.win folder>.dtiv: "DTIV", version 1, the CtrPackKey, the item
-// count, then 10 bytes per item: with rounded colours the state byte itemVerdict would store (0 = not known, looked at
-// on the console as before) and the ink box smartInk would leave, then the same with exact colours.
+// smartcut probe). The build works the same verdicts out from the game data (tools/aot/itemverdict.py, through
+// fontverdict.py's build mode) into romfs:/fonts/<data.win folder>.dtiv: "DTIV", version 1 (2 for GOG, below), the
+// CtrPackKey, the item count, then 10 bytes per item: with rounded colours the state byte itemVerdict would store
+// (0 = not known, looked at on the console as before) and the ink box smartInk would leave, then the same with exact
+// colours.
 //
 // Read once per renderer and data.win under Smart smoothing, into the renderer's smart.itemState and smart.itemInk,
 // which itemVerdict then finds filled: right after the font verdicts at a room change (the last link of the
@@ -41,6 +42,17 @@
 #define IV_RODATA __attribute__((aligned(4), section(".rodata.itemverdict_in_text")))
 #define IV_MAGIC 0x56495444u // "DTIV"
 #define IV_HEADER 28
+// The table's version: 1, or 2 for the measured GOG container, whose build compares decoded colours
+// (fontverdict.Page's gog_smart, as the GOG font table's version 2 does). A GOG build refuses a version 1 table: one
+// built with Steam's packed comparison on GOG's tile formats (gogqa, 11-05). A build constant, not the font loader's
+// ctrGogutSmartDecoded test: build.sh makes a GOG build only from the GOG digest, which is when itemverdict.py writes
+// version 2, and the table's CtrPackKey binds it to that data.win; reading the flag cost the Old 3DS GOG link 12 B of
+// late code its H1 holes don't have.
+#if defined(CTRPORT_GOG_COMPAT) && defined(ENABLE_WAD16)
+#define IV_VERSION 2u
+#else
+#define IV_VERSION 1u
+#endif
 #define IV_ENTRY 10
 // Entries a read. Each read of a RomFS file is a request to the SD card that costs 10-20 ms on the console whatever
 // its size, and stdio's buffer splits reads into 1 KB requests: 128 entries a read took 2.2 s for UNDERTALE's 65 KB on
@@ -170,7 +182,7 @@ static IV_LATE uint32_t ivLoad(Renderer* renderer, DataWin* dw) {
                 memcpy(&timestamp, head + 16, 8);
                 memcpy(&items, head + 24, 4);
                 CtrPackKey key = CtrPack_keyFor(dw);
-                ok = magic == IV_MAGIC && version == 1 && size == key.dataWinSize && gameId == key.gameId && timestamp == key.timestamp &&
+                ok = magic == IV_MAGIC && version == IV_VERSION && size == key.dataWinSize && gameId == key.gameId && timestamp == key.timestamp &&
                      items == count;
             }
         }

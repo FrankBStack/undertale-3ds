@@ -13,7 +13,7 @@ typedef struct KnownFile {
     const char* digest;
 } KnownFile;
 #define DATA_VERSIONS_BASE_ONLY // revision 1 rows here; later rows in the table at the end of the file
-#define DATA_VERSION(game, part, size, digest) {game, part, size, digest},
+#define DATA_VERSION(game, part, size, digest) {game, part, DATA_VERSION_SIZE(size), digest},
 static const KnownFile knownFiles[] = {
 #include "../data_versions.inc"
 };
@@ -176,7 +176,7 @@ typedef struct LateKnownFile {
     char digest[65];
 } LateKnownFile;
 
-#define DATA_VERSION(game, part, size, digest) {size, game, part, digest},
+#define DATA_VERSION(game, part, size, digest) {DATA_VERSION_SIZE(size), game, part, digest},
 static const LateKnownFile lateKnownFiles[] __attribute__((aligned(8), section(".rodata.nativemac_in_text"))) = {
 #include "../data_versions.inc"
 };

@@ -210,7 +210,7 @@
     {
       "member": "platform/3ds/source/main.c",
       "class": "engine-lookups",
-      "sha256": "c84ce75411131aa390cabfaf5e5b80b05e40e39c6b5670c2155603bed0d4f24e",
+      "sha256": "d95ce2406ff9baaf5e8704865f8955881642624ec26ba14bbc02c851fbf6e10c",
       "justification": "Intro and title room names select startup rooms in player data.",
       "evidence_sha256": [
         "beff7c970aaeadca3f94aedfe4901d446f31340c60d5b22c361461f1f3cc2cdc"
@@ -273,10 +273,10 @@
     {
       "member": "platform/3ds/source/z_btlentry.c",
       "class": "engine-lookups",
-      "sha256": "ea54d674c541dc7ac982c051e49fe01096f59a43c0970022e0ec0f7f4d3f09e8",
-      "justification": "Two object names tell that a battle is starting, so its planned tiles can be read before the room change (textures only).",
+      "sha256": "ce7cce171baa31d399db7e1fdb476fdfe6780941b0d617e94b6ae9701a015ef4",
+      "justification": "Two object names tell that a battle is starting, and eight door object names that a door is fading out, so the planned tiles and code of the battle or of the door's destination can be read before the room change (textures and code only).",
       "evidence_sha256": [
-        "5c59e02ae037273a498c0832254458ab17d155089c991c7087533c66935a8350"
+        "15a06658898741b746ee9d561a05036e789248b640a12784722fcf68c58f8597"
       ]
     },
     {
@@ -286,6 +286,15 @@
       "justification": "The same sound and sprite names as ctr_argui.c select player-owned assets for the ports menu at a chapter switch.",
       "evidence_sha256": [
         "31ba8b4878770cbf4befdf9c21c804914280c149415195faf852be155e8b1b3b"
+      ]
+    },
+    {
+      "member": "platform/3ds/source/z_utfade.c",
+      "class": "engine-lookups",
+      "sha256": "0d4f8c62aad9c36cb279a235fa17992f428bd1fa802ae89096b7ae5b5b813045",
+      "justification": "Two object names tell that a door is fading to black at a room change, so the screen shows black while the room loads (presentation only); the comments name the fades it leaves alone. No game body, constants or assets.",
+      "evidence_sha256": [
+        "17037ed9c62235579663ed428831b5d73610236b3db9bd10f55c301deced5511"
       ]
     },
     {
@@ -363,7 +372,7 @@
     {
       "member": "platform/3ds/source/z_loadscreen.c",
       "class": "engine-lookups",
-      "sha256": "c4c323eea564d2e3612ee9105b33e2fee307ea5a5ec0e51ad3d86bdcc396e4ff",
+      "sha256": "1721cf504677517a76443a8d206cced67a1683db5af4ad1592fc50a8a579e814",
       "justification": "Source asset names document loading art extracted privately from player data. The DR cold chapter hash callback reuses that existing UI; identifier evidence is unchanged.",
       "evidence_sha256": [
         "af267ff21c3f4923516026bbfb91dc4fb53532535d95b783ebc4ccb02d985c62"
@@ -803,7 +812,7 @@
     {
       "member": "tools/aot/gog_smart.py",
       "class": "gating-hashes",
-      "sha256": "38bb26bcf6b7cb6f4f0c1505814e0ba560f1ea9a1bcf16e5a98318cd1bca3f8a",
+      "sha256": "88ac5fa2c49478e73d39df6213a0d33fd35b2e2f7a5590a50302a0e6ea48f74e",
       "justification": "Lead 2026-10-23 option 1: GOG-only compatibility indices/verdict bits keyed by content hashes and stable sprite/frame identity; no game content.",
       "evidence_sha256": [
         "dcf99176f5beeab6da7c76142996000867d039c9fffd11c97f64eb2640957c09",
@@ -813,7 +822,7 @@
     {
       "member": "tools/aot/gog-smart-1.08.json",
       "class": "gating-hashes",
-      "sha256": "1d6cfbabdc68f146ff515785c3cc94bdb12fa05a1c64fd7ee58e7e0f850b4655",
+      "sha256": "11bed3a7df5ed4209bdd5687e3a6069a440b65e2a1611babe2f63021914de587",
       "justification": "Lead 2026-10-23 option 1: GOG-only compatibility indices/verdict bits keyed by content hashes and stable sprite/frame identity; no game content.",
       "evidence_sha256": [
         "dcf99176f5beeab6da7c76142996000867d039c9fffd11c97f64eb2640957c09",
@@ -846,7 +855,7 @@
       "evidence_sha256": [
         "ec6d5c493df4c8b53e57dd4a2ce27ce563d52ee9ccf95083c9135cec002574aa"
       ],
-      "sha256": "217c29ae8be80f9f73aa45c681cc21b0516fdb401bbaa052344d98013cd1d18d"
+      "sha256": "0b2998b280f5bfbbbde152aaca863ac6267150c97ffda2f9a5bb2ff0b126a0aa"
     },
     {
       "member": "tools/aot/stpack.py",

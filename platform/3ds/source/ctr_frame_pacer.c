@@ -1209,3 +1209,48 @@ PACEBOT_TEXT void __wrap_CtrPacer_setGameScreen(gfxScreen_t screen) {
     pacebotPace.lastShownValid = false;
     LightLock_Unlock(&pacebotPace.lock);
 }
+
+// ===[ utfade: a door's room change shows black (change utfade, late code; UNDERTALE only) ]===
+//
+// z_utfade.c calls this twice in a door's room change. fill true, before the room load: once the GPU is done and the
+// game screen shows the last frame's flip (none held, none pending), the screen's spare buffer is filled black and
+// goes through the frames' own swap (gfxScreenSwapBuffers, wrapped: CtrScreens_pacerSwap, which holds a flip while the
+// slot's hold lasts and lets the vblank callbacks flip it, on either screen), with this frame's slot held as
+// CtrPacer_frameEnding would hold it: the black shows on the vblank the frame would have shown on. fill false, after
+// the load: until the hold's last vblank (holdUntil) has begun, so the frame end's forced release can't show the black
+// early after a short load; from that vblank on, the vblank callback's release and the forced one both show it on the
+// next vblank. Not until it shows: the frame end's own work (the rest of the change, CtrRenderer_endFrame) would then
+// wait behind it, where it overlaps the black today (Azahar a712b495d: the next room 1-2 vblanks late). The
+// hold is set without the lock: the vblank callbacks only clear it, and only once holdUntil has gone by, when the swap
+// then flips at once, which shows the black on the same vblank. The black is this frame's own picture, so this frame
+// keeps catchUp set (the next slot wait sets it again; only CtrPacer_frameBegun reads it): frameBegun runs at the frame's
+// end, after the black has shown, and would otherwise take it for the frame before's late flip and move the schedule
+// by a slot (utfade-ft2 console rows: the next room's first frame 2 vblanks late after short loads). `pace` by its
+// assembler name, so the functions above keep their code.
+#if defined(ENABLE_WAD16) && defined(__3DS__)
+void CtrPacer_utfadeBlack(bool fill);
+__attribute__((noinline, optimize("Os"), section(".text_utfade"))) void CtrPacer_utfadeBlack(bool fill) {
+    extern uint8_t CtrScreens_pacerGame;
+    extern __typeof__(pace) utfadePace __asm__("pace");
+    gfxScreen_t screen = (gfxScreen_t) CtrScreens_pacerGame;
+    if (!fill) {
+        // The game screen's vblanks (pacebot's wraps), as CtrPacer_waitForSlot waits.
+        while (0 > (int32_t) (vblankCount() - utfadePace.holdUntil)) gspWaitForEvent(GSPGPU_EVENT_VBlank0, false);
+        return;
+    }
+    CtrGpu_waitIdle();
+    while (!CtrPacer_screenReady(screen)) CtrScreens_pacerWaitShown(screen, true);
+    u16 w, h;
+    u8* fb = gfxGetFramebuffer(screen, GFX_LEFT, &w, &h);
+    u32 bytes = (u32) w * h * 3u; // the game screen is BGR8 (ctr_renderer.c's screensMoveGame)
+    memset(fb, 0, bytes);
+    GSPGPU_FlushDataCache(fb, bytes);
+    utfadePace.holdUntil = utfadePace.slotStart + utfadePace.slotLength - 1;
+    // holdUntil in memory before holding (regaudit F6): the vblank callbacks run on libctru's GSP event thread, created
+    // on the app's own core (gspInit: core -2), so a compiler barrier is the whole ordering they need.
+    __asm__ volatile("" ::: "memory");
+    utfadePace.holding = true;
+    utfadePace.catchUp = true;
+    gfxScreenSwapBuffers(screen, false);
+}
+#endif

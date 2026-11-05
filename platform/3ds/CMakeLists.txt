@@ -870,9 +870,16 @@ else()
     # (4,168 B firm, ~4.9 KB with utlife B and offdraw early-destroy): one page would leave ~700 B. The same
     # whole-page move: text does not move; only New's .rodata, .data, .bss and TLS move, by two whole pages (New's
     # heap and linear about 4 KiB less each of 57,268 KB).
-    set(ctrport_ut_late 0x6B000)
+    # Feature reserve (bufexp, 2026-11-04, room for post-1.0 features): Old 256 KiB
+    # (0x40000) and New 512 KiB (0x80000) more, unused until features land. The same whole-page move: text does not
+    # move; .rodata, .data, .bss and TLS move by exactly the reserve. On Old every KiB comes off linear memory and the
+    # texture budget (heap held at 20 MiB): Omega Flowey's whole set (25,984 KB) must fit the base budget
+    # (z_utstall.c utflWholeAll), which left ~620 KiB at zq45, so 256 KiB keeps ~360 KiB for the features' own memory
+    # (bufexp's results: 512 KiB clean on Azahar, 1024 KiB cut the set, 3 held frames in the fight).
+    # New loses half each from heap and linear (57,264 KB each). memcap: tools/analysis/console_memcap.py.
+    set(ctrport_ut_late 0xEB000)
     if(CTRPORT_TARGET STREQUAL "o3ds")
-        set(ctrport_ut_late 0x76000)
+        set(ctrport_ut_late 0xB6000)
     endif()
     if(CTRPORT_GOG_COMPAT)
         # Ruling, gogut round 17: GOG UT alone needs two more 4 KiB pages over Steam (integrate22: over
@@ -1230,6 +1237,12 @@ endif()
 # heap is 4 KB smaller; DELTARUNE measurements are re-baselined. UNDERTALE and DELTARUNE New are unchanged.
 if(CTRPORT_GAME STREQUAL "deltarune" AND CTRPORT_TARGET STREQUAL "o3ds")
     string(REPLACE "__late_text_limit = ALIGN(__late_text_start, 0x1000) +" "__late_text_limit = ALIGN(__late_text_start, 0x1000) + 0x1000 +"
+           CTRPORT_LATE_LD_TEXT "${CTRPORT_LATE_LD_TEXT}")
+endif()
+# dlgtop: main's existing late inputs all have explicit selectors. Its new UT
+# console initializer must reach the appended change selector, past the holes.
+if(CTRPORT_GAME STREQUAL "undertale")
+    string(REPLACE "EXCLUDE_FILE (*z_utlife.o" "EXCLUDE_FILE (*source/main.o *z_utlife.o"
            CTRPORT_LATE_LD_TEXT "${CTRPORT_LATE_LD_TEXT}")
 endif()
 file(WRITE "${CTRPORT_LATE_LD}.new" "${CTRPORT_LATE_LD_TEXT}")
@@ -2477,6 +2490,43 @@ if(CTRPORT_GAME STREQUAL "undertale" AND CTRPORT_GOG_COMPAT)
     target_compile_definitions(ctrport PRIVATE CTRPORT_GOG_COMPAT)
     target_link_options(ctrport PRIVATE -Wl,--wrap=CtrChapters_init,--wrap=CtrChapters_returnToLauncher,--wrap=CtrPack_romfsName)
 endif()
+# datarefuse (change auditfixe, playblocker #8; R215c, maintainer 11-05): UNDERTALE builds only from an unmodified Steam or
+# GOG data.win. build.sh passes that file's size after tools/aot/data_versions.py --build-input checked it against the
+# known rows (and refused anything else); the data-version tables then keep only that row (DATA_VERSION_SIZE,
+# source/ctr_data_version.h), so any other data.win, another known copy too, is unknown on the console: the RomFS
+# tables are made from the input. main.c's data-version notice goes to source/z_datarefuse.c (its one CtrNotice_report
+# call; main.c's code changes only that branch target): a warning the player continues past with A, or a stop when
+# data.win can't be read. Empty (no data found when building): every known row stays.
+set(CTRPORT_DATA_SIZE "" CACHE STRING "Size of the UNDERTALE data.win the build was made from (build.sh; empty: any known one)")
+if(CTRPORT_GAME STREQUAL "undertale")
+    if(CTRPORT_DATA_SIZE)
+        if(NOT CTRPORT_DATA_SIZE MATCHES "^[1-9][0-9]*$")
+            message(FATAL_ERROR "CTRPORT_DATA_SIZE must be a data.win size in bytes, not '${CTRPORT_DATA_SIZE}'")
+        endif()
+        set_property(SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/source/ctr_data_version.c"
+            "${CMAKE_CURRENT_SOURCE_DIR}/source/z_gogut.c" APPEND PROPERTY COMPILE_DEFINITIONS
+            CTRPORT_DATA_SIZE=${CTRPORT_DATA_SIZE}ULL)
+    endif()
+    set_property(SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/source/main.c" APPEND PROPERTY COMPILE_DEFINITIONS
+        CtrNotice_report=CtrDataRefuse_report)
+    # crash.txt and each hang.txt report start with the unsupported data.win's line (R243b/R243c): the three report
+    # writers' file writes go to z_datarefuse.c, which writes the line ahead of a report. Only these call targets change.
+    set_property(SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/source/z_argcrash.c" "${CMAKE_CURRENT_SOURCE_DIR}/source/ctr_lab.c"
+        "${CMAKE_CURRENT_SOURCE_DIR}/source/ctr_watchdog.c" APPEND PROPERTY COMPILE_DEFINITIONS
+        FSFILE_Write=CtrDataRefuse_reportWrite)
+    # An unknown data.win never gets offkill.bin/offdoom.bin's early destroys (build-input object numbers, z_datarefuse.c).
+    target_link_options(ctrport PRIVATE -Wl,--wrap=OffKill_roomChange)
+    # Test builds only: the warning saves both screens and reads A as pressed (datawarntest.txt, z_datarefuse.c).
+    option(CTRPORT_DATAWARN_TEST "UNDERTALE: the data.win warning's screen capture and A press (test builds)" OFF)
+    if(CTRPORT_DATAWARN_TEST)
+        if(CTRPORT_PLAYER_SHOTS)
+            message(FATAL_ERROR "CTRPORT_DATAWARN_TEST and shots builds both wrap hidKeysDown")
+        endif()
+        set_property(SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/source/z_datarefuse.c" APPEND PROPERTY COMPILE_DEFINITIONS
+            DATAREFUSE_WARN_TEST)
+        target_link_options(ctrport PRIVATE -Wl,--wrap=hidKeysDown)
+    endif()
+endif()
 set(APP_BANNER_AUDIO "${CMAKE_CURRENT_SOURCE_DIR}/assets/banner.wav")
 
 # Check at every build, including after a commit without reconfiguration. The
@@ -2756,6 +2806,17 @@ if(CTRPORT_GAME STREQUAL "undertale" AND CTRPORT_TARGET STREQUAL "o3ds" AND NOT 
     target_link_options(ctrport PRIVATE -Wl,--wrap=CtrFlowstream_collect,--wrap=CtrFlowstream_readHeader,--wrap=CtrFlowstream_readMallinfo,--wrap=CtrFlowstream_readMalloc
         -Wl,--wrap=CtrFlowstream_gameFile,--wrap=CtrFlowstream_openFile,--wrap=DataWin_moveBytecodeToFile
         -Wl,--wrap=rename) # AUD-16 (z_btlentry.c's end): the bytecode file read back as it is written
+    # utfade A (z_btlentry.c's end): a door's destination read during its fade-out. Two calls are pointed at it by name,
+    # each unit's code the same size: z_utstall.c's once-a-frame call of flowstream (it calls btlentry's wrap on) and
+    # ctr_textures.c's call of the room load in CtrTextures_roomLoadedOld (it calls z_utstall.c's wrap on).
+    set_property(SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/source/z_utstall.c" APPEND PROPERTY COMPILE_DEFINITIONS
+        CtrFlowstream_collect=CtrUtfadeA_collect)
+    set_property(SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/source/ctr_textures.c" APPEND PROPERTY COMPILE_DEFINITIONS
+        CtrRoomload_prefetchRoom=CtrUtfadeA_roomLoad)
+    # r220 F1: btlentry's calls of the reader's CtrTileReader_finished go to utfade A's (the same size, in its slot), so
+    # its once-a-frame installs never take a door read; utfade A reaches the reader's own by its assembler name.
+    set_property(SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/source/z_btlentry.c" APPEND PROPERTY COMPILE_DEFINITIONS
+        CtrTileReader_finished=CtrUtfadeA_finished)
 endif()
 # LAB ONLY, never release (review decision 11-02 on btlentry's reserve): the smallest heap free per window around a battle's
 # start, after every heap allocation (newlib's allocators wrapped); with FAULT, btlentry's reads cycle through refused,
@@ -3281,9 +3342,23 @@ if(CTRPORT_GAME STREQUAL "undertale")
         COMPILE_DEFINITIONS __real_Btnprompt_registerAll=CtrUtWindow_register)
     # The room change reaches the real function from ctr_loadaudio_mix.inc (CtrLoadmix_handleRoomChange, included by
     # ctr_audio_system.c) since loadaudio 76dd8ab09; on z_freebies.c this define was dead and the window hooks never
-    # installed (UT-036 regression, zq47). tools/analysis/test_utwindow_chain.py checks it stays on the caller.
+    # installed (UT-036 regression, zq47). tools/analysis/test_utwindow_chain.py checks the chain from the caller.
+    # utfade (source/z_utfade.c) sits in front: a door's room change shows black while the room loads. The chain is
+    # CtrLoadmix_handleRoomChange -> CtrUtfade_pendingRoom -> CtrUtWindow_pendingRoom -> the real function; each unit's
+    # __real_ call names the next link. No new link wraps.
     set_property(SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/source/ctr_audio_system.c" APPEND PROPERTY
+        COMPILE_DEFINITIONS __real_Runner_handlePendingRoomChange=CtrUtfade_pendingRoom)
+    set_property(SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/source/z_utfade.c" APPEND PROPERTY
         COMPILE_DEFINITIONS __real_Runner_handlePendingRoomChange=CtrUtWindow_pendingRoom)
+    set_source_files_properties("${CMAKE_CURRENT_SOURCE_DIR}/source/z_utfade.c" PROPERTIES COMPILE_OPTIONS
+        "-Os;-fno-builtin-printf;-fno-builtin-puts;-fno-builtin-putchar;-fno-builtin-fprintf;-fno-builtin-fputs;-fno-tree-switch-conversion;-fno-jump-tables")
+    # utfadeprobe (build.sh "utfadeprobe", tests only, never Release): z_utfade.c writes the game screen's picture
+    # during each room change's load to the game folder (its probe's comment says how).
+    option(CTRPORT_UTFADE_PROBE "Test only: write the game screen's picture during each room change's load" OFF)
+    if(CTRPORT_UTFADE_PROBE)
+        set_property(SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/source/z_utfade.c" APPEND PROPERTY COMPILE_DEFINITIONS
+            CTRPORT_UTFADE_PROBE)
+    endif()
 endif()
 
 # fpsbox: retain the two shrinking original glyph/paint slots exactly; all
@@ -3483,3 +3558,19 @@ if(CTRPORT_GAME STREQUAL "deltarune")
 endif()
 
 include("${CMAKE_CURRENT_SOURCE_DIR}/pinwheel.cmake")
+
+# dlgtop: UT loading only; DR compile and link paths are untouched.
+if(CTRPORT_GAME STREQUAL "undertale")
+# loadgame: choose the console screen before its first print; retain main's calls.
+target_link_options(ctrport PRIVATE -Wl,--wrap=consoleInit)
+
+# Retain the frozen loader's cold function order and shortened body extents.
+get_target_property(loadgame_delegate ctrport C_COMPILER_LAUNCHER)
+set_property(TARGET ctrport PROPERTY C_COMPILER_LAUNCHER
+    "${CTRPORT_PYTHON_EXECUTABLE};-I;${CMAKE_CURRENT_SOURCE_DIR}/../../tools/buildcache/loadgame_compile.py;${loadgame_delegate};--loadgame-compiler")
+set_property(SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/source/z_loadscreen.c"
+    "${CMAKE_CURRENT_SOURCE_DIR}/source/main.c"
+    APPEND PROPERTY OBJECT_DEPENDS
+    "${CMAKE_CURRENT_SOURCE_DIR}/../../tools/buildcache/loadgame_compile.py"
+    "${CMAKE_CURRENT_SOURCE_DIR}/../../tools/buildcache/loadgame-order.json")
+endif()

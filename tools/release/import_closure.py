@@ -41,6 +41,8 @@ GAME_ONLY.update({
     ('sfxpack.py',)})
 GAME_ONLY.update({
     path: 'undertale' for path in (
+        'tools/buildcache/loadgame_compile.py', 'tools/buildcache/loadgame-order.json',
+        'tools/buildcache/test_loadgame_compile.py',
         'engine/src/runner_tile_plan.inc', 'tools/release/sfxpack-versions.json',
         'tools/release/music-versions.json', 'tools/release/manifest-ut.txt',
         'engine/src/utold_tile_assets.h', 'engine/src/utold_tile_command.h', 'engine/src/utold_tile_plan.h',

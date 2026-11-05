@@ -141,7 +141,14 @@ ARGCRASH_STR(strTitleHang, "* The game stopped responding.");
 ARGCRASH_STR(strTitleSave, "* Saving failed. Check SD card space.");
 ARGCRASH_STR(strTitleModel, "* This version needs a New 3DS. Use the Old 3DS version.");
 ARGCRASH_STR(strTitleData, "* Game files are missing. Run the builder again.");
+// datarefuse (playblocker #8): UNDERTALE stops on a data.win that isn't the file it was built from (z_datarefuse.c),
+// whose message carries "bytecode version" (strBytecodeVer) to reach this title. Same array size (60 B), so no
+// constant moves; DELTARUNE keeps its text.
+#ifdef ENABLE_WAD16
+ARGCRASH_STR(strTitleDataVer, "* Game files don't match this build. Run the builder again.");
+#else
 ARGCRASH_STR(strTitleDataVer, "* This game version isn't supported. Run the builder again.");
+#endif
 
 ARGCRASH_STR(strCodeVm, "ERR-VM");
 ARGCRASH_STR(strCodeOom, "ERR-OOM");

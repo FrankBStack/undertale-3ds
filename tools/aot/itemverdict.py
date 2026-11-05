@@ -12,10 +12,11 @@ sight; UNDERTALE's first battle frame looks at 8 items (about 11 ms on Azahar, a
 the analysis on the texels as the console stores them (tools/aot/fontverdict.py's page decode, tile grid and format
 choice, for both colour modes), so the console reads the verdicts once per data.win instead.
 
-Output file (little-endian): magic b"DTIV", u32 version 1, u32 data.win size, u32 GEN8 game ID, u64 GEN8 timestamp
-(CtrPackKey), u32 item count (the TPAG chunk's), then 10 bytes per item: with rounded colours the item state byte
-(ITEM_* bits as itemVerdict stores them; 0 = not known here, looked at on the console as before) and the ink box
-(x0, y0, x1, y1 as smartInk leaves it, 0 0 0 0 where it doesn't look), then the same with exact colours.
+Output file (little-endian): magic b"DTIV", u32 version 1 (2 for the measured GOG container), u32 data.win size,
+u32 GEN8 game ID, u64 GEN8 timestamp (CtrPackKey), u32 item count (the TPAG chunk's), then 10 bytes per item: with
+rounded colours the item state byte (ITEM_* bits as itemVerdict stores them; 0 = not known here, looked at on the
+console as before) and the ink box (x0, y0, x1, y1 as smartInk leaves it, 0 0 0 0 where it doesn't look), then the
+same with exact colours.
 
 Pure Python (the builder ships the embeddable Python, without numpy). Reads the game data; run with -I. Writes nothing
 derived from the game into the repository: --out is a build output.
@@ -32,6 +33,7 @@ import fontverdict as fv  # noqa: E402
 
 MAGIC = b"DTIV"
 VERSION = 1
+GOG_VERSION = 2  # the measured GOG container: decoded-colour comparisons; z_itemverdict.c refuses version 1 there
 ITEM_KNOWN, ITEM_FINE, ITEM_CLEAN, ITEM_BLACKEN, ITEM_PHASED = 0x80, 0x40, 0x20, 0x10, 0x04
 SMART_ITEM_MIN, SMART_ITEM_MAX, SMART_COLOURS_MAX = 8, 96, 3
 SMART_KEEP_SHARP_MAX = 8
@@ -156,8 +158,8 @@ class RewrittenPage(fv.Page):
     before the flush), and inside each word box, tile by tile, the texels become the word's white and black blocks
     where every texel of the box in that tile is white or black already (else that tile is left as it is)."""
 
-    def __init__(self, w, h, rgba, rows, words):
-        super().__init__(w, h, rgba, rows)
+    def __init__(self, w, h, rgba, rows, words, gog_smart=False):
+        super().__init__(w, h, rgba, rows, gog_smart)
         self.words = words
         self.over = {}  # exact -> {(x, y): white}
 
@@ -282,9 +284,11 @@ def page_dims(blob):
     return None
 
 
-def page_job(path, page_id, off, size, look, keep_sharp, words=()):
+def page_job(path, page_id, off, size, look, keep_sharp, words=(), gog_smart=False):
     """One page's items 8 to 96 texels a side: (page_id, [(index, entry)] or None if undecodable, size, seconds). Reads
-    the page from the file itself, so it runs in a worker process as well. words: press_words' boxes on this page."""
+    the page from the file itself, so it runs in a worker process as well. words: press_words' boxes on this page.
+    gog_smart: the measured GOG container (fontverdict.Win.gog_smart), whose comparisons use decoded colours as its
+    console build does (fontverdict.Page)."""
     t0 = time.time()
     with open(path, "rb") as f:
         f.seek(off)
@@ -295,7 +299,8 @@ def page_job(path, page_id, off, size, look, keep_sharp, words=()):
         return page_id, None, dims, time.time() - t0
     if (dec[0], dec[1]) != dims:
         raise SystemExit(f"itemverdict: page {page_id} header says {dims}, decodes to {dec[0]}x{dec[1]}")
-    page = RewrittenPage(dec[0], dec[1], dec[2], dec[1], words) if words else fv.Page(dec[0], dec[1], dec[2], dec[1])
+    page = (RewrittenPage(dec[0], dec[1], dec[2], dec[1], words, gog_smart) if words
+            else fv.Page(dec[0], dec[1], dec[2], dec[1], gog_smart))
     out = []
     for i, item in look:
         entry = bytearray()
@@ -345,7 +350,7 @@ def analyse(path, quiet=False, log=print, only=None, jobs=None, game=None):
         look = [(i, items[i]) for i in inside if in_range(items[i])]
         if look:
             inside_of[page_id] = inside
-            work.append((path, page_id, off, size, look, keep_sharp, tuple(words.get(page_id, ()))))
+            work.append((path, page_id, off, size, look, keep_sharp, tuple(words.get(page_id, ())), win.gog_smart))
     jobs = default_jobs() if jobs is None else max(1, jobs)
     results = None
     if jobs > 1 and len(work) > 1:
@@ -395,11 +400,20 @@ def mix_items(win, tpag_ptrs):
 
 
 def write(path, win, table):
-    out = bytearray(MAGIC + struct.pack("<IIIQI", VERSION, win.size, win.game_id, win.timestamp, len(table)))
+    """The table file. For the measured GOG container: version 2, with gog_smart.py's item profile applied (Steam's
+    entries for items whose art is Steam's but whose tiles GOG's atlas stores in other formats; analyse stays the
+    console's own analysis, which tools/analysis/test_itemverdict.py checks). Returns the profile entries applied."""
+    applied = 0
+    if win.gog_smart:
+        import gog_smart
+        table, applied = gog_smart.item_overrides(win, table)
+    version = GOG_VERSION if win.gog_smart else VERSION
+    out = bytearray(MAGIC + struct.pack("<IIIQI", version, win.size, win.game_id, win.timestamp, len(table)))
     for e in table:
         out += e
     with open(path, "wb") as f:
         f.write(out)
+    return applied
 
 
 def main():

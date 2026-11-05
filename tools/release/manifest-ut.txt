@@ -971,6 +971,9 @@ platform/3ds/source/z_utwindow.c
 tools/analysis/utwindow_compile.py
 tools/release/test_smdh_metadata.py
 
+# utfade: a door's room change shows black while the new room loads (empty translation unit outside UNDERTALE)
+platform/3ds/source/z_utfade.c
+
 # fpsbox: displayed-frame sampler and transparent menu underlay (both games).
 platform/3ds/source/ctr_fpsbox.c
 platform/3ds/source/ctr_fpsbox.h
@@ -1061,3 +1064,8 @@ platform/3ds/source/z_overlayread.c
 # credclip (auditfixe CREDPOP-001): the Credits roll slides lines in and out at its edges, no pop (UT; empty in DR)
 platform/3ds/source/z_credclip.c
 tools/analysis/test_credclip.py
+tools/buildcache/loadgame-order.json
+tools/buildcache/loadgame_compile.py
+tools/buildcache/test_loadgame_compile.py
+# datarefuse (auditfixe, playblocker #8): UNDERTALE warns about a data.win that isn't its build input (UT; empty in DR)
+platform/3ds/source/z_datarefuse.c
