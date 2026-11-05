@@ -1215,6 +1215,15 @@ if(CTRPORT_PLAYER_SHOTS AND CTRPORT_TARGET STREQUAL "o3ds")
     string(REPLACE "__late_text_limit = ALIGN(__late_text_start, 0x1000) +" "__late_text_limit = ALIGN(__late_text_start, 0x1000) + 0x1000 +"
            CTRPORT_LATE_LD_TEXT "${CTRPORT_LATE_LD_TEXT}")
 endif()
+# UNDERTALE New, every build (review decision, integrate21 zq50, 2026-11-04): one more 4 KiB page of late code, Steam,
+# GOG and shots builds alike. zq49 left UNDERTALE New 591 B there, and utlife B (+704 B)
+# and the load bar (<=150 B) come next. UNDERTALE New has no frozen freebytes holes; its .rodata, .data and .bss move by
+# one page and the memory it splits between heap and linear memory is 4 KiB smaller. UNDERTALE Old and DELTARUNE are
+# unchanged.
+if(CTRPORT_GAME STREQUAL "undertale" AND CTRPORT_TARGET STREQUAL "n3ds")
+    string(REPLACE "__late_text_limit = ALIGN(__late_text_start, 0x1000) +" "__late_text_limit = ALIGN(__late_text_start, 0x1000) + 0x1000 +"
+           CTRPORT_LATE_LD_TEXT "${CTRPORT_LATE_LD_TEXT}")
+endif()
 # DELTARUNE Old, every build (review decision, integrate21 zq47, 2026-11-04): one more 4 KiB page of late code. zq46 left
 # DELTARUNE Old 860 B there, and auditfixe3's overlay reads (z_overlayread.c, R195b/c/d: a save that is there is never
 # read as missing, both games) need 2,079 B. DELTARUNE is parked: its .rodata, .data and .bss move by one page and its
