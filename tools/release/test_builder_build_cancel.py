@@ -29,7 +29,9 @@ class BuildCancelTests(unittest.TestCase):
         page.build, page.log_path, page.running = None, None, True
         page.stop = __import__('threading').Event()
         page.finished = lambda err: self.finished.append(err)
-        page.app = SimpleNamespace(state=state, opts=SimpleNamespace(work='/fixture-work'), call=self.call)
+        self.answer, self.asked = True, []
+        page.app = SimpleNamespace(state=state, opts=SimpleNamespace(work='/fixture-work'), call=self.call,
+                                   ask=self.ask)
         self.page, self.state = page, state
         test = self
 
@@ -49,11 +51,18 @@ class BuildCancelTests(unittest.TestCase):
                 test.cancelled.append(self.target)
 
         self.on_run = lambda build: None
-        self.patches = [mock.patch.object(pipeline, 'Build', FakeBuild),
-                        mock.patch.object(gui.messagebox, 'askyesno', return_value=True)]
+        self.patches = [mock.patch.object(pipeline, 'Build', FakeBuild)]
         for patch in self.patches:
             patch.start()
             self.addCleanup(patch.stop)
+
+    def ask(self, title, message, yes, no=None, **kwargs):
+        # The window's in-page question, answered at once: Yes runs `yes`, No runs `no`.
+        self.asked.append(title)
+        if self.answer:
+            yes()
+        elif no is not None:
+            no()
 
     def call(self, fn, *args):
         self.on_post(fn, args)
@@ -93,9 +102,10 @@ class BuildCancelTests(unittest.TestCase):
         self.assertIsInstance(err, pipeline.BuildFailed)
 
     def test_a_declined_cancel_builds_every_model(self):
-        with mock.patch.object(gui.messagebox, 'askyesno', return_value=False):
-            self.on_run = lambda build: self.page.cancel()
-            self.assertIsNone(self.run_worker())
+        self.answer = False
+        self.on_run = lambda build: self.page.cancel()
+        self.assertIsNone(self.run_worker())
+        self.assertEqual(self.asked, ['Cancel build', 'Cancel build'])
         self.assertEqual((self.built, self.cancelled), (['n3ds', 'o3ds'], []))
 
     def test_try_again_clears_an_earlier_cancel(self):
@@ -112,9 +122,8 @@ class BuildCancelTests(unittest.TestCase):
 
     def test_cancel_when_nothing_is_running_does_nothing(self):
         self.page.running = False
-        with mock.patch.object(gui.messagebox, 'askyesno') as ask:
-            self.page.cancel()
-        ask.assert_not_called()
+        self.page.cancel()
+        self.assertEqual(self.asked, [])
         self.assertFalse(self.page.stop.is_set())
 
 

@@ -2193,14 +2193,16 @@ class BuilderUiTest(unittest.TestCase):
                 walk(child)
         walk(page.frame)
         self.assertEqual(len(found), 1)
-        with mock.patch.object(self.gui.messagebox, 'showinfo') as show:
-            found[0].invoke()
-        title, detail = show.call_args.args
-        self.assertEqual(title, 'Licences')
-        self.assertIn(text, detail)
+        found[0].invoke()
+        shown = wiz.overlay        # in this window, not a separate pop-up
+        self.assertEqual(shown.title, 'Licences')
+        self.assertEqual(shown.message, text)
+        detail = shown.list.get('1.0', 'end')
         for name, url in links:
             self.assertIn(name, detail)
             self.assertIn(url, detail)
+        shown.buttons['OK'].invoke()
+        self.assertIsNone(wiz.overlay)
         # Consent remains attached to every individual installation action.
         self.assertIn('By clicking OK you agree', self.box(page, 'makerom').step.confirm_text())
 

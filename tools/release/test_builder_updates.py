@@ -390,10 +390,11 @@ class Gui(unittest.TestCase):
                         self.assertIn('v1.0.0-beta.2 is out', page.update_status.cget('text'))
                         page.release_notice(None)
                         self.assertEqual(page.release_url, notice.url)
-                        with mock.patch.object(updates, 'repository', side_effect=ValueError('Broken contract')), \
-                             mock.patch.object(gui.messagebox, 'showinfo') as about:
+                        with mock.patch.object(updates, 'repository', side_effect=ValueError('Broken contract')):
                             app.about()
-                            self.assertNotIn('github.com', about.call_args.args[1])
+                            self.assertEqual(app.overlay.title, 'About')
+                            self.assertNotIn('github.com', app.overlay.message)
+                            app.overlay.buttons['OK'].invoke()
                         browser.assert_not_called()
                         page.open_release()
                         browser.assert_called_once_with(notice.url)

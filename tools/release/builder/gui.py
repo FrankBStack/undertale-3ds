@@ -872,13 +872,19 @@ class PixelLabel(Wrapping, ttk.Label):
         super().__init__(parent, text=self._raw_text, **kw)
         if url:
             for seq in ("<Button-1>", "<Return>", "<space>"):
-                self.bind(seq, lambda _e: webbrowser.open(self._url))
+                self.bind(seq, self._open_link)
             self.bind("<FocusIn>", lambda _e: self._focus(True))
             self.bind("<FocusOut>", lambda _e: self._focus(False))
         self._join_page(parent)
         if self._theme is not None:
             self._theme.register(self)
             self._render()
+
+    def _open_link(self, event):
+        if KeyWatch.note(event) == "break":     # a held key's repeat never opens the page again
+            return "break"
+        webbrowser.open(self._url)
+        return None
 
     def _focus(self, on):
         if self._url and not self._bold:
@@ -961,6 +967,7 @@ class UtButton(ttk.Button):
         self._hovered = False
         self._img = None
         super().__init__(parent, text=self._raw_text, command=command, style="Ut.TButton", **kw)
+        self.bind("<KeyPress>", KeyWatch.note, add="+")
         self.bind("<Enter>", self._on_enter)
         self.bind("<Leave>", self._on_leave)
         self.bind("<FocusIn>", self._on_enter)
@@ -1034,6 +1041,7 @@ class UtRadio(Wrapping, ttk.Radiobutton):
         self._wrap = WRAP
         super().__init__(parent, text=self._raw_text, value=value, variable=variable, command=command,
                          style="Ut.TRadiobutton", **kw)
+        self.bind("<KeyPress>", KeyWatch.note, add="+")  # a held key's repeat never acts
         for seq in ("<Enter>", "<FocusIn>"):
             self.bind(seq, self._on_enter, add="+")
         for seq in ("<Leave>", "<FocusOut>"):
@@ -1110,6 +1118,7 @@ class UtCheck(Wrapping, ttk.Checkbutton):
         self._wrap = WRAP
         super().__init__(parent, text=self._raw_text, variable=variable, command=command,
                          style="Ut.TCheckbutton", **kw)
+        self.bind("<KeyPress>", KeyWatch.note, add="+")  # a held key's repeat never acts
         for seq in ("<Enter>", "<FocusIn>"):
             self.bind(seq, self._on_enter, add="+")
         for seq in ("<Leave>", "<FocusOut>"):
@@ -1627,6 +1636,154 @@ class Page:
         return "next"
 
 
+class KeyWatch:
+    """Which of Space and Enter are held down. One rule: a button, check box, choice or link acts on Space or Enter
+    only for a new press, never for a held key's repeat. So a held key never carries into a button that appears under
+    it (the safe choice of a prompt that just opened, whatever had the keyboard before a prompt closed, the next
+    page's buttons), nor into one that a Tab or a click moves the keyboard to while the key is still down.
+
+    Each control notes the key in its own binding before it acts (KeyWatch.note), since the press that closes a
+    prompt destroys its button before the window's binding would see it. While a key is held after a prompt or page
+    change, the window itself has the keyboard; on release it goes to the prompt's safe choice, or back."""
+
+    KEYS = ("space", "Return", "KP_Enter")
+    SETTLE_MS = 40      # X11 repeats a held key as a release straight away followed by a press
+
+    def __init__(self, root):
+        self.root = root
+        self.held = set()
+        self._releasing = {}
+        self._pending = None
+        self._waiting = False
+        root._builder_keys = self
+        root.bind("<KeyPress>", self.down, add="+")
+        root.bind("<KeyRelease>", self.up, add="+")
+
+    @staticmethod
+    def note(event):
+        """A control's own binding, ahead of its action: "break" for a held key's repeat, so the control never acts on
+        it, whatever has the keyboard now."""
+        root = getattr(event.widget, "_root", None)
+        watch = getattr(root(), "_builder_keys", None) if root is not None else None
+        if watch is not None and watch.press(event):
+            return "break"
+        return None
+
+    def down(self, event):
+        """The window's binding."""
+        self.press(event)
+
+    def press(self, event):
+        """Note a key going down; True when it is a held key's repeat rather than a new press."""
+        key = event.keysym
+        if key not in self.KEYS:
+            return False
+        repeat = key in self.held
+        token = self._releasing.pop(key, None)
+        if token is not None:
+            self.root.after_cancel(token)
+        self.held.add(key)
+        if repeat and self._waiting:
+            self.root.focus_set()   # a Tab or a click while the key is held doesn't keep the keyboard
+        return repeat
+
+    def up(self, event):
+        key = event.keysym
+        if key in self.held and key not in self._releasing:
+            self._releasing[key] = self.root.after(self.SETTLE_MS, lambda: self._released(key))
+
+    def _released(self, key):
+        # The only place a key stops counting as held: after a release this window saw (up), never inferred from
+        # a dialog closing or the window losing focus. A release that went elsewhere costs one later press, which
+        # then does nothing until its own release; never an action.
+        self._releasing.pop(key, None)
+        self.held.discard(key)
+        if not self.held and self._waiting:
+            self._settle()
+
+    def hand(self, widget):
+        """Give `widget` (None: the window) the keyboard now, or once no key is held."""
+        self._pending, self._waiting = widget, True
+        if self.held:
+            self.root.focus_set()
+        else:
+            self._settle()
+
+    def carry(self):
+        """A page changed: if a key is still held, the window keeps the keyboard until it is released."""
+        if self.held and not self._waiting:
+            self.hand(self.root.focus_lastfor())
+
+    def _settle(self):
+        widget, self._pending, self._waiting = self._pending, None, False
+        try:
+            self.root.update_idletasks()    # a just-packed prompt is laid out, so it counts as shown
+            # Never a button on a page that is no longer shown (the window itself is shown in normal use).
+            usable = (widget is not None and widget.winfo_exists() and
+                      (widget.winfo_viewable() or not self.root.winfo_viewable()) and
+                      (not hasattr(widget, "instate") or widget.instate(["!disabled"])))
+            (widget if usable else self.root).focus_set()
+        except tk.TclError:
+            pass
+
+
+class Prompt(Page):
+    """A question, a notice or a file list shown inside the main window, in place of the page, with the builder's
+    own look: no separate, unthemed window. App.prompt opens one; Back and Next stay off until a choice closes it.
+
+    choices: (text, callback or None, primary) from left to right. cancel: the choice that Escape and the window's
+    close button make. focus: the choice that has the keyboard first (the safe one for anything that deletes or
+    stops)."""
+
+    def __init__(self, app, title, message, choices, details=None, cancel=None, focus=None):
+        super().__init__(app)
+        self.title, self.message, self.details = title, message, details
+        self.cancel = cancel if cancel is not None else choices[0][0]
+        self.closed = False
+        label(self.frame, message)
+        self.list = None
+        if details is not None:
+            area = tk.Frame(self.frame, bd=0)
+            self.list = tk.Text(area, wrap="none", height=8, width=60, takefocus=1, font=app.theme.mono_font,
+                                bg="#000000", fg="#ffffff", insertbackground="#ffffff",
+                                highlightbackground="#ffffff", highlightcolor="#ffffff", highlightthickness=2, bd=0)
+            down = ttk.Scrollbar(area, orient="vertical", command=self.list.yview)
+            across = ttk.Scrollbar(area, orient="horizontal", command=self.list.xview)
+            self.list.configure(yscrollcommand=down.set, xscrollcommand=across.set)
+            down.pack(side="right", fill="y")
+            across.pack(side="bottom", fill="x")
+            self.list.pack(side="left", fill="both", expand=True)
+            self.list.insert("1.0", details)
+            self.list.configure(state="disabled")
+            area.pack(fill="both", expand=True, pady=(0, 8))
+        row = ttk.Frame(self.frame)
+        row.pack(anchor="e", pady=(4, 0))
+        self.choices, self.buttons = {}, {}
+        for text, callback, primary in reversed(choices):
+            widget = button(row, text=text, command=lambda t=text: self.choose(t), primary=primary)
+            widget.pack(side="right", padx=(8, 0))
+            for seq in ("<Return>", "<KP_Enter>"):
+                widget.bind(seq, lambda e, t=text: self._key(e, t))
+            self.choices[text], self.buttons[text] = callback, widget
+        self.first = self.buttons[focus if focus is not None else choices[-1][0]]
+
+    def _key(self, event, text):
+        if KeyWatch.note(event) == "break":     # a held Enter's repeat chooses nothing
+            return "break"
+        self.choose(text)   # noted before the button goes, so the held key cannot choose what comes next
+        return "break"
+
+    def choose(self, text):
+        """Close the prompt, show the page again, then run the choice's callback (which may open another)."""
+        if self.closed:
+            return
+        self.closed = True
+        callback = self.choices[text]
+        self.app.close_prompt(self)
+        if callback is not None:
+            callback()
+
+
 # ---------------------------------------------------------------------------------------------------------------------
 
 class WelcomePage(Page):
@@ -1990,8 +2147,8 @@ class ToolchainPage(Page):
         self.notice.pack_configure(before=self.steps)
         row = ttk.Frame(self.frame)
         row.pack(anchor="w", pady=(0, 8), before=self.steps)
-        button(row, text="Licences", command=lambda: messagebox.showinfo(
-            "Licences", notice + "\n\n" + "\n\n".join(name + "\n" + url for name, url in links))).pack(side="left")
+        button(row, text="Licences", command=lambda: self.app.inform(
+            "Licences", notice, details="\n\n".join(name + "\n" + url for name, url in links))).pack(side="left")
         row = ttk.Frame(self.frame)
         row.pack(anchor="w", pady=(0, 8))
         button(row, text="Check again", command=self.detect).pack(side="left", padx=(0, 8))
@@ -2092,14 +2249,21 @@ class ToolchainPage(Page):
         if self.app.opts.autopilot is not None:
             print(report, flush=True)
 
-    def run_step(self, box):
+    def run_step(self, box, confirmed=False):
+        """True when the step starts, False when it doesn't, None while the window asks first (its OK starts it)."""
         step = box.step
         dry = self.app.opts.toolchain_dry_run
         if self.running_step:
             return False
-        ask = self.app.opts.confirm_install or messagebox.askokcancel
-        if not dry and not ask(step.title, step.confirm_text()):
-            return False
+        if not dry and not confirmed:
+            ask = self.app.opts.confirm_install
+            if ask is None:
+                self.app.ask(step.title, step.confirm_text(), lambda: self.run_step(box, confirmed=True) or
+                             self.declined(box), lambda: self.declined(box), yes_text="OK", no_text="Cancel",
+                             safe=False)
+                return None
+            if not ask(step.title, step.confirm_text()):
+                return False
         self.running_step = True
         self.failures.pop(step.key, None)
         self.result.config(text="")
@@ -2144,8 +2308,13 @@ class ToolchainPage(Page):
             self.update_box.box.destroy()
         step = toolchain.update_step(self.st.tc.root if self.st.tc else None)
         self.update_box = StepBox(self, self.extra, step, button_text="Update")
-        if not self.run_step(self.update_box):
-            self.update_box.box.destroy()
+        if self.run_step(self.update_box) is False:
+            self.declined(self.update_box)
+
+    def declined(self, box):
+        """A step that did not start: an Update box made just for it goes away again."""
+        if box is self.update_box and box.box.winfo_exists():
+            box.box.destroy()
             self.update_box = None
 
     def can_next(self):
@@ -2413,11 +2582,14 @@ class BuildPage(Page):
         self.app.update_nav()
 
     def cancel(self):
-        if self.running and messagebox.askyesno("Cancel build", "Stop the build?") and self.running:
-            self.stop.set()
-            build = self.build
-            if build is not None:
-                build.cancel()
+        def stop():
+            if self.running:        # The build may have finished while the question was open.
+                self.stop.set()
+                build = self.build
+                if build is not None:
+                    build.cancel()
+        if self.running:
+            self.app.ask("Cancel build", "Stop the build?", stop)
 
     def copy_log(self):
         if not self.log_path:
@@ -2723,32 +2895,15 @@ class DeliverPage(Page):
             if self.app.opts.autopilot is not None:
                 self._copy_approved(root, items, tool, visit)
                 return
-            window = tk.Toplevel(self.frame)
-            window.title('Files for this SD card')
-            window.geometry('780x520')
-            label(window, 'Check the files below, then choose Copy to card.')
-            box = tk.Text(window, wrap='none', height=18)
-            scroll = ttk.Scrollbar(window, command=box.yview)
-            box.configure(yscrollcommand=scroll.set)
-            scroll.pack(side='right', fill='y')
-            box.pack(fill='both', expand=True)
-            box.insert('1.0', str(root) + '\n\n' + text)
-            box.configure(state='disabled')
-            self.app.bind_scroll_area(box)
             def dismiss():
-                window.destroy()
                 self.copying = False
                 self.go.state(['!disabled'])
                 self.set_status('sd', 'Copy cancelled. Nothing was copied.')
                 self.app.update_nav()
-            def approve():
-                window.destroy()
-                self._copy_approved(root, items, tool, visit)
-            button(window, text='Copy to card', command=approve, primary=True).pack(side='right', padx=8, pady=8)
-            button(window, text='Cancel', command=dismiss).pack(side='right', padx=8, pady=8)
-            window.protocol('WM_DELETE_WINDOW', dismiss)
-            window.transient(self.app.root)
-            window.grab_set()
+            self.app.prompt('Files for this SD card', 'Check the files below, then choose Copy to card.',
+                            [('Cancel', dismiss, False),
+                             ('Copy to card', lambda: self._copy_approved(root, items, tool, visit), True)],
+                            details=str(root) + '\n\n' + text, cancel='Cancel', focus='Copy to card')
         self.app.work(lambda: deliver.sd_preview(root, self.st.product, self.st.artifacts,
                       self.st.folder, self.app.opts.work, self.st.parts), prepared, errors=True)
 
@@ -2866,10 +3021,10 @@ class DeliverPage(Page):
                 # console. Explain that uncertainty, then offer one explicit
                 # retry after the player has allowed access, never a scan loop.
                 if sys.platform == 'darwin' and not permission_retry:
-                    if messagebox.askretrycancel('Find my 3DS',
+                    self.app.ask('Find my 3DS',
                             'No 3DS answered. If Local Network access was blocked, allow this builder in System Settings > Privacy & Security > Local Network, then choose Retry.',
-                            parent=self.app.root):
-                        self.find_console(permission_retry=True)
+                            lambda: self.find_console(permission_retry=True), yes_text='Retry', no_text='Cancel',
+                            safe=False)
             else:
                 self.addr.config(values=found)
                 self.addr.set(found[0])
@@ -2909,11 +3064,15 @@ class DeliverPage(Page):
         return ("fail", "no SD path in the autopilot plan")
 
 
+KEPT_SAVES = "3DS saves kept.\nSelect Skip to go on."
+
+
 class SavesPage(Page):
     title = "Import PC saves"
 
     def __init__(self, app):
         super().__init__(app)
+        self.replace_agreed = None      # the replace-saves question the player said Yes to (confirm_replace)
         self.intro = label(self.frame, "")
         self.folder_label = label(self.frame, "", bold=True)
         row = ttk.Frame(self.frame)
@@ -3045,6 +3204,25 @@ class SavesPage(Page):
     def changed(self):
         self.app.update_nav()
 
+    def confirm_replace(self, prompt, answer):
+        """Whether the player agreed to replace the 3DS saves that `answer` names. With no test hook, the window asks
+        and returns False; its Yes runs Next again, which then finds this answer agreed (once)."""
+        agreed, self.replace_agreed = getattr(self, "replace_agreed", None), None
+        if agreed is not None and agreed == answer:
+            return True
+        hook = self.app.opts.confirm_overwrite
+        if hook is not None:
+            agreed = hook("Replace 3DS saves?", prompt)
+        else:
+            def yes():
+                self.replace_agreed = answer
+                self.app.next()
+            self.app.ask("Replace 3DS saves?", prompt, yes, lambda: self.status.config(text=KEPT_SAVES))
+            return False
+        if not agreed:
+            self.status.config(text=KEPT_SAVES)
+        return bool(agreed)
+
     def on_next(self):
         self.status.config(text="")
         if self.choice.get() == 'copy' and self.st.deliver_how == 'wifi' and self.st.ftp_console:
@@ -3060,14 +3238,13 @@ class SavesPage(Page):
         p = self.st.product
         existing = deliver.existing_sd_save_files(self.st.sd_root, p)
         if existing and not self.st.save_scan.has_corrupt:
-            confirm = self.app.opts.confirm_overwrite or messagebox.askyesno
             sd_who = (deliver.scan_sd_saves(self.st.sd_root, p).player_summary
                       or ", ".join(os.path.basename(x) for x in existing))
             pc_who = self.st.save_scan.player_summary or "PC files"
             prompt = ("Replace the 3DS save (%s) with the PC save (%s)?\n"
                       "The 3DS saves are backed up first." % (sd_who, pc_who))
-            if not confirm("Replace 3DS saves?", prompt):
-                self.status.config(text="3DS saves kept.\nSelect Skip to go on.")
+            if not self.confirm_replace(prompt, ('sd', self.st.sd_root, tuple(existing), prompt,
+                                                 self.st.save_scan)):
                 return False
         try:
             res = deliver.copy_pc_saves(self.st.sd_root, p, self.st.save_scan, overwrite=bool(existing))
@@ -3086,13 +3263,11 @@ class SavesPage(Page):
             return False
         existing = self.ftp_snapshot
         if existing.files:
-            confirm = self.app.opts.confirm_overwrite or messagebox.askyesno
             prompt = ('Replace the 3DS save (%s) with the PC save (%s)?\n'
                       'The 3DS saves are backed up first.' %
                       (existing.player_summary or ', '.join(existing.files),
                        self.st.save_scan.player_summary or 'PC files'))
-            if not confirm('Replace 3DS saves?', prompt):
-                self.status.config(text='3DS saves kept.\nSelect Skip to go on.')
+            if not self.confirm_replace(prompt, ('wifi', existing, prompt, self.st.save_scan)):
                 return False
         self.ftp_running = self.ftp_importing = True
         job, cancel = self.new_ftp_job()
@@ -3271,27 +3446,10 @@ class DonePage(Page):
         if not selected:
             self.cleanup_notice.config(text='Tick what to remove first.')
             return
-        window = tk.Toplevel(self.frame)
-        window.title('Show files to delete')
-        window.geometry('760x480')
-        label(window, 'Only the files listed here will be deleted. Your game and finished builds are kept.')
-        box = ttk.Frame(window)
-        box.pack(fill='both', expand=True)
-        text = tk.Text(box, wrap='none')
-        scroll = ttk.Scrollbar(box, command=text.yview)
-        text.config(yscrollcommand=scroll.set)
-        scroll.pack(side='right', fill='y')
-        text.pack(fill='both', expand=True)
-        text.insert('1.0', plan.preview(selected))
-        text.config(state='disabled')
-        self.app.bind_scroll_area(text)
-        def remove():
-            window.destroy()
-            self.run_cleanup(plan, selected)
-        button(window, text='Delete these files', command=remove).pack(side='right', padx=8, pady=8)
-        button(window, text='Cancel', command=window.destroy).pack(side='right', padx=8, pady=8)
-        window.transient(self.app.root)
-        window.grab_set()
+        self.app.prompt('Files to delete',
+                        'Only the files listed here will be deleted. Your game and finished builds are kept.',
+                        [('Cancel', None, False), ('Delete these files', lambda: self.run_cleanup(plan, selected), True)],
+                        details=plan.preview(selected), cancel='Cancel', focus='Cancel')
 
     def run_cleanup(self, plan, selected, *, finish=False):
         if self.cleaning:
@@ -3325,30 +3483,11 @@ class DonePage(Page):
         self.app.work(lambda: cleanup.remove(plan, selected), after, errors=True)
 
     def report_cleanup(self, deleted, kept):
-        window = tk.Toplevel(self.frame)
-        window.title('Cleanup report')
-        window.geometry('760x480')
-        label(window, 'Removed %d files. Review the list, then click Close to finish.' % len(deleted), bold=True)
-        box = ttk.Frame(window)
-        box.pack(fill='both', expand=True)
-        text = tk.Text(box, wrap='none')
-        scroll = ttk.Scrollbar(box, command=text.yview)
-        text.config(yscrollcommand=scroll.set)
-        scroll.pack(side='right', fill='y')
-        text.pack(fill='both', expand=True)
         report = ['Removed files:'] + (list(deleted) or ['None.'])
         if kept:
             report += ['', 'Kept files:'] + list(kept)
-        text.insert('1.0', '\n'.join(report))
-        text.config(state='disabled')
-        self.app.bind_scroll_area(text)
-        def close():
-            window.destroy()
-            self.app.root.destroy()
-        button(window, text='Close', command=close).pack(side='right', padx=8, pady=8)
-        window.protocol('WM_DELETE_WINDOW', close)
-        window.transient(self.app.root)
-        window.grab_set()
+        self.app.prompt('Cleanup report', 'Removed %d files. Review the list, then click Close to finish.' % len(deleted),
+                        [('Close', self.app.root.destroy, True)], details='\n'.join(report), cancel='Close')
 
     def busy(self):
         return self.cleaning
@@ -3408,10 +3547,15 @@ class App:
         self.body._ut_theme = self.theme
         self.pages = [P(self) for P in self.PAGES]
         self.index = 0
+        self.keys = KeyWatch(root)  # a held Space or Enter never carries into a button that appears under it
+        self.overlay = None         # the Prompt shown in place of the page, if any
+        self._prompts = []          # prompts waiting for the one shown to close
+        self._focus_before = None   # what had the keyboard before the first prompt opened
         nav = ttk.Frame(root, padding=(16, 8, 16, 12))
         nav.pack(side="bottom", fill="x")
         self.body.pack(fill="both", expand=True)
-        button(nav, text="About", command=self.about).pack(side="left")
+        self.about_btn = button(nav, text="About", command=self.about)
+        self.about_btn.pack(side="left")
         self.boring = tk.BooleanVar(root, value=boring)
         self.boring_toggle = checkbutton(nav, text="Boring mode", variable=self.boring,
                                         command=self.toggle_boring)
@@ -3428,6 +3572,7 @@ class App:
         root.bind_all("<KeyRelease-Tab>", self._focused, add="+")
         root.bind_all("<KeyRelease-ISO_Left_Tab>", self._focused, add="+")
         root.protocol("WM_DELETE_WINDOW", self.close)
+        root.bind("<Escape>", self._escape)
         self.show(0)
         root.after(100, self.poll)
         if opts.autopilot is not None:
@@ -3449,7 +3594,7 @@ class App:
                 widget = self.root.winfo_containing(event.x_root, event.y_root)
             except (tk.TclError, KeyError):
                 return
-        page = self.page
+        page = self.overlay or self.page
         if widget is None or not str(widget).startswith(str(page.box) + "."):
             return
         if isinstance(widget, (ttk.Scrollbar, ttk.Combobox)):
@@ -3475,33 +3620,11 @@ class App:
             getattr(target, axis + 'view_scroll')(units, "units")
         return "break"
 
-    def bind_scroll_area(self, widget):
-        """Dialogs have no Page; give their text areas the same precise scrolling."""
-        tag = 'BuilderScrollArea' + str(widget)
-        def scroll(event):
-            axis = getattr(event, '_scroll_axis', 'x' if getattr(event, 'state', 0) & 1 else 'y')
-            if hasattr(event, '_scroll_amount'):
-                amount = event._scroll_amount / 16
-            else:
-                event._tk9_wheel = int(str(widget.tk.call('package', 'require', 'Tk')).split('.')[0]) >= 9
-                amount = wheel_units(event, sys.platform)
-            key = '_wheel_remainder_' + axis
-            remainder = getattr(widget, key, 0.0) + amount
-            units = int(remainder)
-            setattr(widget, key, remainder - units)
-            if units:
-                getattr(widget, axis + 'view_scroll')(units, 'units')
-            return 'break'
-        for seq in ('<MouseWheel>', '<Shift-MouseWheel>', '<Button-4>', '<Button-5>',
-                    '<Shift-Button-4>', '<Shift-Button-5>'):
-            widget.bind_class(tag, seq, scroll)
-        bind_touchpad(widget, tag, scroll)
-        widget.bindtags((tag,) + widget.bindtags())
-
     def _focused(self, event):
         widget = event.widget
-        if isinstance(widget, tk.Misc) and str(widget).startswith(str(self.page.frame) + "."):
-            self.root.after_idle(lambda: widget.winfo_exists() and self.page.show_widget(widget))
+        page = self.overlay or self.page
+        if isinstance(widget, tk.Misc) and str(widget).startswith(str(page.frame) + "."):
+            self.root.after_idle(lambda: widget.winfo_exists() and page.show_widget(widget))
 
     def toggle_boring(self):
         self.theme.boring = self.boring.get()
@@ -3522,10 +3645,9 @@ class App:
             self.theme.load_from_game_dir(self.state.folder)
         self.page.box.pack_forget()
         self.index = i
-        cleanup_only = isinstance(self.page, DonePage) and self.page.cleanup_only
-        self.heading.config(text="* Clean up previous build files" if cleanup_only else "* " + self.page.title)
-        self.stepno.config(text="" if cleanup_only else "Step %d of %d" % (i + 1, len(self.pages)))
-        self.page.box.pack(fill="both", expand=True)
+        self.show_heading()
+        if self.overlay is None:    # A page that moves on by itself stays behind a prompt that is open.
+            self.page.box.pack(fill="both", expand=True)
         self.page.canvas.yview_moveto(0)
         stop = (self.opts.autopilot or {}).get("stop_at")
         if stop and stop == self.page.title:
@@ -3536,8 +3658,70 @@ class App:
             return
         self.page.on_show()
         self.update_nav()
+        if self.overlay is None:
+            self.keys.carry()
+
+    def show_heading(self):
+        if self.overlay is not None:
+            self.heading.config(text="* " + self.overlay.title)
+            self.stepno.config(text="")
+            return
+        cleanup_only = isinstance(self.page, DonePage) and self.page.cleanup_only
+        self.heading.config(text="* Clean up previous build files" if cleanup_only else "* " + self.page.title)
+        self.stepno.config(text="" if cleanup_only else "Step %d of %d" % (self.index + 1, len(self.pages)))
+
+    def prompt(self, title, message, choices, details=None, cancel=None, focus=None):
+        """Ask or tell something inside this window (Prompt). One shows at a time; later ones wait their turn."""
+        self._prompts.append((title, message, choices, details, cancel, focus))
+        if self.overlay is None:
+            self._next_prompt()
+
+    def ask(self, title, message, yes, no=None, yes_text="Yes", no_text="No", safe=True):
+        """A yes/no question. safe: the keyboard starts on No, for anything that deletes, replaces or stops."""
+        self.prompt(title, message, [(no_text, no, False), (yes_text, yes, True)], cancel=no_text,
+                    focus=no_text if safe else yes_text)
+
+    def inform(self, title, message, details=None):
+        self.prompt(title, message, [("OK", None, True)], details=details, cancel="OK")
+
+    def _next_prompt(self):
+        title, message, choices, details, cancel, focus = self._prompts.pop(0)
+        if self.overlay is None and self._focus_before is None:
+            self._focus_before = self.root.focus_lastfor()   # this window's keyboard, even while it is not active
+        self.page.box.pack_forget()
+        self.overlay = Prompt(self, title, message, choices, details=details, cancel=cancel, focus=focus)
+        self.overlay.box.pack(fill="both", expand=True)
+        self.theme.apply()
+        self.show_heading()
+        self.update_nav()
+        self.keys.hand(self.overlay.first)
+
+    def _escape(self, _event=None):
+        """Escape makes the open prompt's cancel choice; with no prompt open it does nothing."""
+        if self.overlay is not None:
+            self.overlay.choose(self.overlay.cancel)
+
+    def close_prompt(self, prompt):
+        if prompt is not self.overlay:
+            return
+        prompt.box.destroy()
+        self.overlay = None
+        if self._prompts:
+            self._next_prompt()
+            return
+        self.page.box.pack(fill="both", expand=True)
+        self.show_heading()
+        self.update_nav()
+        # Back to what had the keyboard before, as a system dialog does; never straight onto the footer's action.
+        before, self._focus_before = self._focus_before, None
+        self.keys.hand(None if before is self.next_btn else before)
 
     def update_nav(self):
+        if self.overlay is not None:
+            for control in (self.back_btn, self.next_btn, self.about_btn):
+                control.state(["disabled"])
+            return
+        self.about_btn.state(["!disabled"])
         last = self.index == len(self.pages) - 1
         self.next_btn.config(text=self.page.finish_label() if last else "Next >")
         ok = self.page.can_next() and not self.page.busy()
@@ -3547,6 +3731,8 @@ class App:
         self.back_btn.state(["!disabled"] if self.index > 0 and not self.page.busy() else ["disabled"])
 
     def next(self):
+        if isinstance(getattr(self, "overlay", None), Prompt):   # Next waits while a prompt is open.
+            return
         if self.index == len(self.pages) - 1:
             if self.page.busy():
                 return
@@ -3564,7 +3750,7 @@ class App:
         self.show(len(self.pages)-1)
 
     def back(self):
-        if self.index > 0 and not self.page.busy():
+        if self.index > 0 and not self.page.busy() and self.overlay is None:
             if isinstance(self.page, DonePage) and self.page.cleanup_only:
                 self.page.cleanup_only = False
                 self.show(0)
@@ -3577,7 +3763,8 @@ class App:
             source = updates.repository(self.state.game) + '/releases'
         except Exception:
             source = ''
-        messagebox.showinfo("About", ABOUT.format(app=app, source=source))
+        if self.overlay is None:
+            self.inform("About", ABOUT.format(app=app, source=source))
 
     def check_updates(self, manual=False):
         if self.pages[0].check_updates.get():
@@ -3599,15 +3786,20 @@ class App:
                 self.pages[0].update_feedback.config(text=text)
 
     def close(self):
+        if self.overlay is not None:     # The window's close button makes the prompt's cancel choice.
+            self.overlay.choose(self.overlay.cancel)
+            return
         if self.page.busy() and self.index != 5:
-            messagebox.showinfo('Please wait', 'Wait for this step to finish, or click Cancel, before closing.')
+            self.inform('Please wait', 'Wait for this step to finish, or click Cancel, before closing.')
             return
         b = self.pages[5]
         if b.running:
-            if not messagebox.askyesno("Quit", "Stop the build and quit?"):
-                return
-            if b.build:
-                b.build.cancel()
+            def quit_build():
+                if b.build:
+                    b.build.cancel()
+                self.root.destroy()
+            self.ask("Quit", "Stop the build and quit?", quit_build)
+            return
         self.root.destroy()
 
     # Worker threads hand results to the Tk thread through this queue.
@@ -3638,7 +3830,7 @@ class App:
             pass
         if isinstance(self.page, BuildPage) and self.page.running and self.page.build is not None:
             self.page.progress(self.page.build.progress)
-        self.page.fit()
+        (self.overlay or self.page).fit()
         self.root.after(100, self.poll)
 
     # Autopilot: drives the real pages with a plan and prints what each page shows.
