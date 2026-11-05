@@ -273,7 +273,7 @@
     {
       "member": "platform/3ds/source/z_btlentry.c",
       "class": "engine-lookups",
-      "sha256": "a83443545aea45cd5db148e2e2c4d1346c7de315f32f8ee4ac679e141d0adc3a",
+      "sha256": "ea54d674c541dc7ac982c051e49fe01096f59a43c0970022e0ec0f7f4d3f09e8",
       "justification": "Two object names tell that a battle is starting, so its planned tiles can be read before the room change (textures only).",
       "evidence_sha256": [
         "5c59e02ae037273a498c0832254458ab17d155089c991c7087533c66935a8350"

@@ -1493,6 +1493,25 @@ SECTIONS
        --wrap), then that file's out-of-line copies of header functions; appended. */
     *(.text_credclip)
     *z_credclip.o(.text .text.* .rodata .rodata.*)
+    /* lshalt (auditfixe2 SCOURS4-005, parked for 1.0, so empty; after spdmemo, merge order, before the repack
+       test sections; both games): CtrLoadscreen_halt, the crash report's stop of the loading bar's drawing, CtrLoadscreen_drawing, and
+       lsDraw and psDraw, the gate every bar draw goes through (z_loadscreen.c's end). Named outside .text.late.* so the catch-alls leave it here;
+       appended, so no earlier late code moves. */
+    *(.text_lshalt)
+    /* codeverify (auditfixe2 AUD-16, after lshalt, merge order, before the repack test sections; UNDERTALE Old
+       only, empty elsewhere): rename's wrap, which reads the bytecode file back on the boot that writes it, the
+       move's hook that names that file (z_btlentry.c's end), then its mode string ("rb"). Named outside
+       .text.late.*; appended. */
+    *(.text_codeverify)
+    *(.rodata.codeverify_in_text)
+    /* legalheld (auditfixe2 SCOURSOL2-004, after codeverify, merge order; both games): the wrap of
+       CtrLegalui_update that keeps a held key repeating past 255 frames (ctr_legal.c's end). Named outside
+       .text.late.*; appended, so CtrLegalui_update keeps its size (RULES 3adf7ac34). */
+    *(.text_legalheld)
+    /* argcrashfix (auditfixe2 SCOURS4-004, after legalheld, merge order; both games): the crash screen's
+       painter with the look-ahead wrap and the pixel bound (z_argcrash.c's end; SCOURS4-005's gate is parked). Named outside .text.late.*; appended, so .text.late.argcrash keeps its
+       size and every symbol its place (RULES 3adf7ac34). */
+    *(.text_argcrashfix)
     /* gogut (GOG UNDERTALE only, empty in every Steam and DELTARUNE build; moved here by integrate21 zq44g, betasmoke
        R2-B2): GOG's own late code (z_gogut.c, ctr_renderer.c's Smart texel and font-folder helpers, ctr_pixgrid.c's
        data check), then its constants. It sat after round 16 (and ctr_renderer.o's .text.late.* line took most of it
@@ -2363,6 +2382,15 @@ SECTIONS
     /* overlayread (auditfixe3, SCOURSOL3-002, after sleepflush; both games): its copy of the overlay vtable and
        the original's address (z_overlayread.c). */
     *(.bss.overlayread_late)
+    /* lshalt (auditfixe2 SCOURS4-005, parked for 1.0, so empty; after spdmemo, merge order; both games): lsGate, the bar's draw gate
+       (z_loadscreen.c's end; named outside .bss.late.* so the catch-alls leave it here). */
+    *(.bss.lshalt_late)
+    /* codeverify (auditfixe2 AUD-16, after lshalt, merge order; UNDERTALE Old only): its 12 B of state
+       (z_btlentry.c's end; named outside .bss.late.* so the catch-alls leave it here). */
+    *(.bss.codeverify_late)
+    /* argcrashfix (auditfixe2 SCOURS4-005 R188e, parked for 1.0, so empty; after codeverify, merge order;
+       both games): the crash-screen gate's state (z_argcrash.c's end; named outside .bss.late.* so the catch-alls leave it here). */
+    *(.bss.argcrashfix_late)
     /* 3dsxtool refuses a segment whose size isn't a multiple of 4 ("The segments is not word-aligned!"), and this
        block ends the RW segment: late statics of odd sizes (bools) would end it off a word. */
     . = ALIGN(4);

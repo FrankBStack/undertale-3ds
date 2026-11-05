@@ -1719,6 +1719,9 @@ target_link_options(ctrport PRIVATE
 # end of source/ctr_audio_system.c: the menu's open wrap above calls CtrLegal_close first (its only caller outside
 # ctr_legal.c), and every close goes through CtrMenu_close. Wrapped, so main's and the menu's code keep their addresses.
 target_link_options(ctrport PRIVATE -Wl,--wrap=CtrLegal_close,--wrap=CtrMenu_close)
+# SCOURSOL2-004 (change auditfixe2, 11-04): a held key on the Legal and Credits pages keeps repeating past 255 frames,
+# through a wrap at ctr_legal.c's end (.text_legalheld), so CtrLegalui_update keeps its size (RULES 3adf7ac34).
+target_link_options(ctrport PRIVATE -Wl,--wrap=CtrLegalui_update)
 # The game folder's names from one listing, settings.ini read once and written once (gamedir, smoothux and gamedir2):
 # source/z_gamedir.c, a layer over the card's device that main()'s first call (CtrOpenFiles_track, wrapped) installs
 # over ctr_open_files' own; CtrLog_openFile, wrapped, logs what the listing found. A missing name in the game folder
@@ -2742,7 +2745,8 @@ set_source_files_properties("${CMAKE_CURRENT_SOURCE_DIR}/source/z_btlentry.c" PR
 if(CTRPORT_GAME STREQUAL "undertale" AND CTRPORT_TARGET STREQUAL "o3ds" AND NOT CTRPORT_ROOMPLAN_RECORDER)
     set_property(SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/source/z_btlentry.c" APPEND PROPERTY COMPILE_DEFINITIONS CTRPORT_FLOWSTREAM_READ)
     target_link_options(ctrport PRIVATE -Wl,--wrap=CtrFlowstream_collect,--wrap=CtrFlowstream_readHeader,--wrap=CtrFlowstream_readMallinfo,--wrap=CtrFlowstream_readMalloc
-        -Wl,--wrap=CtrFlowstream_gameFile,--wrap=CtrFlowstream_openFile,--wrap=DataWin_moveBytecodeToFile)
+        -Wl,--wrap=CtrFlowstream_gameFile,--wrap=CtrFlowstream_openFile,--wrap=DataWin_moveBytecodeToFile
+        -Wl,--wrap=rename) # AUD-16 (z_btlentry.c's end): the bytecode file read back as it is written
 endif()
 # LAB ONLY, never release (review decision 11-02 on btlentry's reserve): the smallest heap free per window around a battle's
 # start, after every heap allocation (newlib's allocators wrapped); with FAULT, btlentry's reads cycle through refused,

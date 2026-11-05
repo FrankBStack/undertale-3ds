@@ -388,8 +388,11 @@ static BT_TEXT CtrTileRead* btNewRead(void) {
 // ---- Round 5: the battle's code.
 
 // The bytecode file's path, for the reader's own handle on it (the game thread's, dw->bytecodeFile, is its own).
+// AUD-16 (this file's end) by its link name only: a call GCC sees into a function defined below makes it place this
+// wrap after the file's other late code, moving per-frame functions (c26rev3 R194).
+bool cvMoveViaLink(DataWin* dw, const char* cachePath) __asm__("CtrCodeVerify_move");
 BT_TEXT bool __wrap_DataWin_moveBytecodeToFile(DataWin* dw, const char* cachePath) {
-    bool moved = __real_DataWin_moveBytecodeToFile(dw, cachePath);
+    bool moved = cvMoveViaLink(dw, cachePath);
     bt.codeOf = nullptr;
     if (moved && sizeof(bt.codePath) > strlen(cachePath)) {
         strcpy(bt.codePath, cachePath);
@@ -932,4 +935,61 @@ static bool btdHold(void) {
 #endif
 }
 #endif
+
+// ---- AUD-16: the bytecode file read back once, on the boot that writes it.
+// DataWin_moveBytecodeToFile trusts a file whose header and length match on later boots, so a write the card lost
+// (a bad or fake-capacity card, a write dropped without an error) would be run as bytecode on every boot after.
+// writeCodeCache's rename of its finished temporary file into place (rename's wrap below knows it by the path's
+// pointer, set only during the move) first reads the payload back against the resident bytes it was written from.
+// A difference fails the rename, so writeCodeCache deletes the file and the move returns false with the bytecode
+// still in memory. The hook then runs the move once more, which writes a new file and reads it back again. A
+// second difference leaves the bytecode in memory, the move's own "could not use" path. The payload's size is the
+// one the move gives the header (the end of the last code entry), never read from a file. Damage after a good
+// write stays a card-damage case. Own sections (late_reserve.ld, after lshalt); the one call is in the wrap above.
+#define CV_TEXT __attribute__((noinline, section(".text_codeverify")))
+#define CV_CHUNK 8192u
+static struct { DataWin* dw; const char* path; uint32_t bad; } cv __attribute__((section(".bss.codeverify_late")));
+static const char cvRead[] __attribute__((aligned(4), section(".rodata.codeverify_in_text"))) = "rb";
+
+// True when the file at from holds the resident payload. Its own function, so only the bytecode's rename has its
+// 8 KB frame (c26rev3 R194); every other rename is the wrap's pointer compare and the real call.
+CV_TEXT static bool cvMatches(const char* from) {
+    DataWin* dw = cv.dw;
+    const uint8_t* buf = dw->bytecodeBuffer;
+    uint32_t base = (uint32_t) dw->bytecodeBufferBase, size = 0;
+    for (uint32_t i = 0; dw->code.count > i; i++) {
+        CodeEntry* e = &dw->code.entries[i];
+        if (e->present && e->bytecodeAbsoluteOffset + e->length - base > size) size = e->bytecodeAbsoluteOffset + e->length - base;
+    }
+    uint8_t chunk[CV_CHUNK]; // on the main thread's 32 KB stack, at boot
+    FILE* f = fopen(from, cvRead);
+    // Unbuffered (set before any other use of the stream): each chunk is one read of the card, not one per
+    // stdio buffer. 20: data_win.c's CodeCacheHeader.
+    bool bad = f == nullptr || setvbuf(f, nullptr, _IONBF, 0) != 0 || fseek(f, 20, SEEK_SET) != 0;
+    for (uint32_t at = 0; !bad && size > at; at += CV_CHUNK) {
+        uint32_t n = size - at > CV_CHUNK ? CV_CHUNK : size - at;
+        bad = fread(chunk, 1, n, f) != n || memcmp(chunk, buf + at, n) != 0;
+    }
+    if (f != nullptr) fclose(f);
+    return !bad;
+}
+
+int __real_rename(const char* from, const char* to);
+CV_TEXT int __wrap_rename(const char* from, const char* to) {
+    if (to == cv.path && !cvMatches(from)) {
+        cv.bad = 1;
+        return -1;
+    }
+    return __real_rename(from, to);
+}
+
+CV_TEXT bool CtrCodeVerify_move(DataWin* dw, const char* cachePath) {
+    cv.dw = dw;
+    cv.path = cachePath;
+    cv.bad = 0;
+    bool moved = __real_DataWin_moveBytecodeToFile(dw, cachePath);
+    if (cv.bad) moved = __real_DataWin_moveBytecodeToFile(dw, cachePath); // the file was lost: write it once more
+    cv.path = nullptr; // the caller's path is its stack: a later rename must not match it
+    return moved;
+}
 #endif

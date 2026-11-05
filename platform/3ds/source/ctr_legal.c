@@ -671,3 +671,15 @@ _Static_assert(__builtin_offsetof(__typeof__(lui), credits) == 20, "CtrLegalui_c
 __asm__(".global CtrLegalui_credits\n.type CtrLegalui_credits,%object\n"
         ".set CtrLegalui_credits,lui+20\n.size CtrLegalui_credits,4\n");
 #endif
+
+// ---- SCOURSOL2-004 (11-04): the update above counts a held Up/Down/Left/Right in lui.held, stopping at 255, and steps
+// on its even counts past 10; 255 is odd, so after 255 frames (about 4 s) held the repeat stopped. This wrap
+// (callers reach it through -Wl,--wrap=CtrLegalui_update) turns 255 into 11 first, which the update makes 12: the
+// counts run 254 (step), 255, 12 (step), 13, 14 (step)..., so a held key keeps stepping every other frame. Appended
+// code of its own (late_reserve.ld's .text_legalheld) because UT Old's late layout is frozen (RULES 3adf7ac34: the
+// release link's freebytes H1 holes have no pad, so the update itself must not grow).
+void __real_CtrLegalui_update(CtrMenu* menu, u32 down);
+__attribute__((noinline, section(".text_legalheld"))) void __wrap_CtrLegalui_update(CtrMenu* menu, u32 down) {
+    if (lui.held == 255u) lui.held = 11u;
+    __real_CtrLegalui_update(menu, down);
+}

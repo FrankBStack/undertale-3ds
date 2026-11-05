@@ -527,7 +527,7 @@ ARGCRASH_FUNC static u32 checkCrashTxtSize(void) {
     return (u32) size;
 }
 #endif
-
+static void argcrashPaintFixed(u8*, u16, u16, GSPGPU_FramebufferFormat, bool, ArgcrashKind, bool); // file end
 ARGCRASH_LATE static void argcrashPaintScreens(ArgcrashKind kind, bool exiting) {
     if (!argcrashGfxReady) return;
     // The real setter (only the flag): the boot log's wrap would point the consoles back and free their own buffer
@@ -551,7 +551,7 @@ ARGCRASH_LATE static void argcrashPaintScreens(ArgcrashKind kind, bool exiting) 
         for (int i = 0; i < 2; i++) {
             u16 fbW = 0, fbH = 0;
             u8* fb = gfxGetFramebuffer(screen, GFX_LEFT, &fbW, &fbH);
-            if (fb != prevFb) paintBuffer(fb, fbW, fbH, fmt, s == 0, kind, exiting);
+            if (fb != prevFb) argcrashPaintFixed(fb, fbW, fbH, fmt, s == 0, kind, exiting); // SCOURS4-004
             prevFb = fb;
             gfxSetDoubleBuffering(screen, false);
         }
@@ -1076,4 +1076,88 @@ ARGCRASH_LATE void __wrap_exit(int status) {
         argcrashFail(strReasonExit, status == 0 ? strDetailExit0 : strDetailExit1);
     }
     __real_exit(status);
+}
+
+// ---- SCOURS4-004 on UT Old's frozen late layout (RULES 3adf7ac34: the release link's freebytes H1 holes have no
+// pad, so late code there grows only append-only). argcrashPaintScreens paints each framebuffer with
+// argcrashPaintFixed, which calls the old paintBuffer only where that returns at once (no framebuffer). The new
+// function sits between the old caller and the old callee, so GCC's call graph keeps its order and every old
+// function, constant and static keeps its place and size (only the call's target changes). Own section, appended in
+// late_reserve.ld. SCOURS4-005 (the crash screen stops the loading bar) is parked for 1.0 (11-04,
+// review R188i); its code is not in this build.
+#if defined(__3DS__) && defined(__GNUC__)
+#define ARGCRASH_FIX __attribute__((noinline, noipa, section(".text_argcrashfix")))
+#else
+#define ARGCRASH_FIX __attribute__((noinline, noipa))
+#endif
+
+// SCOURS4-004: paintBuffer, but a line breaks at a space when the next word would end past the rule, not only past
+// ruleW - 48, and no pixel lands past the edge. With no framebuffer it calls paintBuffer, which then returns at once
+// (that call keeps paintBuffer's place, above). It paints the left buffer only (argcrashPaintScreens presents
+// mono). The console font is libctru's default one (nothing here sets another): its glyphs are there, 256 from
+// code 0; each line's text is set.
+ARGCRASH_FIX static void argcrashPaintFixed(u8* fb, u16 fbW, u16 fbH, GSPGPU_FramebufferFormat fmt, bool isTop,
+                                            ArgcrashKind kind, bool exiting) {
+    if (fb == nullptr || fbW == 0 || fbH == 0) {
+        paintBuffer(fb, fbW, fbH, fmt, isTop, kind, exiting);
+        return;
+    }
+    curFbPtr = fb;
+    curFbH = fbH;
+    curFbFmt = fmt;
+    u32 fbBytes = (u32) fbW * (u32) fbH * (fmt == GSP_BGR8_OES ? 3u : 2u);
+    memset(fb, 0, fbBytes);
+
+    int textX = isTop ? 28 : 4;
+    int ruleW = isTop ? 344 : 312;
+    for (int x = textX; x < textX + ruleW; x++) {
+        putPixel(x, 30, 0xFFFFFFu);
+        putPixel(x, 86, 0x505868u);
+        putPixel(x, 166, 0x505868u);
+        putPixel(x, 204, 0xFFFFFFu);
+    }
+
+    if ((unsigned int) kind >= CRASH_KIND_COUNT) kind = CRASH_NONE;
+    const CrashDesc* d = &crashDescs[kind];
+    const char* title = d->title;
+#ifdef CTRPORT_TARGET_O3DS
+    if (kind == CRASH_OOM && envIsHomebrew() && CTR_OOM_CIA_HINT_BELOW > __ctru_heap_size + __ctru_linear_heap_size) {
+        title = strTitleOomCia;
+    }
+#endif
+    const char* dynText[3] = {
+        title,
+        d->code,
+        exiting ? strReturningHome : strPressStart,
+    };
+
+    const ConsoleFont* font = &consoleGetDefault()->font;
+    for (size_t i = 0; i < 8; i++) {
+        const char* s = (i < 5) ? screenLines[i].text : dynText[i - 5];
+        u32 rgb = (i == 7 && exiting) ? 0x80FF60u : screenLines[i].rgb;
+        int y0 = screenLines[i].y;
+        for (int x = textX + screenLines[i].dx; *s != '\0'; s++, x += 8) {
+            if (*s == ' ') { // break here past ruleW - 48, or when the next word would end past the rule
+                const char* w = s + 1;
+                while (*w != ' ' && *w != '\0') w++;
+                if (x > textX + ruleW - 48 || x + 8 * (int) (w - s) > textX + ruleW) {
+                    x = textX + 8;
+                    y0 += 12;
+                    continue;
+                }
+            }
+            const u8* glyph = font->gfx + ((unsigned char) *s - font->asciiOffset) * 8u;
+            for (int r = 0; r < 8; r++) {
+                u8 bits = glyph[r];
+                for (int c = 0; c < 8; c++) {
+                    // A glyph past the edge never leaves the buffer (putPixel doubles x on the wide top).
+                    if ((bits & (0x80u >> c)) != 0 && 240u > (unsigned) (y0 + r) &&
+                        curFbH > (unsigned) ((x + c) << (curFbH == 800u)))
+                        putPixel(x + c, y0 + r, rgb);
+                }
+            }
+        }
+    }
+
+    GSPGPU_FlushDataCache(fb, fbBytes);
 }
