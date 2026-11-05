@@ -1488,6 +1488,11 @@ SECTIONS
     /* overlayread R195c (auditfixe3): ctr_file_system.c's CtrFileSystem_readStrict, readWhole for
        z_overlayread.c's CtrFileSystem_readWhole (readSaveFile's and readIndexed's whole-file read). Appended. */
     *(.text_overlayread_fs)
+    /* credclip (auditfixe CREDPOP-001, after wrapfix, merge order; UNDERTALE, empty in DELTARUNE): the menu font
+       painter's wrap that keeps the Credits roll's rows outside its window black (z_credclip.c, reached through
+       --wrap), then that file's out-of-line copies of header functions; appended. */
+    *(.text_credclip)
+    *z_credclip.o(.text .text.* .rodata .rodata.*)
     /* gogut (GOG UNDERTALE only, empty in every Steam and DELTARUNE build; moved here by integrate21 zq44g, betasmoke
        R2-B2): GOG's own late code (z_gogut.c, ctr_renderer.c's Smart texel and font-folder helpers, ctr_pixgrid.c's
        data check), then its constants. It sat after round 16 (and ctr_renderer.o's .text.late.* line took most of it

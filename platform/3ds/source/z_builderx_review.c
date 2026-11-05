@@ -40,7 +40,9 @@ BX_REVIEW CTR_COLD_OS bool CtrBuilderx_hasBenchScenes(void) {
 }
 
 // Mirrors the private OptRow ABI; compiler-launcher tests bind its fields and the Debug row's ordinal (ctr_optmenu.c's
-// OPT_MAIN_DEBUG: 6 since legalui's option C took the Other row out; tools/release/test_builder_review.py checks it).
+// OPT_MAIN_DEBUG: 6 since legalui's option C took the Other row out, 5 on the Old 3DS, whose menu has no Exact
+// colours row (CTR_PACK_EXACT_AVAILABLE 0); tools/release/test_builder_review.py checks both). A public build
+// (CTRPORT_PUBLIC_MENU) has no Performance test on its Debug page, so no row is greyed: Debug keeps Stats and log.
 typedef struct {
     const char* label;
     const char* value;
@@ -48,7 +50,13 @@ typedef struct {
     bool dis;
 } BxMenuRow;
 _Static_assert(offsetof(BxMenuRow, dis) == 3 * sizeof(void*), "options row ABI");
+#if defined(CTRPORT_PUBLIC_MENU)
+enum { BX_MENU_DEBUG = 255 }; // no row has this index
+#elif defined(CTRPORT_TARGET_O3DS)
+enum { BX_MENU_DEBUG = 5 };
+#else
 enum { BX_MENU_DEBUG = 6 };
+#endif
 void Bx_menuRowOriginal(const CtrMenu* menu, uint32_t index, BxMenuRow* row);
 CtrMenuAction Bx_menuActivateOriginal(CtrMenu* menu, uint32_t index, int32_t direction);
 void Bx_menuRow(const CtrMenu* menu, uint32_t index, BxMenuRow* row);

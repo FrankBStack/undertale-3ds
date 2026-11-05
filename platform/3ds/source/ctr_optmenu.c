@@ -280,7 +280,14 @@ enum { OPT_MAIN_GAME, OPT_MAIN_DIALOGUE, OPT_MAIN_SMOOTHING,
        OPT_MAIN_CONTROLS, OPT_MAIN_DEBUG, OPT_MAIN_LEGAL, OPT_MAIN_CREDITS, OPT_MAIN_RESUME, OPT_MAIN_QUIT,
        OPT_MAIN_COUNT };
 enum { OPT_FPS_ON, OPT_FPS_SCREEN, OPT_FPS_SIZE, OPT_FPS_BACK, OPT_FPS_COUNT };
+#ifdef CTRPORT_PUBLIC_MENU
+// A public build (CMakeLists: CTRPORT_RELEASE_SOURCE_URL, every builder build) has no Performance test (maintainer 11-04):
+// its Debug page is Stats and log, then Back where the test was. The test's index is past the page's rows, so no row
+// reaches it, and the code keeps its shape (only compared constants change).
+enum { OPT_DEBUG_LOG, OPT_DEBUG_BACK, OPT_DEBUG_COUNT, OPT_DEBUG_PERF };
+#else
 enum { OPT_DEBUG_LOG, OPT_DEBUG_PERF, OPT_DEBUG_BACK, OPT_DEBUG_COUNT };
+#endif
 #ifdef ENABLE_WAD16
 enum { OPT_SMOOTH_TEXT, OPT_SMOOTH_BONES, OPT_SMOOTH_NUMBERS, OPT_SMOOTH_SOUL, OPT_SMOOTH_BACK, OPT_SMOOTH_COUNT };
 #endif

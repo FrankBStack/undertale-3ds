@@ -1557,6 +1557,12 @@ endif()
 # overlayread (change auditfixe3, SCOURSOL3-002): z_overlayread.c gives every overlay file system whole-file readers
 # that fail unless they read the whole file (ctr_file_system.c's and main.c's OverlayFileSystem_create calls).
 target_link_options(ctrport PRIVATE -Wl,--wrap=OverlayFileSystem_create)
+# credclip (change auditfixe, CREDPOP-001): z_credclip.c keeps the Credits roll's rows outside its window black after
+# each line ctr_legal.c draws through the menu font's painter, so lines slide in and out instead of popping.
+if(CTRPORT_GAME STREQUAL "undertale")
+    target_link_options(ctrport PRIVATE -Wl,--wrap=CtrOptmenu_text)
+endif()
+set_source_files_properties("${CMAKE_CURRENT_SOURCE_DIR}/source/z_credclip.c" PROPERTIES COMPILE_OPTIONS "-Os")
 # Timestamp logs from before libctru service/heap setup, retaining its r0 argument.
 target_link_options(ctrport PRIVATE -Wl,--wrap=__libctru_init)
 # ctr_frame_pacer.c holds citro3d's screen flips for the vblank that ends each frame's slot.
@@ -2869,6 +2875,14 @@ if(MAKEROM_EXE AND BANNERTOOL_EXE)
     add_dependencies(cia ctrport_romfs)
 endif()
 
+# A public UNDERTALE build (CTRPORT_RELEASE_SOURCE_URL: every builder and release build) has no Performance test in
+# its options menu (maintainer 11-04): the Debug page is Stats and log and Back (ctr_optmenu.c), and the review adapter
+# greys no row (z_builderx_review.c). Only these two objects see the define, so lab and development builds compile
+# as before and keep the test.
+if(CTRPORT_GAME STREQUAL "undertale" AND CTRPORT_RELEASE_SOURCE_URL)
+    set_property(SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/source/ctr_optmenu.c" "${CMAKE_CURRENT_SOURCE_DIR}/source/z_builderx_review.c"
+        APPEND PROPERTY COMPILE_DEFINITIONS CTRPORT_PUBLIC_MENU)
+endif()
 # Keep UT's release-only performance-test menu guard; DR uses upstream's exact runtime.
 if(CTRPORT_GAME STREQUAL "undertale")
     get_target_property(builderx_delegate ctrport C_COMPILER_LAUNCHER)

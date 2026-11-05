@@ -1058,3 +1058,6 @@ platform/3ds/source/z_hashmenu.c
 platform/3ds/source/z_wrapfix.c
 # overlayread (auditfixe3 SCOURSOL3-002): the overlay file system's whole-file reads fail unless complete
 platform/3ds/source/z_overlayread.c
+# credclip (auditfixe CREDPOP-001): the Credits roll slides lines in and out at its edges, no pop (UT; empty in DR)
+platform/3ds/source/z_credclip.c
+tools/analysis/test_credclip.py
