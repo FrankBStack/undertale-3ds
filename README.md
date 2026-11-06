@@ -2,77 +2,50 @@
 
 ![Contributions welcome](https://img.shields.io/badge/contributions-welcome-yellow?style=for-the-badge)
 
-**Contributions are greatly appreciated! If you want to improve the port, fix bugs or add your own features, please open a pull request.**
-
-> **Not released yet. There is nothing to download or install yet.**
->
-> **The first release (UNDERTALE 1.0 beta) is planned for early November.** It comes with the builder, a program that builds the port from your own copy of UNDERTALE and installs it. Until then, this repository is the source code only.
-
 An unofficial fan port of UNDERTALE to the Nintendo 3DS.
 
-You build it from your own copy of UNDERTALE.
+> **Not released yet. There is nothing to download or install at the moment.**
+>
+> **The first release (UNDERTALE 1.0 beta) is planned for early November.** It will come with a builder, a program that builds the port from your game files.
+
+You build it from your own UNDERTALE copy.
 
 ## Status
 
-UNDERTALE 1.0 beta: The newest build is being measured on every console now, and I'll play the hardest scenes on it myself. The beta goes out once I can't notice lag in them, after a final check.
+UNDERTALE beta 1.0: 99% there. Squashing the very last few bugs.
 
-DELTARUNE: in progress. It comes after UNDERTALE.
-
-## Progress to 1.0
-
-The goal: every scene running at a locked 30 fps on every model.
-
-```
-New 3DS / New 3DS XL / New 2DS XL   ███████████████████░   99%
-3DS                                 ██████████████████░░   90%
-3DS XL                              ██████████████████░░   92%
-2DS                                 █████████████████░░░   86%
-Overall                             ██████████████████░░   92%
-```
-
-A scene passes only when every single frame in play is ready in time, with no dropped frames. Most scenes that fail miss by a single frame here and there, which is hard to notice while playing. That's why the beta is judged by playing the worst scenes.
-
-New 3DS: 70 of 71 measured scenes pass.
-
-Older models: 66 of 73 measured scenes pass on a 3DS, 67 of 73 on a 3DS XL and 63 of 73 on a 2DS.
+DELTARUNE: In progress, chapters 1-5 will be prioritized after UNDERTALE releases.
 
 ## Known issues
 
-- On older models, a few scenes can slow down: the Omega Flowey fight, Undyne's death when you kill her and the ending credits on every older model; one room in Hotland on a 3DS and a 3DS XL; the Knight Knight battle in the CORE on a 3DS; and on a 2DS also Asriel's fight, Asgore's fight, the walk out past the barrier at the end, and loading a save in Snowdin. On a New 3DS, only the Omega Flowey fight.
-- On older models, a few sounds can start a moment late, and the Omega Flowey fight can pause for a split second while a sound loads.
-- On older models, the music can cut out for a moment in the fight with Asriel and in the room before the barrier, and the rising hum near the end can stutter. This build should fix both; we haven't confirmed it on a console yet.
-- On older models, opening the Rosalina menu while the game runs can freeze the console. Save before using it.
-- Some large artwork can lose fine lines, such as Mettaton NEO, Asriel's wings, Asgore's cape and the phone call speech bubble.
-- Rarely, opening Options while a lot of sounds are playing can cut one of them off.
-- In Options, START plays the menu sound but does nothing.
-- A few stray red pixels can appear around the last Froggit in the ending credits. This build should hide them; we haven't confirmed it on a console yet.
-- Rarely, an older model can crash when you press HOME, or freeze. We're looking into it. Save first.
+- When the game is open for a long time, audio caches accumulate which can cause slight stutter in heavy fights (e.g/ Omega Flowey).
+- Special Thanks drops a single frame at a single scene.
+- A couple of other bugs that have been caught and are being fixed.
 
-## Supported consoles
+## Supported consoles (Every model)
 
-- New 3DS, New 3DS XL, New 2DS XL
-- 3DS, 3DS XL, 2DS
+- New 3DS, New 3DS XL, New 2DS XL, 3DS, 3DS XL, 2DS
 
-## What you need
+## Requirements
 
 - UNDERTALE 1.08 for PC, from Steam or GOG
 - A Windows, Linux or Mac computer
-- A 3DS that can run homebrew, and an SD card (freshly formatted, with plenty of free space, is best)
+- A 3DS that can run homebrew, and an SD card
 
 ## How it works
 
-A small builder app on your computer finds your copy of UNDERTALE and builds a .3dsx or .cia for your console. It can also bring your PC save over. Your copy of the game stays yours, so please don't share the files it makes.
+A builder app (not available for download yet, will launch with beta 1.0) on your computer locates an UNDERTALE copy and builds a .3dsx or .cia. It also gives you the option to copy your PC saves over.
 
 ## FAQ
 
 **Is this piracy?**
-No. Nothing from the game is here. The builder only works with a copy you own.
+No. There are no game code or assets in this repo. The builder constructs all parts of the game from the game files directly.
 
 **What about DELTARUNE?**
-Later, in its own repository, starting with the New 3DS models.
+Coming after beta 1.0's release, with initial n3ds/n2ds support (older console support will require a significant amount of work, so it will take some time, especially chapters 3-5).
 
 **Something looks or plays differently from the PC version.**
-Please open an issue with your console model and where it happened.
+Please open an issue, this port was designed to be 1:1 to the original game. If there are any inconsistencies, please let me know (or open a GitHub issue)!
 
 ## How it was made
 
@@ -80,15 +53,17 @@ Most of the code was written with AI models (mainly Claude) under my supervision
 
 ## Who am I?
 
-Hi, I'm Ethan. I'm 21 and in my fourth year of Computer Science at Western University (the University of Western Ontario).
+I'm Ethan. I'm 21 and in my 4th year of Computer Science at UWO (the University of Western Ontario).
 
-UNDERTALE and DELTARUNE mean a lot to me, and I wanted to play them on the 3DS. So I made this.
+I've always loved UNDERTALE and DELTARUNE, and other ports that exist are less performance-oriented, so I figured "why not build the definitive way of playing the game?"
 
-Yes, a lot of this port was built with AI assistance. That doesn't mean it was rushed. Every room, font and sprite was checked against the original, down to the sub-pixel, so it looks and feels right on the 3DS's small screens. It was made with a lot of love and care.
+My goals and values for this port were relatively straightforward: keep the game 1:1 pixel identical with the PC version where possible, have high performance (30fps in every fight with 0 visible stuttering or frame drops), offer unique 3ds QOL features, and just generally have it be an amazing, uncompromising experience.
 
-I hope you enjoy playing it as much as I enjoyed making it.
+Yes, AI wrote most of the code in this port, and I cannot (and will not try to) change how you might feel about this. All that I will say is I have poured countless hours of my own time into this, and I wouldn't let the fact that it's largely AI assisted taint your view on the overall experience that the port offers.
 
-If you want to say hi or tell me what you think, please don't hesitate to reach out; my Discord is 3lit3hax.
+If you give it a go and it doesn't live up to your expectations, please pass on any suggestions/improvements you might have, I always appreciate feedback in any form. My Discord is 3lit3hax.
+
+This genuinely was a blast to make, and I am extremely proud of how the game runs and feels on both new and old consoles.
 
 ## Credits
 
