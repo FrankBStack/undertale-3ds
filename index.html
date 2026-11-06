@@ -24,6 +24,9 @@
   .button { display: inline-block; padding: 12px 20px; border: 3px solid var(--fg); color: var(--fg); text-decoration: none; font-weight: 600; }
   .button:hover, .button:focus { border-color: var(--accent); color: var(--accent); }
   ul { padding-left: 1.2em; }
+  h3 { font-size: 1rem; margin: 20px 0 4px; }
+  blockquote { margin: 0 0 24px; padding: 4px 16px; border-left: 3px solid var(--accent); }
+  .note { color: var(--dim); font-size: 0.95rem; }
   footer { margin-top: 56px; padding-top: 16px; border-top: 1px solid var(--line); color: var(--dim); font-size: 0.9rem; }
   footer p { color: var(--dim); }
 </style>
@@ -31,20 +34,32 @@
 <body>
 <main>
   <h1>undertale-3ds</h1>
-  <p class="lede">An unofficial fan port of UNDERTALE to the Nintendo 3DS. You build it from your own copy of UNDERTALE.</p>
+  <p class="lede">An unofficial fan port of UNDERTALE to the Nintendo 3DS.</p>
+  <blockquote>
+    <p><strong>Not released yet. There is nothing to download or install at the moment.</strong></p>
+    <p><strong>The first release (UNDERTALE 1.0 beta) is planned for early November.</strong> It will come with a builder, a program that builds the port from your game files.</p>
+  </blockquote>
+  <p>You build it from your own UNDERTALE copy.</p>
   <p><a class="button" href="https://github.com/ethancawse/undertale-3ds">View the project on GitHub</a></p>
+  <p class="note">Contributions welcome.</p>
 
   <h2>Status</h2>
-  <p>The UNDERTALE 1.0 beta is not out yet. The goal is a locked 30 fps in every scene on every model. Current progress, changes and known issues are on the <a href="https://github.com/ethancawse/undertale-3ds">GitHub page</a>, updated about once a day.</p>
-  <p>DELTARUNE comes after UNDERTALE.</p>
+  <p>UNDERTALE beta 1.0: 99% there. Squashing the very last few bugs.</p>
+  <p>DELTARUNE: In progress, chapters 1-5 will be prioritized after UNDERTALE releases.</p>
 
-  <h2>Supported consoles</h2>
+  <h2>Known issues</h2>
   <ul>
-    <li>New 3DS, New 3DS XL, New 2DS XL</li>
-    <li>3DS, 3DS XL, 2DS</li>
+    <li>When the game is open for a long time, audio caches accumulate which can cause slight stutter in heavy fights (e.g. Omega Flowey).</li>
+    <li>Special Thanks drops a single frame at a single scene.</li>
+    <li>A couple of other bugs that have been caught and are being fixed.</li>
   </ul>
 
-  <h2>What you need</h2>
+  <h2>Supported consoles (Every model)</h2>
+  <ul>
+    <li>New 3DS, New 3DS XL, New 2DS XL, 3DS, 3DS XL, 2DS</li>
+  </ul>
+
+  <h2>Requirements</h2>
   <ul>
     <li>UNDERTALE 1.08 for PC, from Steam or GOG</li>
     <li>A Windows, Linux or Mac computer</li>
@@ -52,15 +67,40 @@
   </ul>
 
   <h2>How it works</h2>
-  <p>A small builder app on your computer finds your copy of UNDERTALE and builds a .3dsx or .cia for your console. It can also bring your PC save over. Nothing from the game is in this project, and the builder only works with a copy you own. Please don't share the files it makes.</p>
+  <p>A builder app (not available for download yet, will launch with beta 1.0) on your computer locates an UNDERTALE copy and builds a .3dsx or .cia. It also gives you the option to copy your PC saves over.</p>
 
-  <h2>Who made it</h2>
-  <p>Hi, I'm Ethan, a Computer Science student at Western University. Most of the code was written with AI models (mainly Claude) under my supervision and direction, and every room, font and sprite was checked against the original. Say hi on Discord: 3lit3hax.</p>
+  <h2>FAQ</h2>
+  <h3>Is this piracy?</h3>
+  <p>No. There is no game code or assets in <a href="https://github.com/ethancawse/undertale-3ds">this repo</a>. The builder constructs all parts of the game from the game files directly.</p>
+  <h3>What about DELTARUNE?</h3>
+  <p>Coming after beta 1.0's release, with initial New 3DS/New 2DS support (older console support will require a significant amount of work, so it will take some time, especially chapters 3-5).</p>
+  <h3>Something looks or plays differently from the PC version.</h3>
+  <p>Please open an issue. This port was designed to be 1:1 to the original game. If there are any inconsistencies, please let me know (or open a <a href="https://github.com/ethancawse/undertale-3ds/issues">GitHub issue</a>)!</p>
 
-  <footer>
-    <p>UNDERTALE by Toby Fox. Engine: a fork of <a href="https://github.com/ButterscotchRunner/Butterscotch">Butterscotch</a>, used under the GNU AGPL v3.</p>
-    <p>Unofficial fan project, not affiliated with or endorsed by Toby Fox, Fangamer, YoYo Games or Nintendo. UNDERTALE is a trademark of Toby Fox. Nintendo 3DS is a trademark of Nintendo.</p>
-  </footer>
+  <h2>How it was made</h2>
+  <p>Most of the code was written with AI models (mainly Claude) under my supervision and direction.</p>
+
+  <h2>Who am I?</h2>
+  <p>I'm Ethan. I'm 21 and in my 4th year of Computer Science at UWO (the University of Western Ontario).</p>
+  <p>I've always loved UNDERTALE and DELTARUNE, and other ports that exist are less performance-oriented, so I figured "why not build the definitive way of playing the game?"</p>
+  <p>My goals and values for this port were relatively straightforward: keep the game 1:1 pixel identical with the PC version where possible, have high performance (30fps in every fight with 0 visible stuttering or frame drops), offer unique 3DS QOL features, and just generally have it be an amazing, uncompromising experience.</p>
+  <p>Yes, AI wrote most of the code in this port, and I cannot (and will not try to) change how you might feel about this. All that I will say is I have poured countless hours of my own time into this, and I wouldn't let the fact that it's largely AI-assisted taint your view on the overall experience that the port offers.</p>
+  <p>If you give it a go and it doesn't live up to your expectations, please pass on any suggestions/improvements you might have, I always appreciate feedback in any form. My Discord is 3lit3hax.</p>
+  <p>This genuinely was a blast to make, and I am extremely proud of how the game runs and feels on both new and old consoles.</p>
+
+  <h2>Credits</h2>
+  <ul>
+    <li>UNDERTALE by Toby Fox.</li>
+    <li>Engine: a fork of <a href="https://github.com/ButterscotchRunner/Butterscotch">Butterscotch</a>, used under the GNU AGPL v3. Modified from Butterscotch, 2026.</li>
+    <li>devkitPro, libctru and citro3d.</li>
+    <li>Other libraries: see <a href="https://github.com/ethancawse/undertale-3ds/blob/main/THIRD_PARTY_NOTICES">THIRD_PARTY_NOTICES</a>.</li>
+  </ul>
+
+  <h2>Disclaimer</h2>
+  <p>Unofficial fan project, not affiliated with or endorsed by Toby Fox, Fangamer, YoYo Games or Nintendo. UNDERTALE is a trademark of Toby Fox. Nintendo 3DS is a trademark of Nintendo.</p>
+
+  <h2>Licence</h2>
+  <p>GNU Affero General Public License v3. See <a href="https://github.com/ethancawse/undertale-3ds/blob/main/LICENSE">LICENSE</a>.</p>
 </main>
 </body>
 </html>
