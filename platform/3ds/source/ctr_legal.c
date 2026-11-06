@@ -679,7 +679,27 @@ __asm__(".global CtrLegalui_credits\n.type CtrLegalui_credits,%object\n"
 // code of its own (late_reserve.ld's .text_legalheld) because UT Old's late layout is frozen (RULES 3adf7ac34: the
 // release link's freebytes H1 holes have no pad, so the update itself must not grow).
 void __real_CtrLegalui_update(CtrMenu* menu, u32 down);
+#if defined(ENABLE_WAD16) && !defined(ENABLE_WAD17)
+void CtrCredroll_update(CtrMenu* menu, u32 down); // z_credclip.c: the update, then the vblank if the page moved (credwait)
+#define LUI_UPDATE_NEXT CtrCredroll_update
+#else
+#define LUI_UPDATE_NEXT __real_CtrLegalui_update
+#endif
 __attribute__((noinline, section(".text_legalheld"))) void __wrap_CtrLegalui_update(CtrMenu* menu, u32 down) {
     if (lui.held == 255u) lui.held = 11u;
-    __real_CtrLegalui_update(menu, down);
+    LUI_UPDATE_NEXT(menu, down);
 }
+
+#ifdef __3DS__
+// ---- CREDCLIP-002 (change creddodge, 11-06): lui under a global name for z_credclip.c, which draws the Credits roll
+// to the screen's edges, as an exact alias like CtrLegalui_credits above (no C added, so nothing above moves or
+// changes). z_credclip.c's CredrollLui spells the same layout; these pin it.
+_Static_assert(__builtin_offsetof(__typeof__(lui), view) == 0 && sizeof(lui.view) == 1, "CredrollLui.view");
+_Static_assert(__builtin_offsetof(__typeof__(lui), dirty) == 3, "CredrollLui.dirty");
+_Static_assert(__builtin_offsetof(__typeof__(lui), top) == 4, "CredrollLui.top");
+_Static_assert(__builtin_offsetof(__typeof__(lui), height) == 12, "CredrollLui.height");
+_Static_assert(__builtin_offsetof(__typeof__(lui), credits) == 20 && sizeof(lui) == 24, "CredrollLui.credits");
+_Static_assert(LUI_CREDITS == 2 && LUI_PITCH == 14, "z_credclip.c's Credits page number and line pitch");
+__asm__(".global CtrLegalui_state\n.type CtrLegalui_state,%object\n"
+        ".set CtrLegalui_state,lui\n.size CtrLegalui_state,24\n");
+#endif

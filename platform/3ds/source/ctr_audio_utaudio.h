@@ -86,6 +86,7 @@ __attribute__((noinline, noipa, optimize("Os"), section(".text.flowpitch_late"))
 #define UTA_PHYS_FORMAT CtrCap_chnSetFormat
 #define UTA_PHYS_RATE CtrCap_chnSetRate
 #define UTA_PHYS_MIX CtrCap_chnSetMix
+#define GOM_MIX_NEXT CtrCap_chnSetMix
 #define UTA_PHYS_PAUSED CtrCap_chnSetPaused
 #define UTA_PHYS_CLEAR CtrCap_chnWaveBufClear
 #define UTA_PHYS_ADD CtrCap_chnWaveBufAdd
@@ -97,12 +98,20 @@ __attribute__((noinline, noipa, optimize("Os"), section(".text.flowpitch_late"))
 #define UTA_PHYS_FORMAT (ndspChnSetFormat)
 #define UTA_PHYS_RATE (ndspChnSetRate)
 #define UTA_PHYS_MIX (ndspChnSetMix)
+#define GOM_MIX_NEXT (ndspChnSetMix)
 #define UTA_PHYS_PAUSED (ndspChnSetPaused)
 #define UTA_PHYS_CLEAR (ndspChnWaveBufClear)
 #define UTA_PHYS_ADD (ndspChnWaveBufAdd)
 #define UTA_PHYS_CALLBACK (ndspSetCallback)
 #define UTA_PHYS_READ (CtrDecoder_read)
 #define UTA_PHYS_SEEK (CtrDecoder_seek)
+#endif
+// gomusic (UNDERTALE): a stream's mix goes through gomPhysMix (ctr_audio_system.c's end), by an asm alias, so GCC sees
+// an external call there as before.
+#if defined(ENABLE_WAD16)
+void gomMixLink(int id, float mix[12]);
+#undef UTA_PHYS_MIX
+#define UTA_PHYS_MIX gomMixLink
 #endif
 #define UTA_PHYS_INTERP (ndspChnSetInterp)
 #define UTA_PHYS_SEQ (ndspChnGetWaveBufSeq)
@@ -120,6 +129,45 @@ __attribute__((noinline, noipa, optimize("Os"), section(".text.flowpitch_late"))
 #define UTA_PHYS_OPEN_MEMORY latOpenMemory
 #undef UTA_PHYS_READ
 #define UTA_PHYS_READ latRead
+#endif
+
+// gounder (UNDERTALE Old): copies of the song playing at unequal pitches share one decode (ctr_audio_system.c's end). The
+// decoder calls of the stream layer go through it, by asm aliases, so GCC sees one changed external call in each.
+#if defined(ENABLE_WAD16) && defined(CTRPORT_TARGET_O3DS) && defined(CTRPORT_HAVE_TREMOR)
+#if defined(CTR_AUDIO_PCM_HASH)
+#define GUN_OPEN_FILE_NEXT latOpenFile
+#define GUN_OPEN_MEMORY_NEXT latOpenMemory
+#define GUN_READ_NEXT latRead
+#else
+#define GUN_OPEN_FILE_NEXT (CtrDecoder_openFile)
+#define GUN_OPEN_MEMORY_NEXT (CtrDecoder_openMemory)
+#ifdef CTR_AUDIO_CAPTURE_WRAP_H
+#define GUN_READ_NEXT CtrCap_decRead
+#else
+#define GUN_READ_NEXT (CtrDecoder_read)
+#endif
+#endif
+#ifdef CTR_AUDIO_CAPTURE_WRAP_H
+#define GUN_SEEK_NEXT CtrCap_decSeek
+#else
+#define GUN_SEEK_NEXT (CtrDecoder_seek)
+#endif
+bool gunOpenFileLink(CtrDecoder* dec, const char* path);
+bool gunOpenMemoryLink(CtrDecoder* dec, const uint8_t* data, uint32_t size);
+int32_t gunReadLink(CtrDecoder* dec, int16_t* out, uint32_t maxFrames);
+bool gunSeekLink(CtrDecoder* dec, uint64_t frame);
+#undef UTA_PHYS_OPEN_FILE
+#define UTA_PHYS_OPEN_FILE gunOpenFileLink
+#undef UTA_PHYS_OPEN_MEMORY
+#define UTA_PHYS_OPEN_MEMORY gunOpenMemoryLink
+#undef UTA_PHYS_READ
+#define UTA_PHYS_READ gunReadLink
+#undef UTA_PHYS_SEEK
+#define UTA_PHYS_SEEK gunSeekLink
+void gunCloseLink(CtrDecoder* dec);
+#define GUN_STREAM_CLOSE gunCloseLink
+#else
+#define GUN_STREAM_CLOSE CtrDecoder_close
 #endif
 
 #define ndspChnReset(id) utaChnReset(id)
@@ -189,11 +237,24 @@ UTS_LATE static float utsSilentLength(CtrAudioSystem* ca, int32_t soundIndex);
 // call there as before.
 #define PT_PHYS_PAUSED audofixPtPaused
 void audofixPtPaused(int p, bool paused);
+// gomusic (UNDERTALE, change omegaflowey): a stream's open request (startStream's unlock after it publishes the request)
+// goes through gomRequested, which notes the request's frame, so streams of one sound asked for in the same frame start
+// together (ctr_audio_system.c's end). Same call signature: GCC sees one changed call target there and nothing else.
+#if defined(ENABLE_WAD16)
+__attribute__((noinline, noipa, optimize("Os"), section(".text_gomusic"))) static void gomRequested(LightLock* lock);
+#define GOM_PUBLISH(lock) gomRequested(lock)
+#else
+#define GOM_PUBLISH(lock) LightLock_Unlock(lock)
+#endif
 #if defined(ENABLE_WAD16) && defined(CTRPORT_HAVE_TREMOR)
+// gomusic: the update entry is gomUpdate, which notes each step's voice serials and then runs audofixUpdate
+// (ctr_audio_system.c's end).
 #define AUDOFIX_FEED_DECL __attribute__((noinline, noipa, optimize("Os"), section(".text.audofix_feed"))) static void \
-    audofixUpdate(AudioSystem* audio, float deltaTime);
+    audofixUpdate(AudioSystem* audio, float deltaTime); \
+    __attribute__((noinline, noipa, optimize("Os"), section(".text_gomusic"))) static void gomUpdate(AudioSystem* audio, float deltaTime);
 #undef CTR_UPDATE_ENTRY
-#define CTR_UPDATE_ENTRY audofixUpdate
+#define CTR_UPDATE_ENTRY gomUpdate
+#define GOM_UPDATE_NEXT audofixUpdate
 #define AUDOFIX_FREE_LINK audofixFreeLink
 #define AUDOFIX_READ_LINK audofixReadLink
 #else

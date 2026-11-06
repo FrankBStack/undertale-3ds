@@ -2,6 +2,9 @@
 """Assemble a candidate source ZIP in scratch, then inspect its actual members.
 
 Run from any directory: py -3 tools/release/check_release.py --export-tree
+For built artifacts only: py -3 tools/release/check_release.py --binary build.elf
+Repeat --binary for each uncompressed ELF/3DSX. Rejects the debug crash trigger;
+this separate check does not assemble or scan a source export.
 Exit 0: no configured content hits (NOT legal/build clearance); 1: content hits;
 2: invalid manifest, unsafe input/output, or unreadable archive. Nothing is published.
 Requires Python 3.10+. Only its standard library and local Git are used.
@@ -443,11 +446,42 @@ def public_source_digest(payload, files, mapped, wanted):
                                             for name in wanted})
 
 
-def main():
-    parser = argparse.ArgumentParser(description=__doc__)
+def check_release_binaries(paths):
+    """Scan uncompressed ELF/3DSX only; fail closed on wrong or unreadable inputs."""
+    trigger = b'crashtest.txt'
+    failed = False
+    for path in paths:
+        if path.suffix.lower() == '.cia':
+            raise ValueError(str(path) + ': CIA code is compressed; supply its uncompressed ELF/3DSX')
+        found, tail = False, b''
+        with path.open('rb') as binary:
+            tail = binary.read(4)
+            if not tail:
+                raise ValueError(str(path) + ': empty binary')
+            if tail not in (b'\x7fELF', b'3DSX'):
+                raise ValueError(str(path) + ': not an uncompressed ELF/3DSX (CIA code is compressed)')
+            while True:
+                chunk = binary.read(1024 * 1024)
+                if not chunk:
+                    break
+                window = tail + chunk
+                found |= trigger in window
+                tail = window[-(len(trigger) - 1):]
+        failed |= found
+        print('%s: %s: %s' % ('FAIL' if found else 'PASS', path,
+            'debug crash trigger crashtest.txt is present' if found else 'no debug crash trigger'))
+    return 1 if failed else 0
+
+
+def main(argv=None):
+    # Suppressed defaults distinguish explicitly supplied source options, even
+    # when their values equal a default (e.g. --public-commit HEAD).
+    parser = argparse.ArgumentParser(description=__doc__, argument_default=argparse.SUPPRESS)
+    parser.add_argument('--binary', type=Path, action='append',
+                        help='check only built uncompressed ELF/3DSX artifacts for debug crash triggers; repeatable')
     parser.add_argument('--manifest',
                         help='repository-relative explicit allow-list; defaults to the selected game (UNDERTALE if omitted)')
-    parser.add_argument('--output', default='release-ut-candidate',
+    parser.add_argument('--output',
                         help='simple basename under scratch (ZIP and JSON)')
     parser.add_argument('--export-tree', action='store_true',
                         help='also expand to a fresh scratch/<output>/ tree and scan its files')
@@ -455,14 +489,24 @@ def main():
                         help='select the default product manifest, or identify a custom manifest (inferred for manifest-ut/dr.txt)')
     parser.add_argument('--public-source', type=Path,
                         help='local repository containing exactly this curated public export commit')
-    parser.add_argument('--public-commit', default='HEAD',
+    parser.add_argument('--public-commit',
                         help='full commit ID in --public-source; default its HEAD, never this monorepo HEAD')
-    parser.add_argument('--identifier-policy', default='tools/release/identifier-allowlist.json',
+    parser.add_argument('--identifier-policy',
                         help='repository-relative owner-approved D2 table revisions')
-    parser.add_argument('--asset-policy', default='tools/release/original-asset-policy.json',
+    parser.add_argument('--asset-policy',
                         help='exact-byte original port media provenance policy')
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
+    if getattr(args, 'binary', None):
+        conflicts = sorted('--' + key.replace('_', '-') for key in vars(args) if key != 'binary')
+        if conflicts:
+            parser.error('--binary cannot be combined with ' + ', '.join(conflicts))
+    args = argparse.Namespace(**(dict(binary=None, manifest=None, output='release-ut-candidate',
+        export_tree=False, game=None, public_source=None, public_commit='HEAD',
+        identifier_policy='tools/release/identifier-allowlist.json',
+        asset_policy='tools/release/original-asset-policy.json') | vars(args)))
     try:
+        if args.binary:
+            return check_release_binaries(args.binary)
         manifest_name, game = export_product(args.manifest, args.game)
         if not re.fullmatch(r'[a-zA-Z0-9_-]+', args.output):
             raise ValueError('output must be a simple basename')

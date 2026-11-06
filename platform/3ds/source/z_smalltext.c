@@ -5,7 +5,8 @@
 // The options menu's Smoothing row (ctr_optmenu.c) is Recommended or Custom; Custom opens a page that sets four parts,
 // Smooth or Crisp, kept in settings.ini as smoothing_custom and crisp_text, crisp_bones, crisp_numbers, crisp_soul
 // (1 Crisp; the parts' lines are the Custom choices, kept while Recommended is on). Recommended = Text Crisp, Bones
-// Crisp, Numbers Smooth, Soul Smooth. What each part switches:
+// Smooth, Numbers Crisp, Soul Smooth (maintainer, 11-06; a Custom choice saved before then stays: stReadFileParts). What
+// each part switches:
 //   Text     crisp_ut_dialogue + crisp_sans + crisp_papyrus + crisp_fix_w (the remakes; Sans's bubbles, sansfont).
 //   Bones    Sans's and Papyrus's bone sprites drawn sharp under Smart (ctr_krsharp.c gives their items the verdict
 //            Smart keeps sharp; Smooth gives them back to the classifier).
@@ -62,9 +63,9 @@
 // below and at most 4 advances to its left (wavy text: Snowdrake's letters bob one by one). Next
 // to the last glyph (no space between them in one string, its pen at most the widest advance + 1 to the right) and
 // where the PC glyphs have a gap (no 8-neighbour contact, from the pack's per-row PC extents, rows offset by the two
-// glyphs' y), the line's carry is
-// given back a pixel at a time while the glyph a pixel further left still clears the last one, then the glyph moves
-// right a pixel while it touches (at most 2), and the carry keeps that. Every glyph of the line is drawn carry pixels
+// glyphs' y), the line's carry moves: UNDERTALE's so the gap is half PC's (stEven, the file's end); DELTARUNE's is given
+// back a pixel at a time while the glyph a pixel further left still clears the last one, then the glyph moves
+// right a pixel while it touches (at most 2). The carry keeps that. Every glyph of the line is drawn carry pixels
 // right of its place. Only whole-x places take part; a glyph shaken in x keeps its jiggle and no carry.
 //
 // The KR label (crisp_ut_hud): Sans's HUD draws spr_krmeter, white letters 23x10 texels, at x 265 + maxhp * 1.2,
@@ -130,8 +131,10 @@
 #define ST_LATE __attribute__((noinline, section(".text.late.smalltext")))
 #define ST_CONST __attribute__((aligned(4), section(".rodata.smalltext_in_text")))
 #define ST_BSS __attribute__((section(".bss.late.smalltext")))
+#define ST_SLOT_FILL(bytes) __asm__ volatile("b 1f\n.rept " #bytes " / 4\nnop\n.endr\n1:") // crispgap: the old body's extent
 #endif
-// The UNDERTALE Old layout event (integrate23, ruling 2026-10-27): there cullcrisp lives inside stDraw (about
+#line 137
+// The UNDERTALE Old layout event (integrate23, review decision 2026-10-27): there cullcrisp lives inside stDraw (about
 // 60-200 B) instead of in its out-of-line entries at the file's end (1,944 B), which moves the late code after stDraw
 // once. Every other target keeps the out-of-line entries and its layout.
 #if defined(CTRPORT_TARGET_O3DS) && !defined(ST_DR_UNIT)
@@ -151,7 +154,12 @@
 #define ST_FILE_MAX 65536
 #define ST_MENU 5 // smoothing_custom, then the four parts' Custom choices
 #define ST_ALL (ST_KEYS + ST_MENU)
-#define ST_REC_PARTS 0x3u // Recommended: Text and Bones Crisp, Numbers and Soul Smooth
+#define ST_OLD_REC_PARTS 0x3u // Recommended until 11-06: Text and Bones Crisp, Numbers and Soul Smooth
+#ifdef ST_DR_UNIT
+#define ST_REC_PARTS ST_OLD_REC_PARTS // DELTARUNE reads only the Text bit (no parts menu), and its code keeps this value
+#else
+#define ST_REC_PARTS 0x5u // Recommended: Text and Numbers Crisp, Bones and Soul Smooth (maintainer, 11-06)
+#endif
 #define ST_MENU_MAGIC 0x4D535444u // "DTSM"
 #define ST_MENU_HEADER 32
 #define ST_SOUL_REC 52
@@ -356,6 +364,25 @@ static ST_LATE void stReadFile(const char* path, int8_t* values) {
     }
 }
 
+#ifndef ST_DR_UNIT
+// The file's lines with every part given. Builds before 11-06 wrote only the parts their menu changed, so beside any of
+// the five menu lines a part with no line stays as that menu's page showed it, the old Recommended; with no menu line at
+// all it takes today's Recommended. A save then writes all four, so a later change of Recommended can't move one. This is
+// late code of its own: UNDERTALE Old's z_smalltext.o can't grow (the H1 holes after it pad 0 B; only the calls change).
+static __attribute__((noinline, section(".text_smoothdef"))) void stReadFileParts(const char* path, int8_t* values) {
+    stReadFile(path, values);
+    uint32_t defaults = ST_REC_PARTS;
+    for (int32_t i = ST_KEYS; ST_ALL > i; i++) {
+        if (values[i] != 0) defaults = ST_OLD_REC_PARTS;
+    }
+    for (uint32_t k = 0; 4u > k; k++) {
+        if (values[ST_KEYS + 1 + k] == 0) values[ST_KEYS + 1 + k] = (int8_t) ((defaults >> k & 1u) + 1u);
+    }
+}
+#else
+#define stReadFileParts stReadFile
+#endif
+
 // The keys in effect, from the menu's choices and the --ini test keys (see the top), at once: the text keys, the
 // soul, and the sharp groups ctr_krsharp.c reads. Carry is on unless the file or --ini says crisp_carry = 0 (it was
 // approved by eye); alone it draws nothing.
@@ -378,7 +405,8 @@ static ST_LATE void stApply(void) {
 }
 
 // The menu's choices and carry from the file's lines read at the start, the --ini values over them, then what the menu
-// changed this run over both. A part with no line takes Recommended's choice.
+// changed this run over both. UNDERTALE: stReadFileParts gave the file's parts lines, so the no-line test below is
+// DELTARUNE's alone. A part --ini doesn't name takes the file's, so a test run names all four parts to be exact.
 static ST_LATE void stResolve(void) {
     int8_t values[ST_ALL];
     for (int32_t i = 0; ST_ALL > i; i++) values[i] = st.given[i] != 0 ? st.given[i] : st.fileAt[i];
@@ -386,7 +414,7 @@ static ST_LATE void stResolve(void) {
     uint32_t menu = values[ST_KEYS] == 2 ? 1u : 0u;
     for (uint32_t k = 0; 4u > k; k++) {
         int8_t v = values[ST_KEYS + 1 + k];
-        if (v == 2 || (v == 0 && (ST_REC_PARTS >> k & 1u) != 0)) menu |= 2u << k;
+        if (v == 2 || (v == 0 && (ST_OLD_REC_PARTS >> k & 1u) != 0)) menu |= 2u << k;
     }
     uint32_t now = (uint32_t) st.custom | (uint32_t) st.parts << 1;
     menu = (menu & ~(uint32_t) st.touched) | (now & st.touched);
@@ -399,7 +427,7 @@ static ST_LATE void stResolve(void) {
 static ST_LATE void stEnsure(void) {
     if (st.keysRead) return;
     st.keysRead = true;
-    stReadFile(stIniPath, st.fileAt);
+    stReadFileParts(stIniPath, st.fileAt);
     stResolve();
 }
 
@@ -409,7 +437,7 @@ static ST_LATE void stEnsure(void) {
 // dropped (see the top); the parts' old names come back under the new ones.
 ST_LATE void CtrArgui_chainSaveEditsSmalltext(const CtrDisplaySettings* before, const CtrDisplaySettings* after, const char* path, CtrDisplayCaps caps) {
     int8_t values[ST_ALL];
-    stReadFile(path, values);
+    stReadFileParts(path, values);
     if (st.keysRead) memcpy(values, st.fileAt, sizeof(values));
     uint32_t now = (uint32_t) st.custom | (uint32_t) st.parts << 1, changed = (now ^ st.orig) & st.touched;
     __real_CtrArgui_saveEdits(before, after, path, caps);
@@ -484,6 +512,11 @@ static ST_LATE bool stTouchPc(const StFont* f, const uint8_t* a, int32_t ax, con
 #ifndef ST_DR_UNIT
 static int32_t stBubbleClip(Runner* runner, const StFont* f, float pen); // bubbleclip (the file's end)
 static int32_t asrPcDy(Renderer* renderer, const StFont* f, float y, float py, int32_t dy);
+#define ST_GAP_KEEP 99 // stEvenLine, stEvenSame: on PC the two touch, so nothing moves
+static int32_t stEvenLine(const StLine* line, const uint8_t* b, int32_t bPen, int32_t bx, int32_t dyPc, int32_t dy);
+static int32_t stWordLine(const StLine* line, const uint8_t* b, int32_t bPen, int32_t bx, int32_t dyPc, int32_t dy);
+static int32_t stEvenSame(const StFont* f, const uint8_t* a, int32_t aPen, int32_t ax, const uint8_t* b, int32_t bPen, int32_t bx, int32_t carry);
+static int32_t stWordSame(const StFont* f, const uint8_t* a, int32_t aPen, int32_t ax, const uint8_t* b, int32_t bPen, int32_t bx, int32_t carry); static int32_t stEvenLineTx(const StLine* line, const uint8_t* b, int32_t bPen, int32_t bx, int32_t dyPc, int32_t dy); static int32_t stWordLineTx(const StLine* line, const uint8_t* b, int32_t bPen, int32_t bx, int32_t dyPc, int32_t dy); static int32_t stEvenSameTx(const StFont* f, const uint8_t* a, int32_t aPen, int32_t ax, const uint8_t* b, int32_t bPen, int32_t bx, int32_t carry); static int32_t stWordSameTx(const StFont* f, const uint8_t* a, int32_t aPen, int32_t ax, const uint8_t* b, int32_t bPen, int32_t bx, int32_t carry);
 #line 474
 #endif
 #ifdef CTRPORT_BUBBLE_CHECK
@@ -530,6 +563,7 @@ static ST_LATE int32_t stCarry(Renderer* renderer, const StFont* f, const uint8_
 #ifndef ST_DR_UNIT
     dyPc = asrPcDy(renderer, f, y, line->py, dyPc);
 #endif
+#ifdef ST_DR_UNIT
 #line 512
     if (line->prev != nullptr && !spaceBefore && (float) f->adv + 1.0f >= pen - line->pen &&
         !stTouchPc(f, line->prev, (int32_t) line->pen, g, (int32_t) pen, dyPc)) {
@@ -542,6 +576,25 @@ static ST_LATE int32_t stCarry(Renderer* renderer, const StFont* f, const uint8_
             nx++;
         }
     }
+#else
+    if (line->prev != nullptr && !spaceBefore && (float) f->adv + 1.0f >= pen - line->pen) {
+        int32_t move = stEvenLineTx(line, g, (int32_t) pen, nx, dyPc, dy);
+        if (move != ST_GAP_KEEP) {
+            carry += move;
+            nx += move;
+            for (int32_t k = 0; 2 > k && stTouchNative(f, line->prev, line->x, g, nx, dy); k++) {
+                carry++;
+                nx++;
+            }
+        }
+    } else { // a new word: back toward its place
+        int32_t move = stWordLineTx(line, g, (int32_t) pen, nx, dyPc, dy);
+        carry += move;
+        nx += move;
+    }
+    ST_SLOT_FILL(36);
+#endif
+#line 523
     line->carry = carry;
     line->pen = pen;
     line->py = y;
@@ -1491,16 +1544,23 @@ static BC_LATE void bcMake(Runner* runner, const StFont* f, BcPlan* p, const flo
                 carry = 0;
             }
             int32_t nx = nx0 + carry;
-            if (prev != nullptr && (float) f->adv + 1.0f >= pen - prevPen && !stTouchPc(f, prev, (int32_t) prevPen, g, (int32_t) pen, 0)) {
-                while (carry > 0 && !bcTouch(f, prev, prevX, g, nx - 1)) {
-                    carry--;
-                    nx--;
+            if (prev != nullptr && (float) f->adv + 1.0f >= pen - prevPen) {
+                int32_t move = stEvenSameTx(f, prev, (int32_t) prevPen, prevX, g, (int32_t) pen, nx, carry);
+                if (move != ST_GAP_KEEP) {
+                    carry += move;
+                    nx += move;
+                    for (int32_t k = 0; 2 > k && bcTouch(f, prev, prevX, g, nx); k++) {
+                        carry++;
+                        nx++;
+                    }
                 }
-                for (int32_t k = 0; 2 > k && bcTouch(f, prev, prevX, g, nx); k++) {
-                    carry++;
-                    nx++;
-                }
+            } else { // as stCarry
+                int32_t move = stWordSameTx(f, prev, (int32_t) prevPen, prevX, g, (int32_t) pen, nx, carry);
+                carry += move;
+                nx += move;
             }
+            ST_SLOT_FILL(24);
+#line 1428
             int32_t a = 99, z = -99;
             for (int32_t r = 0; f->rows > r; r++) {
                 uint32_t m = (uint32_t) g[6 + 2 * r] | ((uint32_t) g[7 + 2 * r] << 8);
@@ -2151,5 +2211,140 @@ __attribute__((noinline, section(".omegaflowey_bubbleread"))) void CTR_FONTVERDI
     if (renderer == nullptr || renderer->dataWin == nullptr) return;
     uint32_t rows;
     bcEdgesAsm((Runner*) &renderer->dataWin, -1, &rows);
+}
+#endif
+
+#if defined(ENABLE_WAD16) && !defined(ST_DR_UNIT)
+// crispgap (maintainer 11-06: "a random 1 pixel gap" in Crisp text). At half scale PC's gaps of 4 and 5 columns may each be 1 or
+// 2 or 3 on the screen, by the pen's half pixel alone, and carry's give-back took a gap all the way down to 1 whatever PC's
+// was: "pellets" read "pel lets", "friendliness" "friendl iness", "I'll" 4,3,4 for PC's 7,7,7. So carry now aims at PC's
+// own gap: half of it, rounded down, at least 1. Right at most 2 a glyph, left no further than ST_CARRY_MIN (a run of
+// narrow letters stays even, close to PC's place). Called only where PC has a gap; still touching after it, a glyph moves
+// right as before. A word's first letter goes back toward its place: all of a negative carry, and of a positive one as
+// much as leaves a word gap of ST_WORD_GAP, so the words stay where PC has them and a line ends about where it did. Named outside .text.* so z_smalltext.o's line in late_reserve.ld leaves it to its
+// own line, last. Model: tools/analysis/smalltext_carry.py (even_move), tools/aot/stmenu.py for the Smoothing menu.
+#define ST_GAP_NONE 99  // no ink of the two glyphs on rows at most one apart
+#define ST_CARRY_MIN -2
+#define ST_WORD_GAP 5   // native px: half of PC's narrowest usual word gap, and bubbleclip's plan can still take it to BC_MINGAP
+#define ST_GAP __attribute__((noinline, section(".text_crispgap")))
+
+// The clear columns between glyphs a (native x ax) and b (bx, to the right, its top dy native rows below a's), on native
+// rows at most one apart: 0 or less where they touch (8-neighbour), as carry always counted touching.
+static ST_GAP int32_t stGapNative(const StFont* f, const uint8_t* a, int32_t ax, const uint8_t* b, int32_t bx, int32_t dy) {
+    int32_t gap = ST_GAP_NONE;
+    for (int32_t r = 0; f->rows > r; r++) {
+        uint32_t ma = (uint32_t) a[6 + 2 * r] | ((uint32_t) a[7 + 2 * r] << 8);
+        if (ma == 0) continue;
+        int32_t right = ax + 31 - __builtin_clz(ma);
+        for (int32_t q = r - dy - 1; r - dy + 1 >= q; q++) {
+            if (0 > q || q >= f->rows) continue;
+            uint32_t mb = (uint32_t) b[6 + 2 * q] | ((uint32_t) b[7 + 2 * q] << 8);
+            if (mb == 0) continue;
+            int32_t d = bx + __builtin_ctz(mb) - right - 1;
+            if (gap > d) gap = d;
+        }
+    }
+    return gap;
+}
+
+// The same on PC: glyphs a (pen ax) and b (pen bx, top dy rows below a's) in 640 space, from the pack's per-row extents.
+static ST_GAP int32_t stGapPc(const StFont* f, const uint8_t* a, int32_t ax, const uint8_t* b, int32_t bx, int32_t dy) {
+    const int8_t* ea = (const int8_t*) (a + 6 + 2 * f->rows);
+    const int8_t* eb = (const int8_t*) (b + 6 + 2 * f->rows);
+    int32_t gap = ST_GAP_NONE;
+    for (int32_t r = 0; f->pcRows > r; r++) {
+        if (ea[2 * r] > ea[2 * r + 1]) continue;
+        int32_t right = ax + ea[2 * r + 1];
+        for (int32_t q = r - dy - 1; r - dy + 1 >= q; q++) {
+            if (0 > q || q >= f->pcRows || eb[2 * q] > eb[2 * q + 1]) continue;
+            int32_t d = bx + eb[2 * q] - right - 1;
+            if (gap > d) gap = d;
+        }
+    }
+    return gap;
+}
+
+// Carry's move for glyph b next to glyph a in a line: the px its carry changes by.
+static ST_GAP int32_t stEven(const StFont* f, const uint8_t* a, int32_t aPen, int32_t ax, const uint8_t* b, int32_t bPen, int32_t bx, int32_t dyPc, int32_t dy, int32_t carry) {
+    int32_t pc = stGapPc(f, a, aPen, b, bPen, dyPc);
+    int32_t gap = stGapNative(f, a, ax, b, bx, dy), most = carry - ST_CARRY_MIN, want = pc >> 1;
+    if (pc == ST_GAP_NONE || gap == ST_GAP_NONE) { // on no common rows there is no gap to keep: only back to its place
+        most = carry > 0 ? carry : 0;
+        want = 1;
+        if (gap == ST_GAP_NONE) return -most;
+    }
+    if (1 > want) want = 1;
+    if (gap > want) return gap - want > most ? -most : want - gap;
+    return want - gap > 2 ? 2 : want - gap;
+}
+
+// Carry's move for glyph b, a word's first letter, after glyph a: toward its place.
+static ST_GAP int32_t stWord(const StFont* f, const uint8_t* a, int32_t aPen, int32_t ax, const uint8_t* b, int32_t bPen, int32_t bx, int32_t dyPc, int32_t dy, int32_t carry) {
+    if (carry == 0) return 0; // maybe no last glyph
+    int32_t gap = stGapNative(f, a, ax, b, bx, dy);
+    if (carry > 0) { // down to a word gap
+        int32_t give = gap - ST_WORD_GAP;
+        if (0 >= give) return 0;
+        return give > carry ? -carry : -give;
+    }
+    int32_t pc = stGapPc(f, a, aPen, b, bPen, dyPc); // up to PC's, no wider, but a column keeps its place (HUD's LV)
+    if (pc == ST_GAP_NONE || gap == ST_GAP_NONE || gap >= 2 * ST_WORD_GAP) return -carry;
+    int32_t room = (pc >> 1) - gap;
+    if (0 >= room) return 0;
+    return room > -carry ? -carry : room;
+}
+
+// stEven and stWord from stCarry and bcMake, whose old bodies' extents have no room for their arguments: stCarry's line,
+// bcMake's glyphs on one row. Glyphs that touch on PC stay where they are (ST_GAP_KEEP).
+static ST_GAP int32_t stEvenLine(const StLine* line, const uint8_t* b, int32_t bPen, int32_t bx, int32_t dyPc, int32_t dy) {
+    const StFont* f = line->font;
+    if (stTouchPc(f, line->prev, (int32_t) line->pen, b, bPen, dyPc)) return ST_GAP_KEEP;
+    return stEven(f, line->prev, (int32_t) line->pen, line->x, b, bPen, bx, dyPc, dy, line->carry);
+}
+
+static ST_GAP int32_t stWordLine(const StLine* line, const uint8_t* b, int32_t bPen, int32_t bx, int32_t dyPc, int32_t dy) {
+    return stWord(line->font, line->prev, (int32_t) line->pen, line->x, b, bPen, bx, dyPc, dy, line->carry);
+}
+
+static ST_GAP int32_t stEvenSame(const StFont* f, const uint8_t* a, int32_t aPen, int32_t ax, const uint8_t* b, int32_t bPen, int32_t bx, int32_t carry) {
+    if (stTouchPc(f, a, aPen, b, bPen, 0)) return ST_GAP_KEEP;
+    return stEven(f, a, aPen, ax, b, bPen, bx, 0, 0, carry);
+}
+
+static ST_GAP int32_t stWordSame(const StFont* f, const uint8_t* a, int32_t aPen, int32_t ax, const uint8_t* b, int32_t bPen, int32_t bx, int32_t carry) {
+    return stWord(f, a, aPen, ax, b, bPen, bx, 0, 0, carry);
+}
+
+// The battle HUD keeps carry's first rule (maintainer, 11-06: the even gaps pressed FRISK together, further from PC): a glyph
+// gives its carry back while it still clears the last glyph, and a word's first letter stays. Text goes to the even gaps.
+// Its own section, last: the even gaps' section above has later sections after it, which keep their addresses.
+#define ST_HUD_GAP __attribute__((noinline, section(".text_crisphud")))
+#define ST_HUD_KEY 3 // crisp_ut_hud: fnt_curs
+
+static ST_HUD_GAP int32_t stHudMove(const StFont* f, const uint8_t* a, int32_t ax, const uint8_t* b, int32_t bx, int32_t dy, int32_t carry) {
+    int32_t move = 0;
+    while (carry + move > 0 && !stTouchNative(f, a, ax, b, bx + move - 1, dy)) move--;
+    return move;
+}
+
+static ST_HUD_GAP int32_t stEvenLineTx(const StLine* line, const uint8_t* b, int32_t bPen, int32_t bx, int32_t dyPc, int32_t dy) {
+    const StFont* f = line->font;
+    if (f->key != ST_HUD_KEY) return stEvenLine(line, b, bPen, bx, dyPc, dy);
+    if (stTouchPc(f, line->prev, (int32_t) line->pen, b, bPen, dyPc)) return ST_GAP_KEEP;
+    return stHudMove(f, line->prev, line->x, b, bx, dy, line->carry);
+}
+
+static ST_HUD_GAP int32_t stWordLineTx(const StLine* line, const uint8_t* b, int32_t bPen, int32_t bx, int32_t dyPc, int32_t dy) {
+    return line->font->key == ST_HUD_KEY ? 0 : stWordLine(line, b, bPen, bx, dyPc, dy);
+}
+
+static ST_HUD_GAP int32_t stEvenSameTx(const StFont* f, const uint8_t* a, int32_t aPen, int32_t ax, const uint8_t* b, int32_t bPen, int32_t bx, int32_t carry) {
+    if (f->key != ST_HUD_KEY) return stEvenSame(f, a, aPen, ax, b, bPen, bx, carry);
+    if (stTouchPc(f, a, aPen, b, bPen, 0)) return ST_GAP_KEEP;
+    return stHudMove(f, a, ax, b, bx, 0, carry);
+}
+
+static ST_HUD_GAP int32_t stWordSameTx(const StFont* f, const uint8_t* a, int32_t aPen, int32_t ax, const uint8_t* b, int32_t bPen, int32_t bx, int32_t carry) {
+    return f->key == ST_HUD_KEY ? 0 : stWordSame(f, a, aPen, ax, b, bPen, bx, carry);
 }
 #endif

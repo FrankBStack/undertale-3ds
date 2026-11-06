@@ -1,6 +1,6 @@
 """Find the user's copies of the game (wizard page 2) and verify one (page 3). Offline; built on verify_game.py.
 
-Every probe is injectable (Steam roots, GOG folders, a registry reader, GOG Galaxy's database), so the tests run on
+Every probe is injectable (Steam roots, GOG folders, a registry reader), so the tests run on
 fixture VDFs and registry exports instead of this PC's installs.
 """
 from __future__ import annotations
@@ -16,9 +16,9 @@ from products import verify_game as vg
 
 @dataclasses.dataclass
 class Copy:
-    store: str          # "Steam", "Steam (demo)", "GOG", "folder"
+    store: str          # Search location: "Steam", "GOG", "Applications", "Folder" or a manual "folder".
     folder: str
-    version: str        # what the store says, before verification
+    version: str        # not checked until verification
     note: str = ""
     platform: str = ""  # whose files the folder holds: "Windows", "macOS" (verify_game.Layout.name), "" when neither
 
@@ -29,7 +29,6 @@ class Probes:
     steam_roots: list | None = None
     gog_dirs: list | None = None
     registry: object = None             # callable(hive_name, key, value) -> str | None
-    galaxy_db: str | None = None
     platform: str = sys.platform
     save_dir: str | None = None
 
@@ -44,57 +43,37 @@ class Probes:
             return list(self.steam_roots)
         return vg.default_steam_roots(registry=self.registry or vg._winreg_value, platform=self.platform)
 
-    def gog_records(self, product_id):
-        return vg.default_gog_records(product_id, registry=self.registry or vg._winreg_value,
-                                      galaxy_db=self.galaxy_db, platform=self.platform)
-
     def gog_candidates(self, game):
         if self.gog_dirs is not None:
             return [d for d in self.gog_dirs if os.path.isdir(d)]
         if not game.gog_product:
             return []
-        out = [p for p in self.gog_records(game.gog_product) if os.path.isdir(p)]
-        out += vg.default_gog_dirs(game, registry=self.registry or vg._winreg_value, platform=self.platform)
+        out = vg.default_gog_dirs(game, registry=self.registry or vg._winreg_value, platform=self.platform)
         return list(dict.fromkeys(out))
 
 
-def _version_label(game_key, appid, buildid):
-    for g, _part, _size, _digest, store, label in vg.ALLOW_LIST:
-        if g == game_key and store == "steam" and buildid and ("build %s)" % buildid) in label:
-            return label
-    return "Steam build %s" % (buildid or "?")
-
-
 def find_copies(game_key, probes: Probes | None = None):
-    """Copies to offer on page 2: every store install record whose folder exists, then GOG folders. Verification
-    (page 3) decides; this only lists."""
+    """Offer known locations containing game data. Only verification determines edition and acceptance."""
     probes = probes or Probes()
     game = vg.GAMES[game_key]
     out, seen = [], set()
-    records = vg.steam_records(game, probes.roots())
-    records.sort(key=lambda r: (not r.purchased,))
-    for r in records:
-        key = vg._norm(r.folder)
-        if key in seen or not os.path.isdir(r.folder):
-            continue
-        seen.add(key)
-        note = "" if r.state_flags == vg.STATE_FULLY_INSTALLED else "Steam is still installing or updating it"
-        layout = vg.layout_for(game, r.folder)
-        version = _version_label(game_key, r.appid, r.buildid)
-        if layout is not None and layout is not vg.WINDOWS:
-            version = next((label for g, _p, _s, _d, store, label in vg.ALLOW_LISTS.get(layout.key, ())
-                            if g == game_key and store == "steam"), version)
-        out.append(Copy("Steam" if r.purchased else "Steam (demo)", r.folder, version, note,
-                        layout.name if layout else ""))
-    for d in probes.gog_candidates(game):
-        key = vg._norm(d)
+    candidates = [("Steam", d) for d in vg.steam_folders(game, probes.roots())]
+    for folder in probes.gog_candidates(game):
+        location = os.path.normpath(folder)
+        source = 'GOG'
+        if probes.platform == 'darwin' and os.path.basename(location).casefold() == 'applications':
+            source = 'Applications'
+        elif probes.platform == 'linux' and os.path.basename(os.path.dirname(location)).casefold() == 'games':
+            source = 'Folder'
+        candidates.append((source, folder))
+    for source, folder in candidates:
+        key = vg._norm(folder)
         if key in seen:
             continue
         seen.add(key)
-        _info, recorded = vg.gog_record(game, d, probes.gog_records, probes.platform)
-        layout = vg.layout_for(game, d)
-        out.append(Copy("GOG" if recorded else "folder", d, "GOG" if recorded else "unknown",
-                        platform=layout.name if layout else ""))
+        layout = vg.layout_for(game, folder)
+        if layout is not None:
+            out.append(Copy(source, folder, "Not checked yet", platform=layout.name))
     return out
 
 
@@ -117,25 +96,24 @@ class Verdict:
 
 
 def verify_copy(game_key, folder, probes: Probes | None = None, allow_list=None, macos_allow_list=None) -> Verdict:
-    """Check the data version, Steam install record and music hashes. A Mac copy (UNDERTALE.app) is checked against
+    """Check game and music files against known official copies. A Mac copy (UNDERTALE.app) is checked against
     the macOS rows and music record; the Windows depot steps are only for native files the builder does not know."""
     probes = probes or Probes()
     product = products.PRODUCTS[game_key]
     game = product.game
-    r = vg.verify(game_key, game_dir=folder, steam_roots=probes.roots(), gog_dirs=[],
-                  gog_records=probes.gog_records, platform=probes.platform,
+    r = vg.verify(game_key, game_dir=folder, steam_roots=[], gog_dirs=[], platform=probes.platform,
                   allow_list=vg.ALLOW_LIST if allow_list is None else allow_list,
                   macos_allow_list=vg.MACOS_ALLOW_LIST if macos_allow_list is None else macos_allow_list)
     if not r.accepted:
         message = r.message
-        # Native files the builder doesn't know (Linux, DELTARUNE's Mac bundle, a Mac version not listed yet): the
-        # Windows depot is the way. A known Mac copy that fails another check gets that check's own message.
-        if ((r.layout is None or r.layout != "windows" and r.status == vg.UNKNOWN_VERSION)
-                and native_data_files(folder)):
-            info, recorded = vg.gog_record(game,folder,probes.gog_records,probes.platform)
-            parent_info = os.path.isfile(os.path.join(os.path.dirname(os.path.normpath(folder)), 'gameinfo'))
-            message = windows_depot_message(game_key, probes.platform,
-                                           store='gog' if info or recorded or parent_info else 'steam')
+        # Unknown Mac files may be a native GOG copy; metadata is never proof of their edition.
+        if r.layout == 'macos' and r.status == vg.UNKNOWN_VERSION:
+            message += ("\nFor a GOG copy, choose a complete folder of the supported Windows GOG files, "
+                        "with their original music. Keep your Mac installation unchanged.")
+        if r.layout is None and native_data_files(folder):
+            native = native_data_files(folder)
+            file_platform = 'linux' if any(p.endswith('game.unx') for p in native) else 'darwin'
+            message = windows_depot_message(game_key, file_platform)
         return Verdict(False, r, False, message, game.store_links)
     excluded = []
     if game_key == 'deltarune':
@@ -143,7 +121,7 @@ def verify_copy(game_key, folder, probes: Probes | None = None, allow_list=None,
         checked, audio_failures = {}, []
         root_errors = chapters.audio_errors(folder, ['root'], checked)
         if root_errors:
-            return Verdict(False, r, False, 'Missing or unreadable audio: %s. Verify the game files in Steam.' % root_errors[0], ())
+            return Verdict(False, r, False, 'Missing or unreadable audio: %s. Restore the complete original game folder, then try again.' % root_errors[0], ())
         for part in list(r.accepted_parts):
             errors = chapters.audio_errors(folder, [part], checked) if part != 'root' else []
             if errors:
@@ -152,14 +130,14 @@ def verify_copy(game_key, folder, probes: Probes | None = None, allow_list=None,
                 r.refused_parts.append(part)
                 excluded.append(part)
         if not any(p != 'root' for p in r.accepted_parts):
-            return Verdict(False, r, False, 'Missing or unreadable audio: %s. Verify the game files in Steam.' % audio_failures[0], ())
+            return Verdict(False, r, False, 'Missing or unreadable audio: %s. Restore the complete original game folder, then try again.' % audio_failures[0], ())
     ok, note = products.music_check(product, r.data_dir or folder, r.version, platform=r.layout or "windows",
                                     parts=r.accepted_parts, store=r.store or "steam")
     if not ok:
         return Verdict(False, r, False, note, ())
     if excluded:
         playable = [p for p in r.accepted_parts if p != 'root']
-        message = 'Ready to build: %s. Audio missing for %s; unavailable. Verify the game files in Steam.' % (
+        message = 'Ready to build: %s. Audio missing for %s; unavailable. Restore the complete original game folder, then try again.' % (
             ', '.join(vg._chapter_name(p) for p in playable),
             ', '.join(vg._chapter_name(p) for p in excluded))
         return Verdict(True, r, True, message + ' ' + note, ())
@@ -189,12 +167,14 @@ def native_data_files(folder):
 def windows_depot_message(game_key, platform=sys.platform, store="steam"):
     """Short numbered steps; the full walk-through is docs/release/builder-platforms.md."""
     title = products.PRODUCTS[game_key].title
-    head = "This is the %s version of %s. The builder needs the Windows version's files.\n" % (
+    head = "These %s game files for %s aren't supported by this builder.\n" % (
         "Linux" if platform == "linux" else "Mac", title)
     if store == 'gog':
-        return ("This GOG copy's Mac or Linux files aren't supported yet.\n"
-                "Choose the supported Windows GOG files, with their original music.\n"
-                "Keep the original files together. Stay determined.")
+        return ("This builder cannot use GOG's Mac or Linux game files yet.\n"
+                "If you have the supported Windows GOG version, copy its complete folder with its original music "
+                "and choose that folder here.\nKeep your Mac or Linux installation unchanged.")
+    head += ("For GOG, choose a complete folder of the supported Windows GOG files, with their original music.\n"
+             "For Steam, use these steps to download the Windows files:\n")
     if platform == "linux":
         return head + ("1. In Steam, right-click %s > Properties > Compatibility.\n"
                        "2. Tick 'Force the use of a specific Steam Play compatibility tool', choose Proton "
@@ -208,14 +188,10 @@ def windows_depot_message(game_key, platform=sys.platform, store="steam"):
                        "3. Wait for 'Depot download complete'.\n"
                        "4. In Finder, press Command-Shift-G and open\n"
                        "   ~/Library/Application Support/Steam/steamapps/content/app_391540/depot_391541\n"
-                       "5. Copy data.win, credits.txt and every .ogg file into UNDERTALE's installed folder "
-                       "(Steam > Manage > Browse local files), next to the .app.\n"
-                       "6. Choose the installed folder here, not the depot folder.")
+                       "5. Choose that downloaded folder here. Keep all its files together.")
     return head + ("1. Open steam://open/console and enter: app_info_print 1671210\n"
                    "2. Find the depot whose oslist is windows, then enter: download_depot 1671210 <depot ID>\n"
-                   "3. Copy the downloaded files into DELTARUNE's installed folder "
-                   "(Steam > Manage > Browse local files).\n"
-                   "4. Choose the installed folder here.")
+                   "3. Choose the downloaded folder here. Keep all its files together.")
 
 
 # ---------------------------------------------------------------------------------------------------------------------

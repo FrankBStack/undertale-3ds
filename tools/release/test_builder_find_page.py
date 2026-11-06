@@ -3,7 +3,9 @@
 from pathlib import Path
 import sys
 from types import SimpleNamespace
+import tempfile
 import unittest
+from unittest import mock
 
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE / 'builder'))
@@ -48,6 +50,23 @@ def copy(folder):
 
 
 class FindPageTests(unittest.TestCase):
+    def test_verified_bundle_pick_stays_selected_after_search_again(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            folder = Path(tmp) / 'picked copy'
+            resources = folder / 'UNDERTALE.app/Contents/Resources'
+            resources.mkdir(parents=True)
+            (resources / 'game.ios').write_bytes(b'invented Mac container')
+            for pick in (folder / 'UNDERTALE.app', resources.parent, resources):
+                with self.subTest(pick=pick.name):
+                    self.page.add_manual(str(pick))
+                    self.state.folder = str(folder)  # The successful verifier's normalized build folder.
+                    self.page.search()
+                    self.finish(len(self.jobs) - 1, [copy(str(Path(tmp) / 'other Steam copy'))])
+                    self.assertEqual(self.state.folder, str(folder))
+                    self.assertEqual(self.page.manual, [str(folder)])
+                    self.assertEqual(self.page.tree.selection(), ('1',))
+                    self.assertEqual(self.folders(), [str(Path(tmp) / 'other Steam copy'), str(folder)])
+
     def setUp(self):
         self.jobs = []
         app = SimpleNamespace(state=gui.State('undertale'), opts=SimpleNamespace(probes=None, folder=None),
@@ -64,6 +83,17 @@ class FindPageTests(unittest.TestCase):
 
     def folders(self):
         return [values[1] for values in self.page.tree.rows.values()]
+
+    def test_source_column_says_found_in_with_the_existing_tree(self):
+        def init(page, app):
+            page.app, page.frame = app, mock.Mock()
+
+        with mock.patch.object(gui.Page, '__init__', init), mock.patch.object(gui, 'label'), \
+                mock.patch.object(gui, 'button'), mock.patch.object(gui.ttk, 'Frame'), \
+                mock.patch.object(gui.ttk, 'Treeview') as tree:
+            gui.FindPage(self.page.app)
+        self.assertEqual(tree.call_args.kwargs['columns'], ('store', 'folder', 'version'))
+        tree.return_value.heading.assert_any_call('store', text='Found in')
 
     def test_a_search_finishing_after_a_folder_is_chosen_keeps_that_choice(self):
         self.page.search()

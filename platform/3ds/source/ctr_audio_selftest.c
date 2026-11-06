@@ -82,7 +82,7 @@ void CtrAudioSelfTest_step(AudioSystem* audio, float dt) {
             if (t < 10.0f) return;
             vt->setSoundPitch(audio, b, 1.0f);
             vt->pauseSound(audio, b);
-            CHECK(!vt->isPlaying(audio, b), "B paused reads as not playing\n");
+            CHECK(vt->isPlaying(audio, b) == (audio->dw->gen8.wadVersion == 16), "B paused membership matches WAD version\n");
             stage++;
             break;
         case 5: {

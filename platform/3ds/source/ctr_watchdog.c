@@ -68,11 +68,17 @@ void __real___malloc_unlock(struct _reent* r);
 void __wrap___malloc_lock(struct _reent* r);
 void __wrap___malloc_unlock(struct _reent* r);
 
+#if defined(PACER_ARENA_LOG)
+void CtrArena_noteHeapLock(void); // E1 census (arenalog test word only): an audio thread took the heap lock
+#endif
 void __wrap___malloc_lock(struct _reent* r) {
     __real___malloc_lock(r);
     if (mallocDepth++ == 0) {
         mallocOwner = getThreadLocalStorage();
         mallocAcquisitions++;
+#if defined(PACER_ARENA_LOG)
+        CtrArena_noteHeapLock();
+#endif
     }
 }
 

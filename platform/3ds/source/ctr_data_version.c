@@ -125,7 +125,7 @@ static void writeCache(const char* cachePath, const char* path, const struct sta
             (long long) st->st_mtime, digest, path);
     fclose(f); // A partial/unwritable cache is ignored next boot.
 }
-
+#include "ctr_data_version_mem.h" // UTSCOURD F4 (UNDERTALE): the check's buffer allocation is noted
 CtrDataVersionResult CtrDataVersion_check(const char* path, const char* game, const char* part,
                                         const char* cachePath, void (*progress)(void), bool* cached, char digest[65]) {
     *cached = false;
@@ -160,7 +160,7 @@ CtrDataVersionResult CtrDataVersion_check(const char* path, const char* game, co
     }
     return CTR_DATA_UNKNOWN;
 }
-
+#undef malloc // (UTSCOURD F4: CtrDataVersion_check only)
 // ===[ nativemac: rows added after revision 1 (late code and data; platform/3ds/late_reserve.ld) ]===
 //
 // knownFiles above keeps revision 1's rows, so its size and every constant after it stay where main has them. Rows
@@ -202,4 +202,28 @@ __attribute__((noinline, section(".text.late.nativemac"))) CtrDataVersionResult 
 // DR cold verification only; UNDERTALE keeps its original implementation and bytes.
 #if defined(ENABLE_WAD17) && (defined(__3DS__) || defined(BX_COLD_HOST_TEST))
 #include "ctr_data_version_cold.inc"
+#endif
+
+// ===[ UTSCOURD F4 (change auditfixe2; regaudit F4), UNDERTALE only: an allocation failure isn't an SD read ]===
+//
+// CtrDataVersion_check's 64 KB read buffer (ctr_data_version_mem.h sends its malloc here). Its failure made the check
+// answer CTR_DATA_UNREADABLE, so the stop said the SD card couldn't be read. The answer and the stop are as before;
+// the flag lets the crash screen (z_argcrash.c's argcrashPaintMem) show the out-of-memory title for it. It holds the
+// latest call's outcome: UNDERTALE calls the check once, at start-up (main.c's checkDataVersion), and stops when it
+// answers CTR_DATA_UNREADABLE. Own sections, appended (late_reserve.ld: .text_utsdmem, .bss.utsdmem_late).
+#if defined(ENABLE_WAD16) && (defined(__3DS__) || defined(CTR_DATA_VERSION_MEM_HOST_TEST))
+#ifdef __3DS__
+#define DATAVERSION_MEM_TEXT __attribute__((noinline, section(".text_utsdmem")))
+#define DATAVERSION_MEM_BSS __attribute__((section(".bss.utsdmem_late")))
+#else
+#define DATAVERSION_MEM_TEXT __attribute__((noinline))
+#define DATAVERSION_MEM_BSS
+#endif
+volatile bool ctrDataVersionNoMemory DATAVERSION_MEM_BSS;
+
+DATAVERSION_MEM_TEXT void* CtrDataVersion_buffer(size_t size) {
+    void* buffer = malloc(size);
+    ctrDataVersionNoMemory = buffer == NULL;
+    return buffer;
+}
 #endif

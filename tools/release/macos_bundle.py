@@ -7,6 +7,7 @@ Native Finder/Tk/build acceptance remains a separate gate on each architecture.
 from __future__ import annotations
 
 import hashlib
+import io
 import ast
 import json
 from pathlib import Path, PurePosixPath
@@ -59,11 +60,11 @@ def runtime_files(path, arch):
     """Verify the upstream archive, then read regular files and resolve internal links without extraction."""
     path = Path(path)
     pin = PINS[arch]
-    with path.open('rb') as stream:
-        if path.stat().st_size != pin[1] or hashlib.file_digest(stream, 'sha256').hexdigest() != pin[2]:
-            raise ValueError('Mac runtime does not match its pin: ' + arch)
+    data = path.read_bytes()
+    if len(data) != pin[1] or hashlib.sha256(data).hexdigest() != pin[2]:
+        raise ValueError('Mac runtime does not match its pin: %s (%s)' % (path, arch))
     result = {}
-    with tarfile.open(path) as archive:
+    with tarfile.open(fileobj=io.BytesIO(data), mode='r:gz') as archive:
         members = {}
         for member in archive.getmembers():
             name = safe_name(member.name)
@@ -108,7 +109,7 @@ def runtime_files(path, arch):
             raise ValueError('Incomplete bundled runtime: ' + name)
     # ZIP/Finder extraction must not need symlink support. Tiny aliases avoid
     # duplicating the 19 MB interpreter for each upstream python/python3 link.
-    alias = b'#!/bin/sh\nexec "$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)/python3.14" "$@"\n'
+    alias = b'#!/bin/sh\nexec "$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)/python3.14" -X utf8 "$@"\n'
     for name in ('bin/python', 'bin/python3'):
         result[name] = (alias, 0o755)
     return result
@@ -126,11 +127,20 @@ case "$(/usr/bin/uname -m)" in
   *) exit 2 ;;
 esac
 RUNTIME="$CONTENTS/Resources/runtime/$ARCH"
+if [ ! -x "$RUNTIME/bin/python3.14" ] || [ ! -f "$CONTENTS/Resources/app_bootstrap.py" ] ||
+   [ ! -f "$CONTENTS/Resources/builder/tools/release/builder/builder.py" ]; then
+  MESSAGE="Extract the whole builder ZIP first. Open the ZIP in Finder, then open ''' + game.upper() + ''' 3DS Builder.app from the extracted folder. Keep all the extracted files together."
+  printf "%s\\n" "$MESSAGE" >&2
+  if [ "$#" -eq 0 ] && [ -x /usr/bin/osascript ]; then
+    /usr/bin/osascript -e 'on run argv' -e 'display alert "3DS Builder" message (item 1 of argv)' -e 'end run' "$MESSAGE" || true
+  fi
+  exit 2
+fi
 export TCL_LIBRARY="$RUNTIME/lib/tcl9.0"
 export TK_LIBRARY="$RUNTIME/lib/tk9.0"
 export SSL_CERT_FILE="$RUNTIME/certs/cacert.pem"
 unset PYTHONHOME PYTHONPATH PYTHONSTARTUP __PYVENV_LAUNCHER__
-exec "$RUNTIME/bin/python3.14" -I -B "$CONTENTS/Resources/app_bootstrap.py" --game ''' + game + ''' "$@"
+exec "$RUNTIME/bin/python3.14" -X utf8 -I -B "$CONTENTS/Resources/app_bootstrap.py" --game ''' + game + ''' "$@"
 '''
 
 
@@ -194,7 +204,7 @@ def heart_icon(gui_source):
 
 
 def write_app(files, output, game, version, runtimes, opening, licences):
-    """One ZIP containing one app, source, two native runtimes and dependency notices."""
+    """One ZIP containing the app and visible first-open instructions."""
     if set(runtimes) != set(PINS):
         raise ValueError('Mac app needs both arm64 and x86_64 runtime archives')
     licence_files = runtime_pins.mac_licence_files(licences)
@@ -202,6 +212,15 @@ def write_app(files, output, game, version, runtimes, opening, licences):
     prefix = title + '.app/Contents/'
     entries = {prefix + 'Resources/builder/' + rel: (data, 0o755 if rel.endswith('.sh') else 0o644)
                for rel, data in files.items()}
+    first_open = (title + '\n\n'
+        'Unpack this ZIP, then try to open ' + title + '.app.\n'
+        'If macOS blocks it, open System Settings > Privacy & Security.\n'
+        'Choose Open Anyway, then Open. Only do this for a builder you trust.\n\n'
+        'On macOS 11 or 12, use System Preferences > Security & Privacy > General,\n'
+        'then Open Anyway > Open.\n\n'
+        'For more instructions, right-click the app and choose Show Package Contents.\n'
+        'Then open Contents/Resources/README.md.\n')
+    entries['README.txt'] = (first_open.encode('utf-8'), 0o644)
     info = dict(CFBundleExecutable='builder-launcher', CFBundleIdentifier='com.ethancawse.' + game + '-3ds-builder',
                 CFBundleName=title, CFBundleDisplayName=title, CFBundlePackageType='APPL',
                 CFBundleShortVersionString=version.split('-')[0], CFBundleVersion='1',

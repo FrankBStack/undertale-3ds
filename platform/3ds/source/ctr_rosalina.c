@@ -253,10 +253,19 @@ static ROSA_CODE void rosaMain(void* arg) {
             rosaSimPause();
         }
         u32 simMs = rosaSimMs();
-        u32 held = (simMs + 1000 >= ROSA_SIM_AT && ROSA_SIM_AT + 1500 > simMs) ||
-                           (simMs >= ROSA_SIM_END + 4000 && ROSA_SIM_END + 4300 > simMs)
-                       ? KEY_L | KEY_DDOWN
-                       : 0;
+        // z_rosabl.c (bug 2): the simulated buttons go through the hold as the HID's do in other builds, and the app's
+        // own bottom power-on and power-off are made inside the second hold and 2 s after it.
+        u32 CtrRosabl_filter(u32 held);
+        void CtrRosabl_simMenu(u32 simMs);
+        static u8 simMenus ROSA_BSS;
+        if (simMenus < 2 && simMs >= ROSA_SIM_END + (simMenus != 0 ? 6000 : 4100)) {
+            simMenus++;
+            CtrRosabl_simMenu(simMs);
+        }
+        u32 held = CtrRosabl_filter((simMs + 1000 >= ROSA_SIM_AT && ROSA_SIM_AT + 1500 > simMs) ||
+                                            (simMs >= ROSA_SIM_END + 4000 && ROSA_SIM_END + 4300 > simMs)
+                                        ? KEY_L | KEY_DDOWN
+                                        : 0);
 #else
         vu32* shared = hidSharedMem; // mapped from before the watcher starts until after it is joined
         u32 index = shared[4];
@@ -340,3 +349,118 @@ ROSA_CODE void __wrap_gspLcdExit(void) {
     __real_gspLcdExit();
     if (!rosaTried && CtrScreens_bottomDark()) rosaStart();
 }
+#ifdef ENABLE_WAD16
+// R216b4..R216d (change auditfixe2; c26rev6 R240 F1, c26rev2 R216b4 findings 2 and 3, integrate21's zq65 finding).
+// UNDERTALE only, as the whole crash-screen net (ctr_r216_ut.h): DELTARUNE's watcher is as before R216, byte for byte.
+// The crash screen stops the watcher before its first paint. Its painter (z_argcrash.c's argcrashPaintGated) lights
+// both screens on a gsp::Lcd session of its own, past ctr_screens.c's wraps, so the bottom's dark mark stays set; a
+// watcher still running then took the lit error screen for a dark bottom: a combo cleared the bottom error and its
+// release switched the bottom off. So the watcher is told to stop (the exit's flag, rosaQuitRef) and waited for up to
+// 100 ms (its poll is 5 ms). That wait is not a finished stop: a pass the watcher had already begun, held past the
+// wait, could still clear the bottom buffer or send a power-off after the crash screen painted, and rosaStart stores
+// the watcher's handle with a plain store that the stop read from another thread. Four parts, all here or in
+// CMakeLists.txt, none in an existing body:
+//  - Every CtrScreens_bottomDark call of this file is CtrRosalina_dark (a rename in CMakeLists.txt; the same call,
+//    another target): once the stop flag is set the bottom counts as lit. So a pass that resumes after the stop
+//    neither clears (rosaClear's own check, under the consoles' lock), nor lights, nor chooses to switch off. A full
+//    fence comes before the flag's load, so of the watcher's send-then-look and the stop's flag-then-paint one always
+//    sees the other. What it had already chosen still goes out: a power-off, and rosaMain's re-light after it
+//    (`if (!CtrScreens_bottomDark()) rosaBacklight(0x11)`), which with rosafreeze3's z_rosabl.c is no light: there
+//    the watcher's sends carry out the app's newest bottom request (CtrRosabl_send), Off when the bottom was set Off,
+//    and the crash screen's light is not a request it has seen. The last part below settles both.
+//  - rosaStart's thread create is CtrRosalina_threadPub (CMakeLists.txt's threadCreate rename), which publishes the
+//    watcher's handle with a release store into rosaWatcher, read only atomically; rosaBorn says a watcher is being
+//    created or exists, set before the create and checked against the stop flag (a full fence each side), so the stop
+//    either sees it or the create sees the flag and makes no thread. rosaThread (the plain store) is now read only by
+//    rosaStop at the exit, as before R216b4.
+//  - CtrRosalina_quiet answers whether the watcher is quiet: true with no watcher (none made, or the create refused,
+//    or this is the watcher's own thread), or once its thread has ended (libctru's threadJoin answers 0 then;
+//    0x09401BFE when the 100 ms ran out). False while it is being created or still running past the wait: a clear
+//    already past its check can then still land after the paint. z_argcrash.c's CtrArgcrash_quiet asks the pending
+//    screen's paint (the one-shot screen) again in that case, each frame until the watcher is quiet, so while frames
+//    keep coming one paint follows its end; argcrashEmergency's loop repaints every 30 frames anyway. The departing
+//    screen has no later frame: its painter repaints after further stops itself, for up to a second (R216c,
+//    z_argcrash.c's CtrArgcrash_depart).
+//  - The watcher's last act (R216d): its thread runs CtrRosalina_watchRun, which runs rosaMain and then, if a crash
+//    screen stopped it (rosaCrashStop, set before the stop flag), powers the bottom backlight on, as the crash screen
+//    wants, on a gsp::Lcd session of its own (rosaBacklight's way). Nothing the watcher sends comes after it, so a
+//    pass held past the wait leaves the bottom lit whatever it sent (a clear that landed after the paint still blanks
+//    the bottom's text until the next paint: argcrashEmergency's every 30 frames, or a pending screen's next frame).
+//    It goes to gsp::Lcd as it is, not through z_rosabl.c (whose rename of this file's svcSendSyncRequest the #undef
+//    below drops for it): rosabl sends the app's newest request, and this is that request, the crash screen's, which
+//    is made past the wraps on purpose (R188g F2: not on libctru's gsp::Lcd session, shared with the game thread) and
+//    which only the watcher's own thread can send after the watcher's last send. A normal exit (rosaStop) sets no
+//    flag: the watcher ends there as before.
+//  How it is linked, so that no existing function or static of this file moves (GCC orders a file's functions and
+//  statics by their calls and first uses, so a new callee or a new user of a static defined here would reorder them;
+//  the stop has no caller here): the bodies below are named CtrRosalina_darkBody and CtrRosalina_pubBody, which
+//  nothing here calls, and the asm after them gives each its rename's name (a link-time alias GCC doesn't see), so
+//  every existing call is to an outside function as before; CtrRosalina_watchRun calls rosaMain through the pointer
+//  the create was given. They and the stop name this file's statics by their link
+//  names (z_argcrash.c's way). The statics' section is named outside .bss.* (nobits, as z_leavekeep.c's), so
+//  late_reserve.ld's catch-all for this file's .bss.* can't take it ahead of the late statics it would move.
+#define ROSA_QUIET_BSS __attribute__((section(".bss_rosaquiet_late,\"aw\",%nobits @")))
+#define ROSA_QUIET_CODE __attribute__((noinline, noipa, section(".text_rosaquiet")))
+Thread rosaWatcher ROSA_QUIET_BSS; // the watcher's handle once created (release store, atomic loads)
+u32 rosaBorn ROSA_QUIET_BSS;       // 1 from the watcher's create on; 0 again if the create made no thread
+void (*rosaWatchEntry)(void*) ROSA_QUIET_BSS; // the watcher's entry (rosaMain), stored before its create
+u32 rosaCrashStop ROSA_QUIET_BSS;  // 1 once a crash screen has stopped the watcher (CtrRosalina_quiet)
+extern u32 rosaQuitRef __asm__("rosaQuit");
+extern const char rosaServiceRef[] __asm__("rosaService"); // "gsp::Lcd"
+
+Thread CtrRosalina_threadCreate(void (*entry)(void*), void* arg, size_t stackBytes, int prio, int core, bool detached);
+#undef CtrScreens_bottomDark
+bool CtrScreens_bottomDark(void);
+#undef svcSendSyncRequest // z_rosabl.c's rename (CtrRosabl_send): the last light goes to gsp::Lcd as it is
+Result svcSendSyncRequest(Handle session);
+
+// The watcher's thread: rosaMain, then the crash screen's bottom light if a crash screen stopped it (the last part
+// above). Its result is not looked at: there is nothing else to try, and the painter lit the bottom too.
+ROSA_QUIET_CODE void CtrRosalina_watchRun(void* arg) {
+    rosaWatchEntry(arg);
+    if (__atomic_load_n(&rosaCrashStop, __ATOMIC_SEQ_CST) == 0) return;
+    Handle lcd = 0;
+    if (R_FAILED(srvGetServiceHandle(&lcd, rosaServiceRef))) return;
+    u32* cmd = getThreadCommandBuffer();
+    cmd[0] = IPC_MakeHeader(0x11, 1, 0); // PowerOnBacklight
+    cmd[1] = GSPLCD_SCREEN_BOTTOM;
+    svcSendSyncRequest(lcd);
+    svcCloseHandle(lcd);
+}
+
+ROSA_QUIET_CODE bool CtrRosalina_quiet(void) {
+    __atomic_store_n(&rosaCrashStop, 1, __ATOMIC_SEQ_CST);
+    __atomic_store_n(&rosaQuitRef, 1, __ATOMIC_SEQ_CST);
+    if (__atomic_load_n(&rosaBorn, __ATOMIC_SEQ_CST) == 0) return true;
+    Thread watcher = __atomic_load_n(&rosaWatcher, __ATOMIC_ACQUIRE);
+    if (watcher == nullptr) return false; // created, not yet published: it may be in a pass
+    if (watcher == threadGetCurrent()) return true;
+    return threadJoin(watcher, 100000000ULL) == 0;
+}
+
+ROSA_QUIET_CODE bool CtrRosalina_darkBody(void) {
+    __atomic_thread_fence(__ATOMIC_SEQ_CST);
+    return __atomic_load_n(&rosaQuitRef, __ATOMIC_SEQ_CST) == 0 && CtrScreens_bottomDark();
+}
+
+// The watcher is this file's one joinable thread (CTRPORT_ROSALINA_SIM's spinners are detached).
+ROSA_QUIET_CODE Thread CtrRosalina_pubBody(void (*entry)(void*), void* arg, size_t stackBytes, int prio, int core,
+                                           bool detached) {
+    if (detached) return CtrRosalina_threadCreate(entry, arg, stackBytes, prio, core, detached);
+    __atomic_store_n(&rosaBorn, 1, __ATOMIC_SEQ_CST);
+    Thread made = nullptr;
+    rosaWatchEntry = entry;
+    if (__atomic_load_n(&rosaQuitRef, __ATOMIC_SEQ_CST) == 0)
+        made = CtrRosalina_threadCreate(CtrRosalina_watchRun, arg, stackBytes, prio, core, detached);
+    if (made != nullptr) __atomic_store_n(&rosaWatcher, made, __ATOMIC_RELEASE);
+    else __atomic_store_n(&rosaBorn, 0, __ATOMIC_SEQ_CST);
+    return made;
+}
+
+__asm__(".global CtrRosalina_dark\n"
+        ".type CtrRosalina_dark, %function\n"
+        ".set CtrRosalina_dark, CtrRosalina_darkBody\n"
+        ".global CtrRosalina_threadPub\n"
+        ".type CtrRosalina_threadPub, %function\n"
+        ".set CtrRosalina_threadPub, CtrRosalina_pubBody\n");
+#endif

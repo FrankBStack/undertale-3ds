@@ -223,10 +223,14 @@ OPT_STR(capSmooth, "Smooth");
 OPT_STR(capCrisp, "Crisp");
 OPT_STR(hlpTextSmooth, "The PC text, smoothed.");
 OPT_STR(hlpTextCrisp, "Remade pixel text. Recommended.");
-OPT_STR(hlpBonesSmooth, "Smoothed bones.");
-OPT_STR(hlpBonesCrisp, "Sharp bones. Recommended.");
-OPT_STR(hlpNumSmooth, "Smoothed damage numbers. Recommended.");
-OPT_STR(hlpNumCrisp, "Sharp damage numbers.");
+// smoothdef (11-06): Recommended moved to Bones Smooth and Numbers Crisp. This block can't grow and its symbols stay at their
+// addresses and sizes, so the two lines naming it are late strings; hlpBonesSmooth and hlpNumCrisp stay unread.
+static const char hlpBonesSmooth[16] __attribute__((used)) OPT_RO = "Smoothed bones.";
+static const char hlpBonesCrisp[28] OPT_RO = "Sharp bones.";
+static const char hlpNumSmooth[40] OPT_RO = "Smoothed damage numbers.";
+static const char hlpNumCrisp[24] __attribute__((used)) OPT_RO = "Sharp damage numbers.";
+static const char hlpBonesSmoothRec[32] __attribute__((section(".text_smoothdef_str"))) = "Smoothed bones. Recommended.";
+static const char hlpNumCrispRec[36] __attribute__((section(".text_smoothdef_str"))) = "Sharp damage numbers. Recommended.";
 OPT_STR(hlpSoulSmooth, "The PC soul, smoothed. Recommended.");
 OPT_STR(hlpSoulCrisp, "Remade pixel soul.");
 #endif
@@ -439,7 +443,7 @@ void CtrSmooth_menuClose(void);
 const uint16_t* CtrSmooth_preview(uint32_t part, uint32_t crisp, uint32_t* w, uint32_t* h);
 static const char* const optPartLabel[4] OPT_RO = { lblText, lblBones, lblNumbers, lblSoul };
 static const char* const optPartHelp[4][2] OPT_RO = {
-    { hlpTextSmooth, hlpTextCrisp }, { hlpBonesSmooth, hlpBonesCrisp }, { hlpNumSmooth, hlpNumCrisp }, { hlpSoulSmooth, hlpSoulCrisp } };
+    { hlpTextSmooth, hlpTextCrisp }, { hlpBonesSmoothRec, hlpBonesCrisp }, { hlpNumSmooth, hlpNumCrispRec }, { hlpSoulSmooth, hlpSoulCrisp } };
 #endif
 
 // argui's save (the display's settings, game_screen, fps_counter, fps_size, menu_hint_seen), then fps_screen.

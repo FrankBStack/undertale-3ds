@@ -1,6 +1,6 @@
 """Wizard page 7: put the personal build and the user's own game files where the 3DS can use them.
 
-Copy to SD card (default), Save as files, or FTP-only Install over Wi-Fi.
+Copy to SD card (default), Save as files, or Send files over Wi-Fi.
 FTP includes the programs and game files. The netloader is never contacted.
 """
 from __future__ import annotations
@@ -42,8 +42,8 @@ from saves import (  # noqa: F401
 )
 
 FAT_SLACK = 2.0          # FAT keeps modification times to 2 s
-DSP_MESSAGE = ("sd:/3ds/dspfirm.cdc is missing (needed for sound).\n"
-               "Run DSP1 once in the Homebrew Launcher on your 3DS.")
+DSP_MESSAGE = ("Your 3DS needs a sound setup step. Run DSP1 once from the Homebrew Launcher, then start the game.\n"
+               "Get DSP1: https://github.com/zoogie/DSP1/releases")
 
 
 @dataclasses.dataclass
@@ -159,6 +159,10 @@ class CopyItem:
 def plan_sd_copy(sd_root, product: products.Product, artifacts, game_folder, parts=None, cache_sets=()):
     """What goes where. .3dsx -> sd:/3ds/<app>/, .cia -> sd:/cia/, game files -> the runtime's data folder.
     data.win skips require fresh SHA-256 equality; other files use size and time."""
+    try:
+        products.require_output_outside_game(game_folder, sd_root)
+    except ValueError as exc:
+        raise DeliverError(str(exc)) from exc
     if not os.path.isdir(os.path.join(sd_root, "3ds")):
         raise DeliverError(NO_3DS_FOLDER_MESSAGE)
     check_sd_writable(sd_root)
@@ -281,6 +285,10 @@ def make_cache_folders_first(sd_root, product, folder, parts=None):
     docs/3ds-hardware.md, the PC-fold entry). Names, contents and format are unchanged; an existing folder keeps its
     order. A manual copy can reorder entries; use the builder for that order. The console's own preparation makes the same folder, so an empty one is never a problem."""
     import texcache
+    try:
+        products.require_output_outside_game(folder, sd_root)
+    except ValueError as exc:
+        raise DeliverError(str(exc)) from exc
     if folder is None or not os.path.isdir(folder):
         return
     for _data_win, rel in texcache.data_wins(product, folder, parts):
@@ -295,6 +303,11 @@ def _copy_payload(sd_root, items, product, folder, work, parts=None, progress=No
     to the card is an error like any other copy. Then each data.win's cache/data-version.txt (texcache.py), so the 3DS
     skips hashing the data.win on its first start; its message is appended to the Result's."""
     import texcache
+    try:
+        products.require_output_outside_game(folder, work)
+        products.require_output_outside_game(folder, sd_root)
+    except ValueError as exc:
+        raise DeliverError(str(exc)) from exc
     items = list(items)
     try:
         if cancelled():
@@ -333,6 +346,11 @@ def copy_with_textures(sd_root, items, product, folder, work, parts=None, progre
     Nothing in the installed set changes on staging failure. Publication errors restore the old set. If the
     card disappears before rollback, retry this copy before launching the game: recovery runs first.
     """
+    try:
+        products.require_output_outside_game(folder, work)
+        products.require_output_outside_game(folder, sd_root)
+    except ValueError as exc:
+        raise DeliverError(str(exc)) from exc
     items = list(items)
     transaction = sd_transaction.Transaction(sd_root, product)
     try:
@@ -355,16 +373,11 @@ def copy_with_textures(sd_root, items, product, folder, work, parts=None, progre
 def _copy_transaction(transaction, sd_root, items, product, folder, work, parts, progress, cancelled, log,
                       textures, tool, data_version):
     import texcache
+    products.log_ignored_music(product, folder, log)
     try:
         if cancelled():
             raise InterruptedError('cancelled')
         transaction.recover()
-        prepared = None
-        if textures:
-            tool = tool or texcache.find_tool(work, log=log)
-            if tool.ok:
-                prepared = texcache.prepare(tool, product, folder, work, parts, log=log)
-        sets = prepared[0] if prepared else []
         staged = [dataclasses.replace(it, skip=False) for it in items]
         # Texture/receipt-only callers may keep an existing verified data.win in place.
         # Stage a private copy too, so receipt verification never trusts an absent/new destination.
@@ -374,6 +387,20 @@ def _copy_transaction(transaction, sd_root, items, product, folder, work, parts,
             final = install_record.target(sd_root, name)
             if name not in explicit and final.is_file() and texcache.checked_digest(final) == texcache._digest(src):
                 staged.append(CopyItem(str(final), name, final.stat().st_size))
+        # Refuse before texture work or staging writes. Publish checks again under
+        # the same lease, using the bytes actually staged, before replacing files.
+        install_record.check_retained_models(product, {it.dst for it in staged},
+            {it.dst: texcache.checked_digest(it.src) for it in staged
+             if it.dst.rsplit('/', 1)[-1].casefold() == 'data.win'},
+            previous=install_record.read(sd_root, product),
+            present=lambda name: install_record.target(sd_root, name).is_file(),
+            digest=lambda name: texcache.checked_digest(install_record.target(sd_root, name)))
+        prepared = None
+        if textures:
+            tool = tool or texcache.find_tool(work, log=log)
+            if tool.ok:
+                prepared = texcache.prepare(tool, product, folder, work, parts, log=log)
+        sets = prepared[0] if prepared else []
         check_copy_space(sd_root, staged, sets, product=product)
         removals = [plan.cs.sd_dir + '/' + name for plan in texcache.plan(sd_root, sets)
                     for name in plan.remove if not name.endswith('.part')]
@@ -403,6 +430,8 @@ def _copy_transaction(transaction, sd_root, items, product, folder, work, parts,
             pass
         if isinstance(error, DeliverError):
             raise
+        if isinstance(error, install_record.ModelInputMismatch):
+            raise DeliverError(str(error)) from error
         if isinstance(error, InterruptedError) or cancelled():
             raise DeliverError("Copy cancelled.\nClick Copy to card to try again.") from error
         raise write_error(sd_root, error) from error
@@ -426,15 +455,35 @@ FOLDER_README = '''READ THIS BEFORE COPYING
 Use the builder's Copy to SD card option. It merges individual files and keeps
 your saves, settings, other homebrew and other games.
 
-SD-CARD-FILES contains the files for the card. Do not drag a whole 3ds folder
-onto an existing 3ds folder and choose Replace in Finder. Replace can delete
-the existing folder, including other homebrew and saves.
+SD-CARD-FILES contains the files for the card. Never replace saves.
+'''
 
+WINDOWS_FOLDER_ADVICE = '''
+Windows File Explorer merges folders with the same name. If asked to replace
+or skip files, replace only the build or game files you mean to update.
+Skip saves.
+'''
+
+FOLDER_REPLACE_ADVICE = '''
+Do not drag a whole 3ds folder onto an existing 3ds folder and replace it.
+Replacing a whole folder can delete the existing folder, including other
+homebrew and saves.
+
+Never choose Replace for a folder. Replacing an individual build or game file
+is different; never replace saves.
+'''
+
+MAC_FOLDER_ADVICE = '''
 For manual copying on Mac: hold Option while dragging a folder to a folder
 with the same name, then choose Merge. If Finder offers only Stop or Replace,
 choose Stop and use Copy to SD card instead. Never choose Replace for a folder.
-Replacing an individual build or game file is different; never replace saves.
 '''
+
+
+def folder_readme(platform=None):
+    platform = sys.platform if platform is None else platform
+    advice = WINDOWS_FOLDER_ADVICE if platform == 'win32' else FOLDER_REPLACE_ADVICE
+    return FOLDER_README + advice + (MAC_FOLDER_ADVICE if platform == 'darwin' else '')
 
 
 def sd_preview(sd_root, product, artifacts, folder, work, parts=None):
@@ -476,6 +525,10 @@ def save_files(product, artifacts, folder, work, parts=None, progress=None, canc
     export keeps its .part directory for inspection, and is never offered as a finished output.
     """
     import tempfile
+    try:
+        products.require_output_outside_game(folder, work)
+    except ValueError as exc:
+        raise DeliverError(str(exc)) from exc
     parent = os.path.join(work, "out", "files")
     os.makedirs(parent, exist_ok=True)
     wrapper = tempfile.mkdtemp(prefix=product.key + "-3ds-install-", suffix=".part", dir=parent)
@@ -499,7 +552,7 @@ def save_files(product, artifacts, folder, work, parts=None, progress=None, canc
             size += os.path.getsize(os.path.join(root, name))
             count += 1
     with open(os.path.join(wrapper, 'READ-ME-FIRST.txt'), 'w', encoding='utf-8', newline='\n') as readme:
-        readme.write(FOLDER_README)
+        readme.write(folder_readme())
     destination = wrapper[:-len(".part")]
     os.replace(wrapper, destination)
     return SavedFiles(os.path.join(destination, 'SD-CARD-FILES'), count, size, tex, destination)
@@ -534,17 +587,25 @@ def instructions(product: products.Product, targets, outputs, sd_root=None,
     if sd_root:
         steps.append("Eject the SD card and put it in your 3DS.")
     elif delivery == 'files':
-        steps.append('Read READ-ME-FIRST.txt in the saved folder. Use Copy to SD card; never replace a whole folder in Finder.')
+        steps.append('Read READ-ME-FIRST.txt in the saved folder. Use Copy to SD card; ' +
+                     ('Windows File Explorer merges folders. Never replace saves.' if sys.platform == 'win32'
+                      else 'never replace a whole folder.'))
         steps.append('Put the SD card in your 3DS.')
     elif delivery == 'wifi':
         steps.append('Files sent to the SD card. Close ftpd.')
     else:
         steps.extend(file_copy_steps(product, outputs).splitlines())
         steps.append('Put the SD card in your 3DS.')
+    launch = []
     if "3dsx" in outputs:
-        steps.append("Open the Homebrew Launcher and start %s." % which_3dsx(product, targets))
+        launch.append("Homebrew Launcher: start %s." % which_3dsx(product, targets))
     if "cia" in outputs:
-        steps.append("Install the .cia from %s/cia with FBI, then start it from the HOME Menu." % where)
+        names = ", ".join("%s.cia (%s)" % (products.package_stem(product, t),
+                          "New 3DS models" if t == "n3ds" else "Old 3DS models") for t in targets)
+        launch.append("HOME Menu: open FBI, the 3DS installer, and install the file for your model from %s/cia: %s. "
+                      "Then start the game from the HOME Menu." % (where, names))
+    if launch:
+        steps.append(("Choose how to start the game:\n   " if len(launch) > 1 else "") + "\n   Or: ".join(launch))
     steps.append("Press SELECT in-game for display and control options.")
     lines = ['What to do now:'] + ['%d. %s' % (i, step) for i, step in enumerate(steps, 1)]
     if saves_result and saves_result.copied:
@@ -556,7 +617,7 @@ def instructions(product: products.Product, targets, outputs, sd_root=None,
 
 
 # ---------------------------------------------------------------------------------------------------------------------
-# FTP-only Install over Wi-Fi
+# Send files over Wi-Fi
 
 def threedslink_argv(threedslink, path, address=None):
     """Send-only: 3dslink broadcasts to find the Homebrew Launcher's netloader (press Y in HBL) unless the user typed
@@ -569,7 +630,7 @@ def threedslink_argv(threedslink, path, address=None):
 
 def send_3dslink(threedslink, path, address=None, run=None, log=print):
     """Retained API guard for old callers: netloader delivery is no longer allowed."""
-    raise DeliverError("Sending with the Homebrew Launcher's netloader is no longer supported. Use Install over Wi-Fi with ftpd.")
+    raise DeliverError("Sending with the Homebrew Launcher's netloader is no longer supported. Use Send files over Wi-Fi with ftpd.")
 
 
 def wifi_items(product, artifacts, folder, parts=None):

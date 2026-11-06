@@ -9969,6 +9969,13 @@ bool CtrScreens_backlightShared(CtrDisplayCaps caps);
 // ctr_frame_pacer.c and main.c (late).
 void CtrPacer_setGameScreen(gfxScreen_t screen);
 void CtrScreens_pacerShow(gfxScreen_t screen);
+#ifdef ENABLE_WAD16
+void* Loadgame_carryCopy(void*, const void*, size_t);
+#define SCREENS_CARRY_COPY Loadgame_carryCopy
+#else
+#define SCREENS_CARRY_COPY memcpy
+#endif
+#line 9832
 void CtrScreens_moveConsoles(bool top);
 void CtrScreens_flushConsoles(void);
 void CtrScreens_screenshotNotice(bool paint);
@@ -10025,7 +10032,7 @@ SCREENS_LATE CTR_COLD_OS static u8* screensCarry(gfxScreen_t from, gfxScreen_t t
     if (fh != (from == GFX_TOP ? 400 : BOTTOM_SCREEN_W) || th != (to == GFX_TOP ? 400 : BOTTOM_SCREEN_W)) return nullptr;
     u8* in = src + (from == GFX_TOP ? SCREENS_CARRY_AT : 0);
     GSPGPU_InvalidateDataCache(in, SCREENS_CARRY_BYTES);
-    memcpy(dst + (to == GFX_TOP ? SCREENS_CARRY_AT : 0), in, SCREENS_CARRY_BYTES);
+    SCREENS_CARRY_COPY(dst + (to == GFX_TOP ? SCREENS_CARRY_AT : 0), in, SCREENS_CARRY_BYTES);
     return dst;
 }
 
@@ -12222,6 +12229,11 @@ static void drawRipple(CtrRenderer* r, uint32_t color) {
     }
 }
 static void z_utqa_rectOutline(CtrRenderer* r, float x1, float y1, float x2, float y2, CtrColor c); // utqa: end of file
+#ifndef ENABLE_WAD17
+static void z_thinart_rectOutline(CtrRenderer* r, float x1, float y1, float x2, float y2, CtrColor c);
+#else
+#define z_thinart_rectOutline z_utqa_rectOutline
+#endif
 static void ctrDrawRectangle(Renderer* renderer, float x1, float y1, float x2, float y2, uint32_t color, float alpha, bool outline) {
     CtrRenderer* r = (CtrRenderer*) renderer;
     RENDER_TIMED(r, TIME_DRAW);
@@ -12233,7 +12245,7 @@ static void ctrDrawRectangle(Renderer* renderer, float x1, float y1, float x2, f
     if (outline) {
         // The four edges, each a whole texel across on a half-resolution
         // target (z_utqa_rectOutline, at the end of this file).
-        z_utqa_rectOutline(r, x1, y1, x2, y2, c);
+        z_thinart_rectOutline(r, x1, y1, x2, y2, c);
         return;
     }
     {
@@ -20538,6 +20550,13 @@ static void dlgSetShown(CtrRenderer* r, bool shown) {
 // Draws this frame's dialogue on the bottom screen, or keeps the last on it
 // for a few frames between lines. False when the bottom screen is the
 // bottom mode's (no dialogue).
+#if defined(ENABLE_WAD16)
+bool CtrDlglinger_noHold(const CtrDialoguePolicy* policy, Runner* runner);
+#define DIALOGUE_FRAME_HOLD CtrDlglinger_noHold
+#else
+#define DIALOGUE_FRAME_HOLD CtrDialogue_holdAllowed
+#endif
+#line 18865
 static bool presentDialogue(CtrRenderer* r, int32_t appW, int32_t appH) {
     CtrSurface* rec = &r->dlg.rec;
     ptrdiff_t n = r->dlg.armed ? arrlen(rec->ops) : 0;
@@ -20558,7 +20577,7 @@ static bool presentDialogue(CtrRenderer* r, int32_t appW, int32_t appH) {
     if (n == 0 || x0 >= x1 || y0 >= y1) {
         if (DLG_GAP_NONE > r->dlg.gapFrames) r->dlg.gapFrames++;
         if (!r->dlg.shown) return false;
-        if (r->display.dialogueBottom && CtrDialogue_holdAllowed(&r->dlg.policy, r->base.runner) && --r->dlg.holdFrames > 0) {
+        if (r->display.dialogueBottom && DIALOGUE_FRAME_HOLD(&r->dlg.policy, r->base.runner) && --r->dlg.holdFrames > 0) {
             // Left unbound, the target is neither transferred nor flipped,
             // so the bottom screen keeps showing the last dialogue.
             r->dlg.keptFrames++;
@@ -29400,4 +29419,45 @@ __asm__("\t.globl CtrGsfix_yieldAlias\n\t.type CtrGsfix_yieldAlias, %function\n\
 // routes fountainMeshRegion's two callers to it, and its section is linked last in late text (late_reserve.ld).
 #if defined(CTRPORT_VINE_DIAGNOSTIC_HELPER) && defined(ENABLE_WAD17) && defined(CTRPORT_TARGET_N3DS)
 #include "vine_titancpu_lf.inc"
+#endif
+
+// thinart: numeric private-layout ABI, no emitted bytes in this translation unit.
+#if defined(ENABLE_WAD16)
+_Static_assert(offsetof(CtrRenderer, smart.copies) == 0x3260, "thinart copies offset");
+_Static_assert(offsetof(CtrRenderer, smart.copyCount) == 0x34e0, "thinart copyCount offset");
+_Static_assert(offsetof(CtrRenderer, frame) == 0x515c, "thinart frame offset");
+_Static_assert(sizeof(((CtrRenderer*) 0)->smart.copies[0]) == 40, "thinart slot size");
+_Static_assert(offsetof(struct SmartCopy, tex) == 16, "thinart texture offset");
+#endif
+
+// thinart inside edge: the star attack draws an outline behind the battle
+// border. Preserve its PC sample coverage; rescuing otherwise unsampled
+// edges exposes a red row inside the white bar. Other outline users keep
+// utqa's thin-edge preservation, including the bomb-defuse box.
+#ifndef ENABLE_WAD17
+static __attribute__((noipa, section(".text.thinart_outline_late")))
+void z_thinart_rectOutline(CtrRenderer* r, float x1, float y1, float x2, float y2, CtrColor c) {
+    const Runner* runner = r->base.runner;
+    const VMContext* ctx = runner != nullptr ? runner->vmContext : nullptr;
+    const Instance* inst = ctx != nullptr ? ctx->currentInstance : nullptr;
+    const DataWin* dw = r->base.dataWin;
+    const char* name = inst != nullptr && inst->objectIndex >= 0 && dw != nullptr &&
+        (uint32_t) inst->objectIndex < dw->objt.count ? dw->objt.objects[inst->objectIndex].name : nullptr;
+    uint32_t hash = 2166136261u, length = 0;
+    if (name != nullptr) {
+        for (const unsigned char* p = (const unsigned char*) name; *p != 0; ++p) {
+            hash = (hash ^ *p) * 16777619u;
+            ++length;
+        }
+    }
+    if (length == 17 && hash == 0xb39f5c7du) {
+        extern __typeof__(emitRect) thinartEmitRect __asm__("emitRect");
+        thinartEmitRect(r, x1, y1, x2 + 1, y1 + 1, c);
+        thinartEmitRect(r, x1, y2, x2 + 1, y2 + 1, c);
+        thinartEmitRect(r, x1, y1 + 1, x1 + 1, y2, c);
+        thinartEmitRect(r, x2, y1 + 1, x2 + 1, y2, c);
+    } else {
+        z_utqa_rectOutline(r, x1, y1, x2, y2, c);
+    }
+}
 #endif

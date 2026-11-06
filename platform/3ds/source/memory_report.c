@@ -232,6 +232,13 @@ LATE void __wrap_CtrMemory_logHeapLayout(const char* stage, int maxListed) {
 // a cached Bigint with the same k, maxwds, sign = 0 and wds = 0 as a new one, and the arithmetic reads only the words
 // it wrote; the cached powers of 5 are exact.
 extern void (*const CtrLog_writerEntry)(void*);
+#ifdef CTRPORT_PACER_ARENA
+// pacer A (UNDERTALE Old): the call below ends in the audio arena's CtrArena_runThread (ctr_audio_system.c's end),
+// which records a starting audio thread and calls on. Only the call's target changes; the #line below keeps every
+// later __LINE__.
+#define __real_CtrLab_runThread CtrArena_runThread
+#endif
+#line 235
 void __real_CtrLab_runThread(void (*entry)(void*), void* arg);
 void __wrap_CtrLab_runThread(void (*entry)(void*), void* arg);
 

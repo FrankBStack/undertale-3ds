@@ -81,6 +81,7 @@ static bool odZero(Instance* inst, int32_t var) {
     return (((uint32_t) v->type - 2u) & ~2u) == 0 && v->int32 == 0;
 }
 
+static size_t auditfixgR2LoadRules(const char*, void*, size_t, uint32_t);
 void OffKill_doomed(Runner* runner) OD_TEXT;
 
 // OffKill_roomChange calls this in place of CtrBench_handleRoomChange.
@@ -88,10 +89,7 @@ void OffKill_doomed(Runner* runner) {
     CtrBench_handleRoomChange(runner);
     if (odCount == 0) {
         odCount = -1;
-        FILE* f = fopen(odPath, okMode);
-        if (f == nullptr) return;
-        size_t n = fread(odRules, sizeof(OffDoomRule), OD_MAX, f);
-        fclose(f);
+        size_t n = auditfixgR2LoadRules(odPath, odRules, OD_MAX, runner->dataWin->objt.count);
         if (n != 0) odCount = (int32_t) n;
     }
     // A frame that changes room ends its instances as the game does.
@@ -119,10 +117,7 @@ void OffKill_roomChange(Runner* runner) {
     OffKill_doomed(runner);
     if (okCount == 0) {
         okCount = -1;
-        FILE* f = fopen(okPath, okMode);
-        if (f == nullptr) return;
-        size_t n = fread(okRules, sizeof(OffKillRule), OK_MAX, f);
-        fclose(f);
+        size_t n = auditfixgR2LoadRules(okPath, okRules, OK_MAX, runner->dataWin->objt.count);
         if (n != 0) okCount = (int8_t) n;
     }
 #if defined(CTRPORT_OFFDRAW)
@@ -161,4 +156,35 @@ void OffKill_roomChange(Runner* runner) {
     }
     // No cleanup here: the next Step's own cleanup takes them out, as it does the game's own destroys.
 }
+#endif
+
+#if defined(UTSW_ON)
+// Both records start with a signed int16 OBJT index and occupy eight bytes.
+// Refuse the entire file on any invalid record, before publishing its count;
+// later frames see -1 and never retry the failed load or index its records.
+_Static_assert(sizeof(OffKillRule) == 8 && sizeof(OffDoomRule) == 8, "offkill record stride");
+__attribute__((noinline, noipa, optimize("Os"), section(".auditfixg_r2_offrules_text")))
+static size_t auditfixgR2LoadRules(const char* path, void* data, size_t capacity, uint32_t count) {
+    FILE* f = fopen(path, okMode);
+    if (f == nullptr) return 0;
+    size_t n = fread(data, sizeof(OffKillRule), capacity, f);
+    fclose(f);
+    unsigned char* bytes = data;
+    for (size_t i = 0; i < n; ++i) {
+        int16_t object;
+        memcpy(&object, bytes + sizeof(OffKillRule)*i, sizeof(object));
+        if ((uint32_t) object >= count) return 0;
+    }
+    return n;
+}
+#endif
+
+#if defined(UTSW_ON) && defined(__3DS__)
+// Outline just the cold file-read path. Fill the freed tails rather than
+// shifting either existing input section or any function that follows it.
+
+__asm__(".pushsection .text.offkill_late,\"ax\",%progbits\n.subsection 1\n.org 516, 0\n.popsection\n");
+
+__asm__(".pushsection .omegaflowey_ifg,\"ax\",%progbits\n.subsection 1\n.org 540, 0\n.popsection\n");
+
 #endif

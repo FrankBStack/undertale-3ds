@@ -13,6 +13,9 @@ BASH = 'C:/devkitPro/msys2/usr/bin/bash.exe' if os.name == 'nt' else shutil.whic
 
 @unittest.skipUnless(BASH and Path(BASH).is_file(), 'Bash required')
 class BuildPythonTests(unittest.TestCase):
+    def setUp(self):
+        (ROOT / 'scratch').mkdir(exist_ok=True)
+
     def discover(self, path, override=None):
         env = dict(os.environ)
         env['PATH'] = str(path)
@@ -72,6 +75,9 @@ class BuildPythonTests(unittest.TestCase):
 @unittest.skipUnless(BASH and Path(BASH).is_file(), 'Bash required')
 class BuildEnvironmentTests(unittest.TestCase):
     """A login shell without APPDATA must not quietly build a game without its derived art."""
+
+    def setUp(self):
+        (ROOT / 'scratch').mkdir(exist_ok=True)
 
     def shell(self, script, env):
         return subprocess.run([BASH, '--noprofile', '--norc', '-c', 'source "$1"; ' + script, 'env-test',

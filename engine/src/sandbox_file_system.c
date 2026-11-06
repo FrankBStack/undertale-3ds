@@ -162,6 +162,10 @@ static bool sbWriteFileBinary(FileSystem* fs, const char* relativePath, const ui
     return true;
 }
 
+#if defined(PLATFORM_3DS) && defined(ENABLE_WAD16) && defined(__GNUC__)
+__attribute__((noipa, optimize("Os")))
+#endif
+#line 165
 static bool sbRenameFile(FileSystem* fs, const char* oldRelativePath, const char* newRelativePath) {
     SandboxFileSystem* sfs = (SandboxFileSystem*) fs;
     if (!sfs->enabled) return sfs->real->vtable->renameFile(sfs->real, oldRelativePath, newRelativePath);
@@ -169,7 +173,14 @@ static bool sbRenameFile(FileSystem* fs, const char* oldRelativePath, const char
     int32_t size = 0;
     if (!readSandboxed(sfs, oldRelativePath, &data, &size)) return false;
     storeFile(sfs, newRelativePath, data, size);
+#if !defined(PLATFORM_3DS) || defined(ENABLE_WAD16)
+#line 172
+    if (findFile(sfs, oldRelativePath) != findFile(sfs, newRelativePath)) markDeleted(sfs, oldRelativePath);
+#else
+#line 172
     markDeleted(sfs, oldRelativePath);
+#endif
+#line 173
     free(data);
     return true;
 }
@@ -442,3 +453,59 @@ int32_t SandboxFileSystem_lateDescribe(FileSystem* fs, char* out, size_t size) {
     }
     return (int32_t) count;
 }
+
+#if defined(PLATFORM_3DS) && defined(ENABLE_WAD16) && defined(__GNUC__)
+/* Keep the existing function section at its original extent. */
+__asm__(
+    ".pushsection .text.sbBinarySeek,\"ax\",%progbits\n"
+    ".popsection\n"
+    ".pushsection .text.sbBinarySize,\"ax\",%progbits\n"
+    ".popsection\n"
+    ".pushsection .text.sbBinaryRewrite,\"ax\",%progbits\n"
+    ".popsection\n"
+    ".pushsection .text.sbBinaryWrite,\"ax\",%progbits\n"
+    ".popsection\n"
+    ".pushsection .text.sbBinaryRead,\"ax\",%progbits\n"
+    ".popsection\n"
+    ".pushsection .rodata.str1.4,\"aMS\",%progbits,1\n"
+    ".popsection\n"
+    ".pushsection .text.sbDirectoryExists,\"ax\",%progbits\n"
+    ".popsection\n"
+    ".pushsection .text.sbBinaryTell,\"ax\",%progbits\n"
+    ".popsection\n"
+    ".pushsection .text.findFile,\"ax\",%progbits\n"
+    ".popsection\n"
+    ".pushsection .text.existsSandboxed,\"ax\",%progbits\n"
+    ".popsection\n"
+    ".pushsection .text.sbFileExists,\"ax\",%progbits\n"
+    ".popsection\n"
+    ".pushsection .text.readSandboxed,\"ax\",%progbits\n"
+    ".popsection\n"
+    ".pushsection .text.sbReadFileBinary,\"ax\",%progbits\n"
+    ".popsection\n"
+    ".pushsection .text.sbBinaryOpen,\"ax\",%progbits\n"
+    ".popsection\n"
+    ".pushsection .text.sbReadFileText,\"ax\",%progbits\n"
+    ".popsection\n"
+    ".pushsection .text.sbCreateDirectory,\"ax\",%progbits\n"
+    ".popsection\n"
+    ".pushsection .text.sbResolvePath,\"ax\",%progbits\n"
+    ".popsection\n"
+    ".pushsection .text.storeFile,\"ax\",%progbits\n"
+    ".popsection\n"
+    ".pushsection .text.sbBinaryClose,\"ax\",%progbits\n"
+    ".popsection\n"
+    ".pushsection .text.sbDeleteFile,\"ax\",%progbits\n"
+    ".popsection\n"
+    ".pushsection .text.sbWriteFileBinary,\"ax\",%progbits\n"
+    ".popsection\n"
+    ".pushsection .text.sbWriteFileText,\"ax\",%progbits\n"
+    ".popsection\n"
+    ".pushsection .text.sbRenameFile,\"ax\",%progbits\n"
+    ".popsection\n"
+    ".pushsection .text.sbRenameFile,\"ax\",%progbits\n"
+    ".subsection 1\n"
+    ".org 208,0\n"
+    ".popsection\n"
+);
+#endif

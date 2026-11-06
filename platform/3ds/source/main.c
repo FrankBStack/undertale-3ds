@@ -1798,7 +1798,7 @@ void CtrScreens_flushConsoles(void); Result CtrScreens_noteConsoles(const void* 
 // DELTARUNE keeps the menu on the unseen spare until the game moves up for it.
 #ifdef ENABLE_WAD16
 SCREENS_LATE CTR_COLD_OS void CtrScreens_moveConsoles(bool top) {
-    extern PrintConsole screensStats __asm__("statsConsole");
+    extern PrintConsole screensStats __asm__("statsConsole"); void* Loadgame_restoreMenu(void*, const void*, size_t);
     extern PrintConsole screensLog __asm__("logConsole");
     extern PrintConsole screensMenu __asm__("menuConsole");
     gfxScreen_t screen = top ? GFX_TOP : GFX_BOTTOM;
@@ -1815,7 +1815,7 @@ SCREENS_LATE CTR_COLD_OS void CtrScreens_moveConsoles(bool top) {
 
     } else {
         size_t bytes = (size_t) GSP_SCREEN_WIDTH * GSP_SCREEN_HEIGHT_BOTTOM * 2u;
-        if (screensMenu.frameBuffer != shown) memcpy(shown, screensMenu.frameBuffer, bytes);
+        if (screensMenu.frameBuffer != shown) Loadgame_restoreMenu(shown, screensMenu.frameBuffer, bytes);
         screensMenu.frameBuffer = shown;
         GSPGPU_FlushDataCache(shown, (u32) bytes);
     }
@@ -2386,6 +2386,49 @@ PrintConsole* __wrap_consoleInit(gfxScreen_t screen, PrintConsole* console) {
         }
     }
     return result;
+}
+
+// The menu must remain visible on top for notices. Preserve that RGB565 page
+// in the spare before screensCarry overwrites the shown buffer with BGR8.
+// Both callers run only during an explicit LCD move, with the GPU idle and
+// the console writer locked. The top LCD is single buffered at these calls.
+#define DLGTOP_FIX __attribute__((noinline, noipa, section(".text.dlgtopfix_late")))
+DLGTOP_FIX static u16* Loadgame_menuSpare(void) {
+    gfxSetDoubleBuffering(GFX_TOP, true);
+    u16* spare = (u16*) CtrPacer_backFramebuffer(GFX_TOP, GFX_LEFT);
+    gfxSetDoubleBuffering(GFX_TOP, false);
+    return spare;
+}
+// Preserve the reviewed helper slots; their guarded bodies append after all
+// existing late text. None of these helpers runs outside an explicit LCD move.
+#define DLGTOP_GUARD __attribute__((noinline, noipa, section(".text.late.dlgtopguard")))
+// Outside .bss.late.* so the existing sorted catch-all cannot consume it early.
+static bool Loadgame_backupRan __attribute__((section(".bss.dlgtopguard_late")));
+void* Loadgame_guardedCarry(void*, const void*, size_t);
+void* Loadgame_guardedRestore(void*, const void*, size_t);
+void* Loadgame_carryCopy(void*, const void*, size_t);
+DLGTOP_FIX void* Loadgame_carryCopy(void* dst, const void* src, size_t bytes) {
+    return Loadgame_guardedCarry(dst, src, bytes);
+}
+void* Loadgame_restoreMenu(void*, const void*, size_t);
+DLGTOP_FIX void* Loadgame_restoreMenu(void* dst, const void* src, size_t bytes) {
+    return Loadgame_guardedRestore(dst, src, bytes);
+}
+DLGTOP_GUARD void* Loadgame_guardedCarry(void* dst, const void* src, size_t bytes) {
+    Loadgame_backupRan = false;
+    if (CtrScreens_onBottom) {
+        u16* spare = Loadgame_menuSpare();
+        if (spare != menuConsole.frameBuffer) {
+            memcpy(spare, menuConsole.frameBuffer, (size_t) 320 * 240 * 2);
+            Loadgame_backupRan = true;
+        }
+    }
+    return memcpy(dst, src, bytes);
+}
+DLGTOP_GUARD void* Loadgame_guardedRestore(void* dst, const void* src, size_t bytes) {
+    bool backedUp = Loadgame_backupRan;
+    Loadgame_backupRan = false;
+    return memcpy(dst, backedUp ? Loadgame_menuSpare() : src, bytes);
 }
 
 #endif

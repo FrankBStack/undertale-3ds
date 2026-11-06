@@ -3,10 +3,10 @@
 UNDERTALE theme:
 - Black background (#000000) and white pixel-border boxes (#ffffff).
 - Pixel bitmap font:
-  (a) Before the game copy is found or if its assets are unreadable: standard platform widgets and system font.
+  (a) Before the game copy is found or if its assets are unreadable: public-domain pixel font and original heart.
   (b) Once the player's copy is found on disk, loads the game's own bitmap font (fnt_maintext) and red SOUL sprite
       (spr_heart) from data.win, game.ios or game.unx at runtime (strictly read-only), falling back to (a).
-      Boring mode always uses (a).
+      Boring mode always uses standard platform widgets and the system font.
 - Red SOUL (#ff0000) selection marker on radio/check/button controls and progress marker on progress bars.
 - UNDERTALE-style orange (#ff7f27) / yellow (#ffff00) pixel-bordered buttons.
 """
@@ -39,11 +39,11 @@ import toolchain
 from processes import hidden_options
 
 DISCLAIMER = "Unofficial fan project. Not affiliated with Toby Fox, Fangamer, YoYo Games, or Nintendo."
-WHAT = 'Makes a 3DS version of your own PC game and puts it on your 3DS by SD card or Wi-Fi.'
-TERMS = "Store terms (Steam, GOG) restrict modifying or converting the game. Building is your decision."
+WHAT = ('Makes a 3DS version of your own PC game and puts it on your 3DS by SD card or Wi-Fi.\n'
+        'The first setup and first build need an internet connection.')
+TERMS = "Store terms for your copy (Steam, GOG) may restrict modifying or converting the game. Building is your decision."
 ABOUT = ("{app} builder\n\nFree software under the GNU AGPL-3.0. Source ZIP:\n{source}\n\n"
-         "The ownership check is a deterrent, not a lock: it checks that the game files match an official release "
-         "and that a store installed them.\n\n" + DISCLAIMER)
+         "The builder checks your game files against known official copies.\n\n" + DISCLAIMER)
 WRAP = 640
 SHORT_TARGET = {"n3ds": "New 3DS", "o3ds": "Old 3DS"}
 
@@ -413,8 +413,8 @@ class Theme:
 
     @property
     def native(self):
-        # Before assets are available, use the standard look rather than substitute game-like art/fonts.
-        return self.boring or not self.runtime_loaded
+        # The chosen style applies before discovery; player assets only replace the fallback font and heart.
+        return self.boring
 
     def apply(self):
         style = ttk.Style(self.root)
@@ -1104,6 +1104,20 @@ class UtRadio(Wrapping, ttk.Radiobutton):
             self._sync_and_render()
         return res
 
+    def configure(self, cnf=None, **kw):
+        if isinstance(cnf, dict):
+            kw = {**cnf, **kw}
+            cnf = None
+        if not cnf and not kw:
+            return super().configure()
+        if 'text' in kw:
+            self._raw_text = str(kw.pop('text') or '')
+        result = super().configure(cnf, **kw) if cnf or kw else None
+        self._sync_and_render()
+        return result
+
+    config = configure
+
 
 class UtCheck(Wrapping, ttk.Checkbutton):
     """A ttk.Checkbutton subclass that uses the red SOUL sprite as its selection marker."""
@@ -1390,6 +1404,7 @@ class State:
         self.ftp_console = None
         self.save_scan = None
         self.save_result = None
+        self.save_how = None
         self.saves_done = False
 
     @property
@@ -1794,7 +1809,7 @@ class WelcomePage(Page):
         label(self.frame, DISCLAIMER, bold=True)
         label(self.frame, WHAT)
         try:
-            release = "Release %s. Old and New 3DS families. 30 fps." % pipeline.release_version()
+            release = "Release %s. Old and New 3DS families. Aims for a steady 30 fps." % pipeline.release_version()
         except pipeline.BuildFailed:
             release = "Source files need repair. Download and unpack the builder again."
         label(self.frame, release)
@@ -1871,7 +1886,7 @@ class FindPage(Page):
         self.tree = ttk.Treeview(self.frame, columns=("store", "folder", "version"), show="headings", height=6,
                                  selectmode="browse")
         for c, w in (("store", 80), ("folder", 260), ("version", 200)):
-            self.tree.heading(c, text=c.capitalize())
+            self.tree.heading(c, text="Found in" if c == "store" else c.capitalize())
             self.tree.column(c, width=w, minwidth=60, stretch=(c == "folder"))
         self.tree.pack(fill="x", pady=(0, 8))
         self.tree.bind("<<TreeviewSelect>>", lambda e: self.picked())
@@ -1919,6 +1934,8 @@ class FindPage(Page):
             return  # The player chose a folder (or searched again) since this search started.
         self.searching = False
         chosen = self.st.folder
+        self.manual = list(dict.fromkeys(products.verify_game.install_folder(self.st.product.game, d)
+                                         for d in self.manual))
         self.tree.delete(*self.tree.get_children())
         for i, c in enumerate(copies):
             self.tree.insert("", "end", iid=str(i), values=(c.store, c.folder, c.version + (" - " + c.note if c.note
@@ -1997,7 +2014,7 @@ class VerifyPage(Page):
         self.running = False
 
     def on_show(self):
-        self.intro.config(text="Checking %s..." % self.st.folder)
+        self.intro.config(text="Checking game files...")
         # A refusal asks the player to repair the game and try again, so coming back here checks it again.
         if (self.st.verdict is None or not self.st.verdict.accepted) and not self.running:
             self.start()
@@ -2020,6 +2037,7 @@ class VerifyPage(Page):
         self.st.verdict = verdict
         self.st.inputs += 1
         if verdict.accepted:
+            self.st.folder = verdict.result.folder
             self.st.parts = [p for p in verdict.parts if p != "root"] or None
         self.render()
         self.app.update_nav()
@@ -2030,7 +2048,7 @@ class VerifyPage(Page):
             return
         self.bar.config(mode="determinate", value=100)
         self.result.config(text=("OK: " if v.accepted else "Refused: ") + v.message)
-        self.details.config(text="\n".join(v.result.details))
+        self.details.config(text="")  # Raw paths and OS errors stay on the result for support.
         for w in self.links.winfo_children():
             w.destroy()
         for url in v.store_links:
@@ -2052,7 +2070,7 @@ class VerifyPage(Page):
 class StepBox:
     """One setup step: what it does, one button that does it, its own progress, and its own result.
 
-    A failed step keeps its "Show command" and "Open download page" buttons, so the user can still do it by hand."""
+    A failed step keeps its "Technical details" and "Open download page" buttons for support and setup information."""
 
     def __init__(self, page, parent, step, button_text="Install"):
         self.page, self.step = page, step
@@ -2062,10 +2080,10 @@ class StepBox:
         # Full consent remains in the confirmation and the adjacent Licences dialog.
         self.row = ttk.Frame(self.box)
         self.row.pack(fill="x")
-        self.go = button(self.row, text="Show command" if dry else button_text,
+        self.go = button(self.row, text="Technical details" if dry else button_text,
                          command=lambda: page.run_step(self))
         self.go.pack(side="left", padx=(0, 8))
-        self.show_btn = button(self.row, text="Show command", command=self.show_command)
+        self.show_btn = button(self.row, text="Technical details", command=self.show_command)
         self.page_btn = (button(self.row, text="Open download page", command=lambda: webbrowser.open(step.page))
                          if step.page else None)
         self.bar = progressbar(self.box, mode="determinate", length=400, maximum=100)
@@ -2112,6 +2130,9 @@ class StepBox:
         self.bar.stop()
         self.bar.pack_forget()
         self.go.state(["!disabled"])
+        if why.startswith(("Couldn't check", "The 3DS compiler wasn't found in ",
+                           "The devkitPro installer finished, but its MSYS2 tools couldn't be found.")):
+            self.go.config(text="Try again")
         self.show_btn.pack(side="left", padx=(0, 8))
         if self.page_btn is not None:
             self.page_btn.pack(side="left")
@@ -2138,6 +2159,7 @@ class ToolchainPage(Page):
         self.tree.bind('<<ThemeChanged>>', lambda _e: self.fit_status())
         self.fit_status()
         self.result = label(self.frame, "")
+        self.compiler_status = label(self.frame, "")
         self.steps = ttk.Frame(self.frame)
         self.steps.pack(fill="x")
         self.extra = ttk.Frame(self.frame)
@@ -2183,7 +2205,11 @@ class ToolchainPage(Page):
         opts = self.app.opts
         roots = [opts.devkitpro] if opts.devkitpro else None
         self.app.update_nav()
-        self.app.work(lambda: toolchain.detect(opts.tools_dir, roots=roots), self.detected)
+        def job():
+            tc = toolchain.detect(opts.tools_dir, roots=roots)
+            tc.compiler_info = toolchain.compiler_details(tc)
+            return tc
+        self.app.work(job, self.detected)
 
     def detected(self, tc):
         self.detecting = False
@@ -2194,6 +2220,12 @@ class ToolchainPage(Page):
             self.app.update_nav()
             return
         self.st.tc = tc
+        tested = products.release_contract.read(pipeline.SOURCE_ROOT)['tested_compiler']
+        self.write(toolchain.compiler_status(tc.compiler_info, tested))
+        text = "The 3DS tools are listed below. Use Install for anything missing."
+        if self.st.game == 'undertale':
+            text += '\nInstall and Update check the offered compiler before changing devkitPro.'
+        self.compiler_status.config(text=text)
         # Remember what existed before any installer button is pressed.
         try:
             cleanup.record_before(self.app.opts.work, [p for p in (tc.root, tc.makerom, tc.bannertool) if p])
@@ -2208,15 +2240,28 @@ class ToolchainPage(Page):
             box.step = step
         self.tree.delete(*self.tree.get_children())
         self.tree.configure(height=min(8, max(1, len(steps))))
+        cleared_failure = False
         for i, (step, needed, waiting) in enumerate(toolchain.setup_inventory(tc, steps)):
             status = "Installed" if not needed else "Waiting for %s." % waiting if waiting else "Ready"
-            self.tree.insert("", "end", iid=str(i), values=(status, step.title,
+            # Full titles and wrapping dependency explanations remain below the table. Keep its cells compact.
+            item = {'devkitpro': 'devkitPro', 'packages': '3DS tools', 'host': 'Computer tools',
+                    'clt': 'Apple build tools', 'cmake': 'CMake', 'makerom': 'CIA builder',
+                    'bannertool': 'CIA banner tool'}.get(step.key, step.title)
+            self.tree.insert("", "end", iid=str(i), values=("Waiting" if needed and waiting else status, item,
                              "Optional: .cia only" if step.key in ('makerom', 'bannertool') else ""))
             box = self.boxes[i]
-            if step.key in self.failures:
+            if needed and step.key in self.failures:
                 box.failed(self.failures[step.key])
             else:
+                if self.failures.pop(step.key, None) is not None:
+                    cleared_failure = True
+                    box.go.config(text="Technical details" if self.app.opts.toolchain_dry_run else "Install")
+                    for widget in (box.show_btn, box.page_btn):
+                        if widget is not None:
+                            widget.pack_forget()
                 box._say(status)
+        if cleared_failure:
+            self.result.config(text=next(iter(self.failures.values())) if self.failures else "Tools checked.")
         self.fit_status()
         self.update_buttons()
         self.app.update_nav()
@@ -2224,9 +2269,11 @@ class ToolchainPage(Page):
     def fit_status(self):
         # Theme/font changes can arrive before detection has populated the rows.
         font = tkfont.Font(self.tree, font=ttk.Style(self.tree).lookup('Treeview', 'font') or 'TkDefaultFont')
-        labels = ['Installed'] + [self.tree.item(row, 'values')[0] for row in self.tree.get_children()]
-        width = max(110, max(font.measure(text) for text in labels) + 28)
-        self.tree.column('ok', width=width, minwidth=width, stretch=False)
+        rows = [self.tree.item(row, 'values') for row in self.tree.get_children()]
+        for index, (column, fallback) in enumerate((('ok', 'Installed'), ('item', 'Item'), ('detail', 'Found'))):
+            labels = [fallback] + [row[index] for row in rows]
+            width = max(60, max(font.measure(text) for text in labels) + 28)
+            self.tree.column(column, width=width, minwidth=width, stretch=(column == 'detail'))
 
     def update_buttons(self):
         busy = self.running_step or self.detecting
@@ -2255,6 +2302,8 @@ class ToolchainPage(Page):
         dry = self.app.opts.toolchain_dry_run
         if self.running_step:
             return False
+        tested = products.release_contract.read(pipeline.SOURCE_ROOT)['tested_compiler']
+        releases_url = updates.repository(self.st.game) + '/releases'
         if not dry and not confirmed:
             ask = self.app.opts.confirm_install
             if ask is None:
@@ -2276,10 +2325,19 @@ class ToolchainPage(Page):
             run=lambda argv, lg: stream(argv, lg),
             download=lambda url, dest, sha, size=None: toolchain.download(url, dest, sha, progress=progress,
                                                                           size=size))
+        game = self.st.game
+        root = self.st.tc.root
+        notices = []
+
+        def stage(kind, text):
+            if kind == 'notice':
+                notices.append(text)
+            self.app.call(box.stage, kind, text)
 
         def job():
-            toolchain.run_step(step, log, dry, actions, stage=lambda kind, text: self.app.call(box.stage, kind, text),
-                               work=self.app.opts.work, root=self.st.tc.root)
+            toolchain.run_step(step, log, dry, actions, stage=stage,
+                               work=self.app.opts.work, root=root, game=game,
+                               tested=tested, releases_url=releases_url)
             return step
 
         def after(result):
@@ -2291,11 +2349,15 @@ class ToolchainPage(Page):
                 self.write("Stopped: %s" % why)
                 box.failed(why)
                 self.show_log()
-                self.result.config(text="%s did not finish. Show command explains how to do it by hand." % step.title)
+                self.result.config(text=(why + '\n' if isinstance(result, toolchain.Refused) else
+                                         '%s did not finish. ' % step.title) +
+                                   'Technical details are available for support.')
             else:
                 box.succeeded()
+                if notices:
+                    box._say(notices[-1])
                 if not dry:
-                    self.result.config(text="Done: %s." % step.title)
+                    self.result.config(text=notices[-1] if notices else "Done: %s." % step.title)
             if not dry and not isinstance(result, Exception):
                 self.detect()
             self.update_buttons()
@@ -2357,7 +2419,7 @@ class OptionsPage(Page):
         self.vcia = tk.BooleanVar(value=False)
         checkbutton(self.frame, text=".3dsx (Homebrew Launcher)", variable=self.v3dsx,
                     command=self.changed).pack(anchor="w")
-        self.cia_box = checkbutton(self.frame, text=".cia (HOME Menu, needs CFW)",
+        self.cia_box = checkbutton(self.frame, text=".cia (HOME Menu, needs custom firmware and FBI, the 3DS installer)",
                                    variable=self.vcia, command=self.changed)
         self.cia_box.pack(anchor="w")
         self.cia_note = label(self.frame, "")
@@ -2374,7 +2436,7 @@ class OptionsPage(Page):
         else:
             self.vcia.set(False)
             self.cia_box.state(["disabled"])
-            self.cia_note.config(text="(.cia needs the .cia tools from the previous step.)")
+            self.cia_note.config(text="To make a HOME Menu install file, go Back and install makerom and bannertool.")
         for w in self.extra.winfo_children():
             w.destroy()
         self.part_vars = {}
@@ -2407,11 +2469,16 @@ class OptionsPage(Page):
             self.st.parts = [p for p, v in self.part_vars.items() if v.get()]
         self.st.openh264 = bool(getattr(self, "h264", None) and self.h264.get())
         p = self.st.product
-        disk = sum(p.disk_mb[x] for x in self.st.targets)
+        disk = p.work_disk_mb(self.st.targets)
         if self.st.game == 'deltarune' and self.st.folder:
             import chapters
             disk += (chapters.stage_bytes(self.st.folder, self.st.parts) + (1 << 20) - 1) // (1 << 20)
-        self.estimate.config(text="About %d MB in %s." % (disk + 30, self.app.opts.work))
+        if self.st.game == 'undertale':
+            self.estimate.config(text=("Allow about %d MB in %s for source, builds and caches.\n"
+                                       "Delivery copies need extra space where you save them.") %
+                                      (disk, self.app.opts.work))
+        else:
+            self.estimate.config(text="About %d MB in %s." % (disk, self.app.opts.work))
         if self.st.game == 'deltarune':
             import chapters
             self.estimate.config(text=self.estimate.cget('text') + '\nSelected chapters: ' +
@@ -2487,13 +2554,26 @@ class BuildPage(Page):
 
     def buttons(self):
         self.cancel_btn.state(["!disabled"] if self.running else ["disabled"])
+        game_files = isinstance(self.failed, pipeline.GameFilesRefused)
+        self.retry_btn.config(text="Choose game files" if game_files else "Try again",
+                              command=self.choose_game_files if game_files else self.start)
         self.retry_btn.state(["!disabled"] if (self.failed and not self.running) else ["disabled"])
-        self.copy_btn.state(["!disabled"] if self.log_path else ["disabled"])
+        self.copy_btn.state(["!disabled"] if self.log_path and os.path.isfile(self.log_path) else ["disabled"])
+
+    def choose_game_files(self):
+        if self.running:
+            return
+        self.st.verdict = None  # Even choosing the same repaired folder must verify it again.
+        self.st.build_ok = False
+        self.st.artifacts, self.st.records = [], []
+        self.st.inputs += 1
+        self.app.show(self.app.PAGES.index(FindPage))
 
     def start(self):
         self.failed = None
         self.build = None
         self.stop.clear()
+        self.log_path = None
         self.running = True
         self.st.artifacts, self.st.records = [], []
         self.st.inputs += 1
@@ -2527,9 +2607,24 @@ class BuildPage(Page):
             self.app.call(self.finished, None)
         except pipeline.BuildFailed as e:
             self.app.call(self.finished, e)
-        except Exception as e:  # noqa: BLE001 (shown to the user, with the traceback in the log)
-            traceback.print_exc()
-            self.app.call(self.finished, pipeline.BuildFailed(pipeline.FAILED + " (%s: %s)" % (type(e).__name__, e),
+        except Exception:  # noqa: BLE001 (short player message, full diagnostics in the support log)
+            diagnostic = pipeline.filter_log(traceback.format_exc())
+            paths = [self.log_path, os.path.join(self.app.opts.work, 'logs', 'builder-error.log')]
+            self.log_path = None
+            for path in paths:
+                if not path:
+                    continue
+                try:
+                    os.makedirs(os.path.dirname(path), exist_ok=True)
+                    with open(path, 'a', encoding='utf-8') as log:
+                        log.write('\n' + diagnostic)
+                    self.log_path = path
+                    break
+                except OSError:
+                    continue  # An unwritable work folder must still leave diagnostics in the window's log.
+            for line in diagnostic.splitlines():
+                self.app.call(self.line, line)
+            self.app.call(self.finished, pipeline.BuildFailed("The build stopped unexpectedly. Choose Try again.",
                                                               self.log_path))
 
     def line(self, s):
@@ -2576,8 +2671,8 @@ class BuildPage(Page):
             self.failed = err
             self.details.show()
             self.intro.config(text="Build stopped.")
-            self.log_path = err.log_path or self.log_path
-            self.status.config(text="%s\nLog: %s" % (err, self.log_path))
+            self.log_path = err.log_path if err.log_path and os.path.isfile(err.log_path) else None
+            self.status.config(text=str(err) + ('\nLog: ' + self.log_path if self.log_path else ''))
         self.buttons()
         self.app.update_nav()
 
@@ -2594,8 +2689,13 @@ class BuildPage(Page):
     def copy_log(self):
         if not self.log_path:
             return
-        with open(self.log_path, encoding="utf-8", errors="replace") as f:
-            text = pipeline.filter_log(f.read())
+        try:
+            with open(self.log_path, encoding="utf-8", errors="replace") as f:
+                text = pipeline.filter_log(f.read())
+        except OSError:
+            self.log_path = None
+            self.buttons()
+            return
         self.app.root.clipboard_clear()
         self.app.root.clipboard_append(text)
         self.status.config(text=self.status.cget("text") + "\nLog copied.")
@@ -2617,12 +2717,19 @@ class BuildPage(Page):
 STALE_COPY = "The card list changed during the copy, so check the card and click Copy to card again."
 
 
-def source_manifest(folder):
+def source_manifest(folder, product=None, parts=None):
     """Each file in the game folder with its size and modified and change (POSIX) or creation (Windows) times, so a
     game file replaced at the same path after a copy makes that copy stale (R175 F4). A missing folder lists nothing. A folder or link that can't be
     read is listed as such, so it never blocks Next on its own but changes the listing once it can be read."""
     if not folder or not os.path.isdir(folder):
         return ()
+    if product is not None:
+        try:
+            return tuple((rel, info.st_size, info.st_mtime_ns, info.st_ctime_ns)
+                         for source, rel, _ in products.sd_files(product, folder, parts)
+                         for info in [os.stat(source)])
+        except OSError as error:
+            return (('game files', 'unreadable', error.errno),)
     out, todo = [], [(folder, '')]
     while todo:  # scandir: Windows gives size and date with the listing, so this stays quick on the Tk thread.
         top, rel = todo.pop()
@@ -2656,7 +2763,7 @@ class DeliverPage(Page):
         self.how = tk.StringVar(value="sd")
         radiobutton(self.frame, text="Copy to SD card", value="sd", variable=self.how,
                     command=self.mode).pack(anchor="w")
-        radiobutton(self.frame, text="Install over Wi-Fi", value="wifi",
+        radiobutton(self.frame, text="Send files over Wi-Fi", value="wifi",
                     variable=self.how, command=self.mode).pack(anchor="w")
         radiobutton(self.frame, text="Save to a folder on this computer", value="files",
                     variable=self.how, command=self.mode).pack(anchor="w", pady=(0, 8))
@@ -2671,11 +2778,11 @@ class DeliverPage(Page):
         self.go = button(self.sd, text="Copy to card", command=self.copy, primary=True)
         self.go.pack(anchor="w", pady=6)
         self.wifi = ttk.Frame(self.frame)
-        label(self.wifi, '3DS address (shown by ftpd):')
+        label(self.wifi, '3DS address (shown by the ftpd app):')
         self.addr = ttk.Combobox(self.wifi, width=30)
         self.addr.pack(anchor="w", pady=(0, 6))
         self.addr.set(preferences.load(app.opts.work).get('console', ''))
-        label(self.wifi, "Start ftpd on the 3DS. Keep it open while the files are sent.")
+        label(self.wifi, "Open ftpd, the file-transfer app, on your 3DS and keep it open while sending.\nGet ftpd: https://github.com/mtheall/ftpd#latest-builds")
         row = ttk.Frame(self.wifi)
         row.pack(anchor="w", pady=6)
         self.find_button = button(row, text="Find my 3DS", command=self.find_console)
@@ -2786,7 +2893,7 @@ class DeliverPage(Page):
         so a rebuild with the same outputs still counts; the manifest catches game files changed in place."""
         return (self.st.game, self.st.folder, tuple(self.st.parts or ()),
                 tuple((a.path, a.sha256) for a in self.st.artifacts), self.st.inputs,
-                source_manifest(self.st.folder))
+                source_manifest(self.st.folder, self.st.product, self.st.parts))
 
     def destination(self):
         how = self.how.get()
@@ -3089,15 +3196,42 @@ class SavesPage(Page):
             self.tree.column(c, width=w, minwidth=60, stretch=(c == "summary"))
         self.tree.pack(fill="x", pady=(0, 8))
         self.notice = label(self.frame, "")
-        self.choice = tk.StringVar(value="skip")
+        self.choice = tk.StringVar(master=self.frame, value="skip")
         self.copy_radio = radiobutton(self.frame, text="Copy PC saves to SD card", value="copy",
-                                      variable=self.choice, command=self.changed)
+                                      variable=self.choice, command=self.mode)
         self.copy_radio.pack(anchor="w")
+        self.wifi_radio = radiobutton(self.frame, text="Send PC saves over Wi-Fi", value="wifi",
+                                      variable=self.choice, command=self.mode)
+        self.wifi_radio.pack(anchor="w")
         self.skip_radio = radiobutton(
             self.frame, text="Skip", value="skip",
-            variable=self.choice, command=self.changed)
+            variable=self.choice, command=self.mode)
         self.skip_radio.pack(anchor="w", pady=(0, 8))
+        self.sd = ttk.Frame(self.frame)
+        self.card = ttk.Combobox(self.sd, width=40, state='readonly')
+        self.card.pack(side='left', padx=(0, 8))
+        self.card.bind('<<ComboboxSelected>>', lambda _e: self.scan())
+        self.refresh_button = button(self.sd, text='Refresh', command=self.refresh_cards)
+        self.refresh_button.pack(side='left', padx=(0, 8))
+        self.card_button = button(self.sd, text='Choose folder...', command=self.choose_card)
+        self.card_button.pack(side='left')
+        self.wifi = ttk.Frame(self.frame)
+        label(self.wifi, '3DS address (shown by the ftpd app):')
+        self.addr = ttk.Combobox(self.wifi, width=30)
+        self.addr.pack(anchor='w', pady=(0, 6))
+        label(self.wifi, 'Open ftpd, the file-transfer app, on your 3DS and keep it open while sending.\nGet ftpd: https://github.com/mtheall/ftpd#latest-builds')
+        self.check_button = button(self.wifi, text='Check saves', command=self.check_ftp)
+        self.check_button.pack(anchor='w')
+        self.addr.bind('<<ComboboxSelected>>', lambda _e: self.check_ftp())
+        self.addr.bind('<Return>', lambda _e: self.check_ftp())
+        self.addr.bind('<KeyRelease>', lambda _e: self.address_changed())
+        self.bar = progressbar(self.frame, mode='determinate', length=560, maximum=100)
         self.status = label(self.frame, "")
+        self.bar.pack_forget()
+        self.card_roots = {}
+        self.checked_console = None
+        self.completed_key = None
+        self.last_method = 'copy'
         self.custom_dir = None
         self.ftp_snapshot = None
         self.ftp_running = False
@@ -3112,7 +3246,72 @@ class SavesPage(Page):
 
     def on_show(self):
         self.intro.config(text="Copy your PC saves to the 3DS. Your PC files are not changed.")
+        self.card.set(self.st.sd_root or '')
+        self.addr.set(self.st.ftp_console or preferences.load(self.app.opts.work).get('console', ''))
+        self.choice.set('wifi' if self.st.deliver_how == 'wifi' and self.st.ftp_console else
+                        'copy' if self.st.deliver_how == 'sd' and self.st.sd_root else 'skip')
+        if self.st.save_result:
+            self.choice.set('skip')
+        self.refresh_cards(scan=False)
+        self.last_method = self.choice.get()
         self.scan()
+
+    def refresh_cards(self, scan=True):
+        if self.importing_notice():
+            return
+        selected = self.card_root()
+        try:
+            cards = deliver.list_sd_cards()
+        except OSError:
+            cards = []
+        self.card_roots = {'%s  %s (%d MB free)' % (c.root, c.label, c.free // 10**6): c.root for c in cards}
+        values = list(self.card_roots)
+        display = next((text for text, root in self.card_roots.items() if root == selected), selected)
+        if selected and display not in values:
+            values.append(selected)
+        self.card.config(values=values)
+        self.card.set(display)
+        if scan:
+            self.scan()
+
+    def choose_card(self):
+        if self.importing_notice():
+            return
+        folder = filedialog.askdirectory(title='Select 3DS SD card')
+        if folder:
+            self.card.set(os.path.normpath(folder))
+            self.refresh_cards()
+
+    def card_root(self):
+        value = self.card.get()
+        return self.card_roots.get(value, value)
+
+    def mode(self):
+        if self.importing_notice():
+            return
+        self.completed_key = None
+        self.st.saves_done = False
+        self.bar.pack_forget()
+        if self.choice.get() == 'skip':
+            self.new_ftp_job()
+            self.ftp_running = False
+            self.ftp_cancel_button.pack_forget()
+            self.sd.pack_forget()
+            self.wifi.pack_forget()
+            self.status.config(text=('PC saves were already copied. Click Next to go on.' if self.st.save_result
+                                     else 'PC saves will not be copied.'))
+            self.changed()
+            return
+        self.scan(keep_choice=True)
+
+    def address_changed(self):
+        if self.addr.get() != self.checked_console and not self.ftp_importing:
+            self.completed_key = None
+            self.ftp_snapshot = None
+            self.new_ftp_job()
+            self.ftp_running = False
+            self.status.config(text='Click Check saves to check this 3DS before copying.')
+            self.changed()
 
     def target_save_dir(self):
         if self.custom_dir:
@@ -3140,10 +3339,25 @@ class SavesPage(Page):
             self.custom_dir = os.path.normpath(d)
             self.scan()
 
-    def scan(self):
+    def scan(self, keep_choice=False):
         if self.importing_notice():
             return  # The import uses this page's scan and snapshot; never change them under it.
+        self.new_ftp_job()
+        self.ftp_running = False
+        self.ftp_cancel_button.pack_forget()
         p = self.st.product
+        self.completed_key = None
+        self.st.saves_done = False
+        self.bar.pack_forget()
+        self.sd.pack_forget()
+        self.wifi.pack_forget()
+        selected = self.choice.get()
+        method = selected if selected != 'skip' else self.last_method
+        self.last_method = method
+        if selected == 'copy':
+            self.sd.pack(fill='x', before=self.status, pady=(0, 8))
+        elif selected == 'wifi':
+            self.wifi.pack(fill='x', before=self.status, pady=(0, 8))
         folder = self.target_save_dir()
         scan = deliver.scan_saves(folder, p.key)
         self.st.save_scan = scan
@@ -3162,44 +3376,66 @@ class SavesPage(Page):
                          "Choose another folder or select Skip." % ", ".join(s.name for s in corrupt))
         else:
             notes.append("Found %d PC save file%s." % (len(valid), "" if len(valid) == 1 else "s"))
-        existing = deliver.existing_sd_save_files(self.st.sd_root, p) if self.st.sd_root else []
+        root = self.card_root()
+        try:
+            existing = deliver.existing_sd_save_files(root, p) if root and method == 'copy' else []
+        except deliver.DeliverError as exc:
+            self.notice.config(text=str(exc))
+            self.choice.set('skip')
+            self.changed()
+            return
         existing_names = [os.path.basename(x) for x in existing]
         if existing:
             notes.append("SD card already has 3DS saves (%s); copying backs them up first."
                          % ", ".join(existing_names))
-        wifi = self.st.deliver_how == 'wifi' and self.st.ftp_console
-        if not self.st.sd_root and not wifi:
-            notes.append("No SD card selected. Copy saves manually to sd:/%s/." % p.sd_save_dir())
+        wifi = method == 'wifi'
+        if not root and method == 'copy':
+            notes.append('Select your SD card, or choose Send PC saves over Wi-Fi.')
         self.notice.config(text="\n".join(notes))
-        self.status.config(text="")
-        if scan.files and (self.st.sd_root or wifi):
-            self.copy_radio.state(["!disabled"])
-            self.choice.set("skip" if (existing or corrupt) else "copy")
-        else:
-            self.copy_radio.state(["disabled"])
+        for radio in (self.copy_radio, self.wifi_radio):
+            radio.state(['!disabled'] if valid else ['disabled'])
+        if not valid or corrupt or (existing and not keep_choice):
             self.choice.set("skip")
+        self.status.config(text='PC saves were already copied. Click Next to go on.'
+                           if self.st.save_result and self.choice.get() == 'skip' else '')
         self.changed()
-        if wifi:
-            self.copy_radio.config(text='Copy PC saves to the 3DS over Wi-Fi')
-            self.choice.set('skip')
-            self.ftp_snapshot = None
-            self.ftp_running = True
-            job, cancel = self.new_ftp_job()
-            self.status.config(text='Checking the 3DS saves...')
-            def after(result):
-                if job != self.ftp_job:
-                    return  # A newer check or import owns the page now.
-                self.ftp_running = False
-                if isinstance(result, Exception):
-                    self.status.config(text=ftp_saves.error_text(result, connecting=True))
-                    self.copy_radio.state(['disabled'])
-                else:
-                    self.ftp_snapshot = result
-                    self.status.config(text=('3DS saves found. Copying will back them up first.' if result.files else
-                                             'No 3DS saves found.'))
-                self.changed()
-            self.app.work(lambda: ftp_saves.inspect(self.st.ftp_console, p, cancelled=cancel.is_set),
-                          after, errors=True)
+        if wifi and self.choice.get() != 'skip':
+            self.check_ftp(default_skip=not keep_choice)
+
+    def check_ftp(self, default_skip=False):
+        if self.importing_notice():
+            return
+        self.completed_key = None
+        self.ftp_snapshot = None
+        job, cancel = self.new_ftp_job()
+        try:
+            host, port = ftp_delivery.endpoint(self.addr.get())
+        except OSError as exc:
+            self.ftp_running = False
+            self.status.config(text=str(exc))
+            self.changed()
+            return
+        console = '%s:%d' % (host, port)
+        self.checked_console = self.addr.get()
+        self.ftp_running = True
+        self.status.config(text='Checking the 3DS saves...')
+        self.ftp_cancel_button.pack(anchor='w')
+        def after(result):
+            if job != self.ftp_job:
+                return
+            self.ftp_running = False
+            self.ftp_cancel_button.pack_forget()
+            if isinstance(result, Exception):
+                self.status.config(text=ftp_saves.error_text(result, connecting=True))
+            else:
+                self.ftp_snapshot = result
+                if result.files and default_skip:
+                    self.choice.set('skip')
+                self.status.config(text=('3DS saves found. Copying will back them up first.' if result.files else
+                                         'No 3DS saves found.'))
+            self.changed()
+        self.app.work(lambda: ftp_saves.inspect(console, self.st.product, cancelled=cancel.is_set), after, errors=True)
+        self.changed()
 
     def changed(self):
         self.app.update_nav()
@@ -3224,36 +3460,101 @@ class SavesPage(Page):
         return bool(agreed)
 
     def on_next(self):
+        if self.busy():
+            return False
+        if self.choice.get() == 'skip':
+            self.st.saves_done = True
+            return True
+        if self.completed_key == self.copy_key():
+            return True
         self.status.config(text="")
-        if self.choice.get() == 'copy' and self.st.deliver_how == 'wifi' and self.st.ftp_console:
+        if self.choice.get() == 'wifi':
+            if self.checked_console != self.addr.get() or self.ftp_snapshot is None:
+                self.check_ftp()
+                return False
             return self.import_ftp()
-        if self.choice.get() != "copy" or not self.st.sd_root or not self.st.save_scan:
-            self.st.save_result = None
-            self.st.saves_done = True
-            return True
-        if not self.st.save_scan.files:
-            self.st.save_result = None
-            self.st.saves_done = True
-            return True
+        root = self.card_root()
+        if not root:
+            self.status.config(text='Select your 3DS SD card, or choose Send PC saves over Wi-Fi.')
+            return False
         p = self.st.product
-        existing = deliver.existing_sd_save_files(self.st.sd_root, p)
+        try:
+            existing = deliver.existing_sd_save_files(root, p)
+        except deliver.DeliverError as exc:
+            self.status.config(text=str(exc))
+            return False
         if existing and not self.st.save_scan.has_corrupt:
-            sd_who = (deliver.scan_sd_saves(self.st.sd_root, p).player_summary
+            sd_who = (deliver.scan_sd_saves(root, p).player_summary
                       or ", ".join(os.path.basename(x) for x in existing))
             pc_who = self.st.save_scan.player_summary or "PC files"
-            prompt = ("Replace the 3DS save (%s) with the PC save (%s)?\n"
-                      "The 3DS saves are backed up first." % (sd_who, pc_who))
-            if not self.confirm_replace(prompt, ('sd', self.st.sd_root, tuple(existing), prompt,
+            prompt = ("Replace the 3DS save (%s) on %s with the PC save (%s)?\n"
+                      "The 3DS saves are backed up first." % (sd_who, root, pc_who))
+            if not self.confirm_replace(prompt, ('sd', root, tuple(existing), prompt,
                                                  self.st.save_scan)):
                 return False
-        try:
-            res = deliver.copy_pc_saves(self.st.sd_root, p, self.st.save_scan, overwrite=bool(existing))
-        except deliver.DeliverError as e:
-            self.status.config(text=str(e))
-            return False
-        self.st.save_result = res
-        self.st.saves_done = True
-        return True
+        scan = self.st.save_scan
+        job, cancel = self.start_copy()
+        key = self.copy_key()
+        self.app.work(lambda: deliver.copy_pc_saves(root, p, scan, overwrite=bool(existing),
+            cancelled=cancel.is_set,
+            progress=lambda phase, done, total, name: self.app.call(self.show_progress, job, phase, done, total)),
+            lambda result: self.finish_copy(job, key, result), errors=True)
+        return False
+
+    def copy_key(self):
+        how = self.choice.get()
+        return (how, self.addr.get() if how == 'wifi' else self.card_root(), self.st.save_scan)
+
+    def start_copy(self):
+        job, cancel = self.new_ftp_job()
+        self.ftp_running = self.ftp_importing = True
+        self.st.saves_done = False
+        for control in self.copy_controls():
+            control.state(['disabled'])
+        self.ftp_cancel_button.pack(anchor='w')
+        self.bar.config(value=0)
+        self.bar.pack(fill='x', before=self.status, pady=(4, 6))
+        self.status.config(text='Checking saves and preparing the backup...')
+        self.app.root.after_idle(lambda: self.show_widget(self.status))
+        self.app.update_nav()
+        return job, cancel
+
+    def copy_controls(self):
+        return (self.scan_button, self.choose_button, self.copy_radio, self.wifi_radio, self.skip_radio,
+                self.card, self.card_button, self.refresh_button, self.addr, self.check_button)
+
+    def show_progress(self, job, phase, done, total):
+        if job != self.ftp_job or not self.ftp_importing:
+            return
+        self.bar.config(value=min(99, 100 * done / max(1, total)))
+        self.status.config(text='%s: %d of %d bytes checked or copied.' % (phase, done, total))
+
+    def finish_copy(self, job, key, result):
+        if job != self.ftp_job:
+            return
+        self.ftp_running = self.ftp_importing = False
+        for control in self.copy_controls():
+            control.state(['!disabled'])
+        self.card.state(['readonly'])
+        self.ftp_cancel_button.pack_forget()
+        if isinstance(result, Exception):
+            if isinstance(result, ftp_saves.IncompleteImport):
+                self.ftp_resume = result
+            self.status.config(text=ftp_saves.error_text(result) if key[0] == 'wifi' else str(result))
+        else:
+            self.ftp_resume = None
+            self.st.save_result = result
+            self.st.save_how = 'wifi' if key[0] == 'wifi' else 'sd'
+            self.st.saves_done = True
+            self.completed_key = key
+            self.bar.config(value=100)
+            text = 'Copied %d save%s %s.' % (result.copied, '' if result.copied == 1 else 's',
+                'to the 3DS over Wi-Fi' if key[0] == 'wifi' else 'to the SD card')
+            if result.backup_dir:
+                text += '\nPrevious 3DS saves backed up to: %s' % result.backup_dir
+            self.status.config(text=text + '\nClick Next to go on.')
+        self.app.root.after_idle(lambda: self.show_widget(self.status))
+        self.app.update_nav()
 
     def import_ftp(self):
         if self.ftp_running or self.ftp_snapshot is None:
@@ -3263,40 +3564,21 @@ class SavesPage(Page):
             return False
         existing = self.ftp_snapshot
         if existing.files:
-            prompt = ('Replace the 3DS save (%s) with the PC save (%s)?\n'
+            prompt = ('Replace the 3DS save (%s) at %s with the PC save (%s)?\n'
                       'The 3DS saves are backed up first.' %
-                      (existing.player_summary or ', '.join(existing.files),
+                      (existing.player_summary or ', '.join(existing.files), self.addr.get(),
                        self.st.save_scan.player_summary or 'PC files'))
             if not self.confirm_replace(prompt, ('wifi', existing, prompt, self.st.save_scan)):
                 return False
-        self.ftp_running = self.ftp_importing = True
-        job, cancel = self.new_ftp_job()
-        for control in (self.scan_button, self.choose_button):
-            control.state(['disabled'])
-        self.ftp_cancel_button.pack(anchor='w')
-        self.status.config(text='Backing up the 3DS saves, then copying...')
-        self.app.update_nav()
-        def after(result):
-            if job != self.ftp_job:
-                return
-            self.ftp_running = self.ftp_importing = False
-            for control in (self.scan_button, self.choose_button):
-                control.state(['!disabled'])
-            self.ftp_cancel_button.pack_forget()
-            if isinstance(result, Exception):
-                if isinstance(result, ftp_saves.IncompleteImport):
-                    self.ftp_resume = result
-                self.status.config(text=ftp_saves.error_text(result))
-            else:
-                self.ftp_resume = None
-                self.st.save_result = result
-                self.st.saves_done = True
-                self.app.show(self.app.index+1)
-            self.app.update_nav()
-        resume, scan, console, product = self.ftp_resume, self.st.save_scan, self.st.ftp_console, self.st.product
+        job, cancel = self.start_copy()
+        key = self.copy_key()
+        resume, scan, console, product = self.ftp_resume, self.st.save_scan, self.addr.get(), self.st.product
         self.app.work(lambda: ftp_saves.copy(console, product, scan, existing, overwrite=bool(existing.files),
-                                             cancelled=cancel.is_set, resume=resume),
-                      after, errors=True)
+                        cancelled=cancel.is_set, resume=resume,
+                        progress=lambda event: self.app.call(self.show_progress, job,
+                            ('Backing up 3DS saves' if '/backup-' in event.path else 'Copying PC saves'),
+                            event.done, event.total)),
+                      lambda result: self.finish_copy(job, key, result), errors=True)
         return False
 
     def busy(self):
@@ -3304,16 +3586,13 @@ class SavesPage(Page):
 
     def auto(self):
         ap = self.app.opts.autopilot or {}
+        if ap.get('import_saves'):
+            return ('fail', 'Automatic save import is not supported. Open the builder and choose how to copy the PC saves.')
         if ap.get("save_dir") and self.custom_dir != os.path.normpath(ap["save_dir"]):
             self.custom_dir = os.path.normpath(ap["save_dir"])
             self.scan()
         if "import_saves" in ap:
-            if ap["import_saves"]:
-                if not (self.st.save_scan and self.st.save_scan.valid_files and self.st.sd_root):
-                    return ("fail", "autopilot requested save import, but no valid PC saves or SD card were available")
-                self.choice.set("copy")
-            else:
-                self.choice.set("skip")
+            self.choice.set("skip")
         return "next"
 
 
@@ -3376,6 +3655,8 @@ class DonePage(Page):
             summary.append("Output folder: %s" % (self.st.files_root or os.path.join(self.app.opts.work, "out")))
         res = self.st.save_result
         if res and res.copied:
+            summary.append('PC saves: copied %s.' % ('to the 3DS over Wi-Fi' if self.st.save_how == 'wifi'
+                                                   else 'to the SD card'))
             # The count and folder are in the steps below (deliver.instructions).
             if res.backup_dir:
                 summary.append("Previous 3DS saves backed up to: %s" % res.backup_dir)
@@ -3790,7 +4071,7 @@ class App:
             self.overlay.choose(self.overlay.cancel)
             return
         if self.page.busy() and self.index != 5:
-            self.inform('Please wait', 'Wait for this step to finish, or click Cancel, before closing.')
+            self.inform('Please wait', 'This step is still running. Wait for it to finish before closing the builder.')
             return
         b = self.pages[5]
         if b.running:
@@ -3886,7 +4167,7 @@ def _bring_to_front(root):
 def run(opts: Options):
     # One builder window per work folder (AUD-15): a second one would replace the first one's sources and outputs.
     try:
-        lease = pipeline.claim_work(opts.work)
+        lease = pipeline.claim_work(opts.work, devkitpro=opts.devkitpro)
     except pipeline.WorkLockError as exc:
         print(exc.window, file=sys.stderr, flush=True)
         if opts.autopilot is None:

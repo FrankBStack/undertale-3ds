@@ -12,6 +12,8 @@
 
 #include "ctr_log.h"
 #include "ctr_safe_save.h"
+#include "ctr_r216_ut.h" // R216: UNDERTALE only (R216_PICK, R216_UT)
+#line 15
 #include "ctr_watchdog.h"
 #include "gettime.h"
 #include "overlay_file_system.h"
@@ -307,14 +309,14 @@ static bool indexSaveFolder(CtrFileSystem* cfs) {
     free(path);
     return true;
 }
-
+R216_UT(static uint64_t saveguardStamp(void); static int saveguardSame(const char*, const char*);)
 // ===[ Write queue ]===
 static bool racefixSave(const char* path, const uint8_t* data, size_t size); static void racefixLost(void); // end of file
 static void freeJob(WriteJob* job) {
     free(job->key);
     free(job->data);
 }
-
+R216_UT(static void saveguardRun(CtrFileSystem*, const WriteJob*);) // R216b, file end
 static void noteSaveFailure(CtrFileSystem* cfs, const char* key) {
     racefixLost();
     LightLock_Lock(&cfs->lock);
@@ -380,7 +382,7 @@ static void writerMain(void* arg) {
             WriteJob job = cfs->queue[0];
             LightLock_Unlock(&cfs->lock);
             CtrWatchdog_note("writing a save file");
-            runJob(cfs, &job);
+            R216_PICK(saveguardRun, runJob)(cfs, &job);
             LightLock_Lock(&cfs->lock);
             freeJob(&cfs->queue[0]);
             arrdel(cfs->queue, 0);
@@ -461,7 +463,7 @@ static void queueWrite(CtrFileSystem* cfs, char* key, uint8_t* data, int32_t siz
     }
     shput(cfs->exists, key, true);
     noteWritten(cfs, key, data, size);
-    WriteJob job = { key, data, size, nowNanos() };
+    WriteJob job = { key, data, size, R216_PICK(saveguardStamp, nowNanos)() };
     if (cfs->thread == nullptr) {
         runJob(cfs, &job);
         freeJob(&job);
@@ -471,14 +473,14 @@ static void queueWrite(CtrFileSystem* cfs, char* key, uint8_t* data, int32_t siz
     // An older write of the same file that hasn't started is replaced. The
     // front job may be being written right now, so it stays.
     for (ptrdiff_t i = arrlen(cfs->queue) - 1; i >= 1; i--) {
-        if (strcmp(cfs->queue[i].key, key) == 0) {
+        if (R216_PICK(saveguardSame, strcmp)(cfs->queue[i].key, key) == 0) {
             freeJob(&cfs->queue[i]);
             arrdel(cfs->queue, i);
         }
     }
     arrput(cfs->queue, job);
     CondVar_Signal(&cfs->wake);
-    LightLock_Unlock(&cfs->lock);
+    LightLock_Unlock(&cfs->lock); R216_UT(__asm__ volatile(".rept 9\n\tnop\n\t.endr");) // R216b4: queueWrite keeps its size
 }
 
 // Copies the newest queued contents of key. Returns false when the file has
@@ -973,14 +975,14 @@ static bool racefixOwn RACEFIX_BSS; // racefixSave just gave up on racefixThread
 static Thread racefixThread RACEFIX_BSS; // nullptr on the main thread
 static const char racefixSavedText[] RACEFIX_RO = "Files: saved %s at try %d%s\n";
 static const char racefixClearedText[] RACEFIX_RO = "; Saving failed cleared";
-
+R216_UT(static bool saveguardWrite(const char*, const uint8_t*, size_t);) // R216b, file end
 // runJob's CtrSafeSave_write (which is safe to repeat: it recovers, compares, then writes a temporary and promotes it).
 static RACEFIX_CODE bool racefixSave(const char* path, const uint8_t* data, size_t size) {
     bool ok = false;
     int tries = 0;
     while (!ok && RACEFIX_TRIES > tries) {
         if (0 < tries++) svcSleepThread(RACEFIX_GAP_NS);
-        ok = CtrSafeSave_write(path, data, size);
+        ok = R216_PICK(saveguardWrite, CtrSafeSave_write)(path, data, size);
     }
     uint32_t h = 2166136261u; // FNV-1a of the path, case folded (the card's names aren't case sensitive); never 0
     for (const char* c = path; *c != '\0'; c++) h = (h ^ (uint32_t) tolower((unsigned char) *c)) * 16777619u;
@@ -1064,3 +1066,153 @@ SLEEPFLUSH_FS_CODE int CtrFileSystem_flushBy(FileSystem* fs, uint64_t deadline) 
 OVERLAYREAD_FS_CODE bool CtrFileSystem_readStrict(const char* fullPath, uint8_t** outData, int32_t* outSize) {
     return readWhole(fullPath, INT32_MAX, outData, outSize);
 }
+
+#ifdef ENABLE_WAD16 // R216b..R216b4: UNDERTALE only (ctr_r216_ut.h)
+#line 1068
+// ===[ saveguard (change auditfixe2 R216b, c26rev2 R216 finding 2, R216b findings 1-4, R216b2 findings 1-2, R216b3 findings 1-3): no save after a fatal claim, as on PC ]===
+//
+// On PC a save is written at the save action, so every save made before a crash is already on the disk and nothing
+// saves after it. Here the writer thread writes a save 0.5 s after it is queued (WRITE_DELAY_NS), so a fault could
+// come between, and a save could still be queued, or written, after the fault. ctr_lab.c's fatal claim (the thread
+// that takes the leave first: a fault, CtrLab_fail, a hang, or an exit that has to end the run itself) now closes the
+// queue. CtrLab_fatalAt (ctr_lab.c's end) answers 0 before the claim and the claim's clock after it: the clock read on
+// the claimer's way in, a few instructions before its claim (or a later read by a thread on its way in, still before
+// the claim), never a read after it (R216b2 finding 1), and no look by an observer before it (R216b3 finding 1: a card
+// write stalled before the fault made that look seconds old). So a save queued before the claim has its 2 s from the
+// claim, and no write starts later than 2 s after the claim, however late the claimer or anyone else asks.
+//  - A save queued before the claim still goes to the card, until SAVEGUARD_UNITS (2 s) past that clock: room for its
+//    0.5 s write delay and a few files. Past the deadline the writer starts no write and no retry, and drops the jobs
+//    left (saveguardRun, saveguardWrite). A write already under way at the deadline, or when the process ends, can't
+//    leave half a save: CtrSafeSave_write writes a temporary and swaps it in by renames, and the next start restores
+//    the .bak (as for a power cut).
+//  - A save queued after the claim never reaches the card: its job is stamped SAVEGUARD_LATE, replaces no job queued
+//    before (saveguardSame), and is dropped at its turn (saveguardRun). After the claim only the writer thread's
+//    dispatch of a job stamped before it may write (saveguardWrite): with no writer thread, the game thread's own
+//    write is refused. The cache (noteWritten) still holds it, for reads in this run only.
+//  - The crash's exit (ctr_lab.c leave) waits, up to the same deadline, until every save queued before the claim has
+//    been written or dropped, then ends the run as before (CtrSaveguard_exit). The test is a count of outstanding
+//    saves, no clock (R216b finding 4): saveguardIssued counts each save at its stamp, and saveguardEnded each that is
+//    done with: written or dropped by the writer (saveguardRun) or made after the claim (at its stamp). Both count
+//    modulo 2^32; every save is done with when they are equal. A save replaced in the queue by a newer save of the same
+//    file is never counted done (saveguardSame only compares: R216b2 finding 2), nor is a save written on the game
+//    thread at its stamp with no writer thread (threadCreate failed): after either, the exit waits out the deadline.
+// Outside the guard: a delete or rename of a save (the game's file_delete or file_rename, at once on the game thread).
+// Every old function keeps its size: queueWrite's clock and name compare, writerMain's runJob and racefixSave's
+// CtrSafeSave_write only call these instead. Every static here is read and written only atomically (R216b finding 3).
+// Late code and statics, after every other late input (late_reserve.ld: .text_saveguard, .bss.saveguard_late). No
+// string, so no late rodata.
+#ifdef __3DS__
+#define SAVEGUARD_CODE __attribute__((noinline, noipa, section(".text_saveguard")))
+#define SAVEGUARD_BSS __attribute__((section(".bss.saveguard_late")))
+uint32_t CtrLab_fatalAt(void);
+#else // tools/analysis/test_saveguard.py sets the hook; the other host tests of this file leave it unset (no claim)
+#define SAVEGUARD_CODE __attribute__((noinline))
+#define SAVEGUARD_BSS
+uint32_t (*CtrSaveguard_hostFatalAt)(void);
+static uint32_t CtrLab_fatalAt(void) {
+    return CtrSaveguard_hostFatalAt != nullptr ? CtrSaveguard_hostFatalAt() : 0;
+}
+#endif
+#define SAVEGUARD_UNITS 2045u // 2 s in CtrLab_fatalAt's units: 2 * SYSCLOCK_ARM11 (268,111,856 Hz) >> 18
+#define SAVEGUARD_LATE UINT64_MAX // the queue clock of a save made after the claim
+#define SAVEGUARD_SLICE_NS (10ll * 1000000ll)
+
+static bool saveguardOver SAVEGUARD_BSS; // the deadline has passed (it stays so)
+static bool saveguardLateSeen SAVEGUARD_BSS; // a save was made after the claim
+static Thread saveguardWriter SAVEGUARD_BSS; // the writer thread while it dispatches a save stamped before the claim
+static uint32_t saveguardIssued SAVEGUARD_BSS; // saves stamped (modulo 2^32)
+static uint32_t saveguardEnded SAVEGUARD_BSS; // of those, the ones done with (modulo 2^32)
+
+// Whether the claim's deadline has passed (at: CtrLab_fatalAt's answer, 0 before the claim).
+static SAVEGUARD_CODE bool saveguardExpired(uint32_t at) {
+    if (at == 0) return false;
+    if (!__atomic_load_n(&saveguardOver, __ATOMIC_ACQUIRE) &&
+        SAVEGUARD_UNITS <= (uint32_t) (svcGetSystemTick() >> 18) - at)
+        __atomic_store_n(&saveguardOver, true, __ATOMIC_RELEASE);
+    return __atomic_load_n(&saveguardOver, __ATOMIC_ACQUIRE);
+}
+
+// A save is done with.
+static SAVEGUARD_CODE void saveguardEnd(void) {
+    __atomic_add_fetch(&saveguardEnded, 1u, __ATOMIC_SEQ_CST);
+}
+
+// queueWrite's clock for its new job (nowNanos before). The save is counted first, then the claim is asked: with the
+// fence here and the one in CtrSaveguard_settle, a save stamped as the claim comes is either late or counted in the
+// claimer's settle (no store-buffer reordering between the two threads).
+static SAVEGUARD_CODE uint64_t saveguardStamp(void) {
+    __atomic_add_fetch(&saveguardIssued, 1u, __ATOMIC_SEQ_CST);
+    __atomic_thread_fence(__ATOMIC_SEQ_CST);
+    if (CtrLab_fatalAt() != 0) {
+        __atomic_store_n(&saveguardLateSeen, true, __ATOMIC_RELEASE);
+        saveguardEnd();
+        return SAVEGUARD_LATE;
+    }
+    return nowNanos();
+}
+
+// queueWrite's compare of a queued job's name with the new one's (strcmp before), under the queue's lock, once for
+// each queued job behind the front: once a save has been made after the claim (saveguardStamp, which queueWrite calls
+// first), no job is replaced, so a save queued before the claim keeps its place and its contents. Not declared pure
+// (R216b3 finding 3: its answer follows saveguardLateSeen, which another thread sets). Without pure, queueWrite's code
+// is 36 bytes shorter; nine nops on its last line keep its size, so nothing after it moves (only queueWrite's own bytes
+// differ). A replaced save is not counted done (R216b2 finding 2): the exit then waits out the deadline.
+static SAVEGUARD_CODE int saveguardSame(const char* queued, const char* key) {
+    if (__atomic_load_n(&saveguardLateSeen, __ATOMIC_ACQUIRE)) return 1;
+    return strcmp(queued, key);
+}
+
+// writerMain's dispatch of the front job (runJob before).
+static SAVEGUARD_CODE void saveguardRun(CtrFileSystem* cfs, const WriteJob* job) {
+    if (job->queuedAt == SAVEGUARD_LATE) return; // done with at its stamp
+    if (!saveguardExpired(CtrLab_fatalAt())) {
+        __atomic_store_n(&saveguardWriter, threadGetCurrent(), __ATOMIC_RELEASE);
+        runJob(cfs, job);
+        __atomic_store_n(&saveguardWriter, nullptr, __ATOMIC_RELEASE);
+    }
+    saveguardEnd();
+}
+
+// racefixSave's write and each retry (CtrSafeSave_write before). After the claim, only the writer's dispatch of a
+// save stamped before it may write, and only until the deadline.
+static SAVEGUARD_CODE bool saveguardWrite(const char* path, const uint8_t* data, size_t size) {
+    uint32_t at = CtrLab_fatalAt();
+    if (at != 0) {
+        Thread writer = __atomic_load_n(&saveguardWriter, __ATOMIC_ACQUIRE);
+        if (writer == nullptr || writer != threadGetCurrent() || saveguardExpired(at)) return false;
+    }
+    return CtrSafeSave_write(path, data, size);
+}
+
+// Waits, up to the deadline, until every save stamped before the claim is done with. Returns at once before a claim.
+// Ended is read before issued: a save stamped between the two reads (a late one, counted done at once) can only make
+// them differ, so the wait can only last longer, never end early.
+SAVEGUARD_CODE void CtrSaveguard_settle(void) {
+    __atomic_thread_fence(__ATOMIC_SEQ_CST);
+    uint32_t at = CtrLab_fatalAt();
+    while (at != 0 && !saveguardExpired(at)) {
+        uint32_t ended = __atomic_load_n(&saveguardEnded, __ATOMIC_SEQ_CST);
+        if (__atomic_load_n(&saveguardIssued, __ATOMIC_SEQ_CST) == ended) break;
+        svcSleepThread(SAVEGUARD_SLICE_NS);
+    }
+}
+
+#ifdef __3DS__
+void CtrExitFiles_labExit(void) __attribute__((noreturn));
+void CtrLab_claimMark(void);
+void LabProto_append(char* buffer, size_t size, const char* text);
+
+// ctr_lab.c leave's end (CtrExitFiles_labExit before): the saves queued before the claim settle, then the exit.
+SAVEGUARD_CODE __attribute__((noreturn)) void CtrSaveguard_exit(void) {
+    CtrSaveguard_settle();
+    CtrExitFiles_labExit();
+}
+
+// ctr_lab.c's every LabProto_append (renamed at its top): after the claim, the claim's clock is fixed if nothing has
+// fixed it yet (CtrLab_claimMark, ctr_lab.c's end), then the append as before.
+SAVEGUARD_CODE void CtrSaveguard_labAppend(char* buffer, size_t size, const char* text) {
+    CtrLab_claimMark();
+    LabProto_append(buffer, size, text);
+}
+#endif
+#endif

@@ -30,7 +30,12 @@ def fingerprint(record):
     return hashlib.sha256(json.dumps(record, sort_keys=True, separators=(',', ':')).encode('ascii')).hexdigest()
 
 
-def require_store_parity(steam, gog):
+# Items one store's atlas needs and the other's does not, by exact scene and item; each one reviewed. Everything else
+# must match in count. gogperf R344: on GOG the handoff to Undying's scene 92 needs this item staged by scene 91.
+GOG_EXTRA_ITEMS = {(306, 91): ([255, 941],), (319, -1): ([255, 1884], [255, 2854], [255, 4423])}
+
+
+def require_store_parity(steam, gog, *, allow_gog_extras=True):
     """Reject a stale or incomplete atlas reprojection before accepting its coverage."""
     if gog.get('source_record_sha256') != fingerprint(steam):
         raise ValueError('GOG room record is not projected from the current Steam record')
@@ -46,6 +51,10 @@ def require_store_parity(steam, gog):
                     sorted(gog['scenes'], key=lambda s: (s['room'], s['sub']))):
         if (a['visits'], a['code']) != (b['visits'], b['code']):
             raise ValueError('Steam/GOG visit or code coverage differs')
+        extra = GOG_EXTRA_ITEMS.get((b['room'], b['sub']), ()) if allow_gog_extras else ()
+        gog_items = sum(1 for item in b['items'] if item not in extra)
+        if (len(a['items']), len(a.get('parts', []))) != (gog_items, len(b.get('parts', []))):
+            raise ValueError('Steam/GOG item or part coverage differs')
 
 
 def read_logs(paths, counts=None):

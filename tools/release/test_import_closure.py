@@ -176,17 +176,22 @@ class ClosureTests(unittest.TestCase):
     def test_both_current_manifests_close(self):
         root = Path(__file__).resolve().parents[2]
         names = {line.strip() for short in ('ut', 'dr')
+                 if (root / ('tools/release/manifest-%s.txt' % short)).is_file()
                  for line in (root / ('tools/release/manifest-%s.txt' % short)).read_text().splitlines()
                  if line.strip() and not line.lstrip().startswith('#')}
         repo = FilesystemSource(root, names)
         for game, short in (('undertale', 'ut'), ('deltarune', 'dr')):
-            manifest = {line.strip() for line in (root / ('tools/release/manifest-%s.txt' % short)).read_text().splitlines()
-                        if line.strip() and not line.lstrip().startswith('#')}
-            report = gate.check(repo, manifest, game)
-            self.assertEqual(report['missing'], [], game)
-            self.assertIn('tools/aot/escape.py', report['required'])
-            self.assertIn('tools/release/import_closure.py', report['required'])
-            self.assertTrue(any(p.startswith('tools/aot/selection/') for p in report['required']))
+            with self.subTest(game=game):
+                path = root / ('tools/release/manifest-%s.txt' % short)
+                if not path.is_file():
+                    self.skipTest('This source export does not include the ' + short + ' manifest')
+                manifest = {line.strip() for line in path.read_text().splitlines()
+                            if line.strip() and not line.lstrip().startswith('#')}
+                report = gate.check(repo, manifest, game)
+                self.assertEqual(report['missing'], [], game)
+                self.assertIn('tools/aot/escape.py', report['required'])
+                self.assertIn('tools/release/import_closure.py', report['required'])
+                self.assertTrue(any(p.startswith('tools/aot/selection/') for p in report['required']))
 
     def test_release_gate_calls_closure_before_assembling_archive(self):
         root = Path(__file__).resolve().parents[2]
@@ -212,9 +217,13 @@ class ClosureTests(unittest.TestCase):
         sys.path.insert(0, str(root / 'tools/release/builder'))
         import pipeline
         for game, short in (('undertale', 'ut'), ('deltarune', 'dr')):
-            self.assertTrue(pipeline.source_wanted('tools/roomplan/closure.py', game))
-            manifest = (root / ('tools/release/manifest-%s.txt' % short)).read_text().splitlines()
-            self.assertIn('tools/roomplan/closure.py', manifest)
+            with self.subTest(game=game):
+                path = root / ('tools/release/manifest-%s.txt' % short)
+                if not path.is_file():
+                    self.skipTest('This source export does not include the ' + short + ' manifest')
+                self.assertTrue(pipeline.source_wanted('tools/roomplan/closure.py', game))
+                manifest = path.read_text().splitlines()
+                self.assertIn('tools/roomplan/closure.py', manifest)
         self.assertTrue((root / 'tools/roomplan/closure.py').is_file())
 
     def test_packaged_build_driver_closure_survives_the_source_filter(self):
@@ -222,11 +231,14 @@ class ClosureTests(unittest.TestCase):
         sys.path.insert(0, str(root / 'tools/release/builder'))
         import pipeline
         names = {line.strip() for short in ('ut', 'dr')
+                 if (root / ('tools/release/manifest-%s.txt' % short)).is_file()
                  for line in (root / ('tools/release/manifest-%s.txt' % short)).read_text().splitlines()
                  if line.strip() and not line.lstrip().startswith('#')}
         repo = FilesystemSource(root, names)
         for game, short in (('undertale', 'ut'), ('deltarune', 'dr')):
             with self.subTest(game=game):
+                if not (root / ('tools/release/manifest-%s.txt' % short)).is_file():
+                    self.skipTest('This source export does not include the ' + short + ' manifest')
                 manifest = {line.strip() for line in (root / ('tools/release/manifest-%s.txt' % short)).read_text().splitlines()
                             if line.strip() and not line.lstrip().startswith('#')}
                 mirrored = {name for name in manifest if pipeline.source_wanted(name, game)}

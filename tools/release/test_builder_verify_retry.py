@@ -34,6 +34,11 @@ class VerifyRetryTests(unittest.TestCase):
         patch = mock.patch.object(products, 'load_music_manifest', return_value=manifest)
         patch.start()
         self.addCleanup(patch.stop)
+        patch = mock.patch.object(products, 'load_credits_manifest', return_value=dict(
+            name='credits.txt', size=len(b'invented credits'),
+            sha256=hashlib.sha256(b'invented credits').hexdigest()))
+        patch.start()
+        self.addCleanup(patch.stop)
         real = discover.verify_copy
         self.verify = mock.Mock(side_effect=lambda game, folder, probes: real(game, folder, probes, allow_list=ALLOW))
         patch = mock.patch.object(discover, 'verify_copy', self.verify)

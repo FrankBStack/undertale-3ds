@@ -64,6 +64,8 @@
 #                              separate build directory, never a release)
 #                              [bfprobe] (main-thread waits in a sweep, [bfprobe] log lines; ctr_benchmark.c's end;
 #                              separate build directory, never a release)
+#                              [arenalog] (UNDERTALE o3ds: the audio arena with peak, fallback and heap-lock census lines;
+#                              separate build directory, never a release)
 #                              [asgprobe] (UNDERTALE test only: ARM11 counters and per-frame drawSprite ticks, source/ctr_asgprobe.c;
 #                              asgframes.txt / asgtime.txt / asgdump.txt in the game folder; separate build directory, never a release)
 #                              [frametrace] (every frame of a bench window: phases, pacer, GPU waits, SD calls, decodes,
@@ -235,6 +237,7 @@ uttc_mode=     # uttc (change uthunt T1, test words): empty, OFF (uttc=off) or F
 dprank_mode=   # dprank (change uthunt, test words): empty, OFF (dprank=off: always the scan) or DIAG (dprank-diag)
 testpage=OFF   # testpage: one more 4 KiB page of UNDERTALE late code (measurement builds only, never a release)
 bfprobe=OFF
+arenalog=OFF
 frametrace=OFF
 asgprobe=OFF
 flowdiag=OFF
@@ -339,6 +342,7 @@ for arg in "$@"; do
         dprank=off) dprank_mode=OFF ;;
         dprank-diag) dprank_mode=DIAG ;;
         bfprobe) bfprobe=ON ;;
+        arenalog) arenalog=ON ;;
         frametrace) frametrace=ON ;;
         asgprobe) asgprobe=ON ;;
         flowdiag) flowdiag=ON ;;
@@ -647,6 +651,9 @@ fi
 if [ "$bfprobe" = ON ]; then
     build="$build-bfprobe"
 fi
+if [ "$arenalog" = ON ]; then
+    build="$build-arenalog"
+fi
 if [ "$asgprobe" = ON ]; then
     build="$build-asgprobe"
 fi
@@ -730,7 +737,7 @@ if [ "$game" = undertale ]; then
     input_args=(--build-input undertale --cache "$(native_path "$repo/build/data-versions-$game")")
     if [ -n "$data_dir" ]; then input_args+=(--data "$(native_path "$data_dir")"); fi
     set +e
-    data_size=$("${python[@]}" -I "$(native_path "$repo/tools/aot/data_versions.py")" "${input_args[@]}")
+    data_size=$("${python[@]}" -X utf8 -I "$(native_path "$repo/tools/aot/data_versions.py")" "${input_args[@]}")
     rc=$?
     set -e
     data_size=$(printf '%s' "$data_size" | tr -d '\r')
@@ -744,7 +751,7 @@ if [ "$aot_mode" != auto ] && [ -n "${python:-}" ]; then
     version_args=(--check-only --game "$game" --target "$target" --out "$(native_path "$repo/build/data-versions-$game")")
     if [ -n "$data_dir" ]; then version_args+=(--data "$(native_path "$data_dir")"); fi
     set +e
-    "${python[@]}" -I "$(native_path "$repo/tools/aot/prepare.py")" "${version_args[@]}"
+    "${python[@]}" -X utf8 -I "$(native_path "$repo/tools/aot/prepare.py")" "${version_args[@]}"
     rc=$?
     set -e
     if [ "$rc" != 0 ] && [ "$rc" != 3 ]; then exit "$rc"; fi
@@ -764,7 +771,7 @@ if [ "$aot_mode" = auto ]; then
         gate_args=(--source "$(native_path "$here/source/vine_titancpu.inc")")
         if [ -n "$data_dir" ]; then gate_args+=(--data "$(native_path "$data_dir")"); fi
         set +e
-        "${python[@]}" -I "$(native_path "$repo/tools/aot/check_dspe_gate.py")" "${gate_args[@]}"
+        "${python[@]}" -X utf8 -I "$(native_path "$repo/tools/aot/check_dspe_gate.py")" "${gate_args[@]}"
         rc=$?
         set -e
         if [ "$rc" = 2 ]; then
@@ -782,7 +789,7 @@ if [ "$aot_mode" = auto ]; then
         prep_args+=(--data "$(native_path "$data_dir")")
     fi
     set +e
-    "${python[@]}" -I "$(native_path "$repo/tools/aot/prepare.py")" "${prep_args[@]}"
+    "${python[@]}" -X utf8 -I "$(native_path "$repo/tools/aot/prepare.py")" "${prep_args[@]}"
     rc=$?
     set -e
     if [ "$rc" = 0 ]; then
@@ -827,15 +834,15 @@ if [ "$game" = undertale ]; then
     grid="$repo/build/pixgrid-undertale/pixgrid_runs.inc"
     grid_args=(--out "$(native_path "$grid")")
     if [ -n "$data_dir" ]; then grid_args+=(--data "$(native_path "$data_dir")"); fi
-    "${python[@]}" -I "$(native_path "$repo/tools/aot/pixgrid.py")" "${grid_args[@]}"
+    "${python[@]}" -X utf8 -I "$(native_path "$repo/tools/aot/pixgrid.py")" "${grid_args[@]}"
     pixgrid_runs=$grid
     prompt_args=(--out "$(native_path "$repo/build/pixgrid-undertale")")
     if [ -n "$data_dir" ]; then prompt_args+=(--data "$(native_path "$data_dir")"); fi
-    "${python[@]}" -I "$(native_path "$repo/tools/aot/btnprompt_build.py")" "${prompt_args[@]}"
+    "${python[@]}" -X utf8 -I "$(native_path "$repo/tools/aot/btnprompt_build.py")" "${prompt_args[@]}"
     # UNDERTALE Old's covered-star key (tools/aot/dskip.py; the no-key values when the data isn't a checked version).
     skip_args=(--out "$(native_path "$repo/build/pixgrid-undertale/dskip_key.inc")")
     if [ -n "$data_dir" ]; then skip_args+=(--data "$(native_path "$data_dir")"); fi
-    "${python[@]}" -I "$(native_path "$repo/tools/aot/dskip.py")" "${skip_args[@]}"
+    "${python[@]}" -X utf8 -I "$(native_path "$repo/tools/aot/dskip.py")" "${skip_args[@]}"
 fi
 
 # The loading screens' art (z_loadscreen.c), cut from the player's own files (tools/aot/loadscreen_art.py) into the
@@ -846,7 +853,7 @@ if [ -n "${python:-}" ]; then
     art="$repo/build/loadscreen-$game/loadscreen.bin"
     art_args=(--out "$(native_path "$art")" --game "$game")
     if [ -n "$data_dir" ]; then art_args+=(--data "$(native_path "$data_dir")"); fi
-    "${python[@]}" -I "$(native_path "$repo/tools/aot/loadscreen_art.py")" "${art_args[@]}" || true
+    "${python[@]}" -X utf8 -I "$(native_path "$repo/tools/aot/loadscreen_art.py")" "${art_args[@]}" || true
     if [ -f "$art" ]; then loadscreen_art=$art; fi
 fi
 
@@ -861,13 +868,13 @@ if [ "$game" = deltarune ] && [ -f "$repo/tools/analysis/crispart_pack.py" ]; th
     crispart_why=
     if [ -z "${python:-}" ]; then
         crispart_why="no Python"
-    elif ! crispart_check=$("${python[@]}" -I "$(native_path "$repo/tools/analysis/crispart_pack.py")" --check-tools 2>&1); then
+    elif ! crispart_check=$("${python[@]}" -X utf8 -I "$(native_path "$repo/tools/analysis/crispart_pack.py")" --check-tools 2>&1); then
         crispart_why="tools/analysis/crispart_pack.py can't import its tools ($(printf '%s\n' "$crispart_check" | tr -d '\r' | tail -n 1))"
     else
         crispart_out="$repo/build/crispart-deltarune"
         crispart_args=(--out "$(native_path "$crispart_out")")
         if [ -n "$data_dir" ]; then crispart_args+=(--data "$(native_path "$data_dir")"); fi
-        if "${python[@]}" -I "$(native_path "$repo/tools/analysis/crispart_pack.py")" "${crispart_args[@]}"; then
+        if "${python[@]}" -X utf8 -I "$(native_path "$repo/tools/analysis/crispart_pack.py")" "${crispart_args[@]}"; then
             crispart_dir=$crispart_out
         else
             crispart_why="tools/analysis/crispart_pack.py failed (its output is above)"
@@ -903,7 +910,7 @@ if [ -n "$halfart" ]; then
              --out "$(native_path "$ha_dir/$game-$halfart.dthr")" --remap "$(native_path "$ha_dir/$game-$halfart.json")"
              --report "$(native_path "$ha_dir/$game-$halfart-report.json")" --pages "$(native_path "$ha_dir/$game-$halfart.pages")")
     if [ -n "$data_dir" ]; then ha_args+=(--data "$(native_path "$data_dir")"); fi
-    "${python[@]}" -I "$(native_path "$repo/tools/analysis/halfart_pack.py")" "${ha_args[@]}"
+    "${python[@]}" -X utf8 -I "$(native_path "$repo/tools/analysis/halfart_pack.py")" "${ha_args[@]}"
     halfart_file=$ha_dir/$game-$halfart.dthr
     halfart_remap=$ha_dir/$game-$halfart.json
 fi
@@ -922,7 +929,7 @@ if [ "$roomplan" = ON ] && [ -n "${python:-}" ]; then
     if [ -n "$data_dir" ]; then plan_args+=(--data "$(native_path "$data_dir")"); fi
     if [ -n "$halfart_remap" ]; then plan_args+=(--halfart "$(native_path "$halfart_remap")"); fi
     set +e
-    "${python[@]}" -I "$(native_path "$repo/tools/roomplan/build_plan.py")" "${plan_args[@]}"
+    "${python[@]}" -X utf8 -I "$(native_path "$repo/tools/roomplan/build_plan.py")" "${plan_args[@]}"
     rc=$?
     set -e
     if [ "$rc" = 0 ] && [ "$game" = deltarune ]; then
@@ -935,7 +942,7 @@ if [ "$roomplan" = ON ] && [ -n "${python:-}" ]; then
             # (build_tracks.py). Without repackplans they stay as today (repacka: identity-exact, 10-28).
             if [ -n "$repack_test" ] && [ "$repack_plans" = ON ]; then track_args+=(--repack "$(native_path "$repack_test")"); fi
             set +e
-            "${python[@]}" -I "$(native_path "$repo/tools/roomplan/build_tracks.py")" "${track_args[@]}"
+            "${python[@]}" -X utf8 -I "$(native_path "$repo/tools/roomplan/build_tracks.py")" "${track_args[@]}"
             rc=$?
             set -e
             if [ "$rc" = 2 ]; then
@@ -949,7 +956,7 @@ if [ "$roomplan" = ON ] && [ -n "${python:-}" ]; then
                 share_args=(--out "$(native_path "$plan_out")")
                 if [ -n "$data_dir" ]; then share_args+=(--data "$(native_path "$data_dir")"); fi
                 set +e
-                "${python[@]}" -I "$(native_path "$repo/tools/roomplan/build_sharebuf.py")" "${share_args[@]}"
+                "${python[@]}" -X utf8 -I "$(native_path "$repo/tools/roomplan/build_sharebuf.py")" "${share_args[@]}"
                 rc=$?
                 set -e
                 if [ "$rc" = 2 ]; then
@@ -983,7 +990,7 @@ if [ "$game" = deltarune ] && [ "$roomplan" = ON ] && [ -n "${python:-}" ]; then
     # (build_phases.py).
     if [ -n "$repack_test" ] && [ "$repack_plans" = ON ]; then phase_args+=(--repack "$(native_path "$repack_test")"); fi
     set +e
-    "${python[@]}" -I "$(native_path "$repo/tools/roomplan/build_phases.py")" "${phase_args[@]}"
+    "${python[@]}" -X utf8 -I "$(native_path "$repo/tools/roomplan/build_phases.py")" "${phase_args[@]}"
     rc=$?
     set -e
     if [ "$rc" = 0 ]; then
@@ -1011,7 +1018,7 @@ if [ "$roomplan" = ON ] && [ "$game" = undertale ] && [ -n "${python:-}" ]; then
     sfx_args+=(--out "$(native_path "$sfx_out")")
     if [ -n "$data_dir" ]; then sfx_args+=(--data "$(native_path "$data_dir")"); fi
     set +e
-    "${python[@]}" -I "$(native_path "$repo/tools/roomplan/build_sfxplan.py")" "${sfx_args[@]}"
+    "${python[@]}" -X utf8 -I "$(native_path "$repo/tools/roomplan/build_sfxplan.py")" "${sfx_args[@]}"
     rc=$?
     set -e
     if [ "$rc" = 0 ]; then
@@ -1030,10 +1037,10 @@ if [ "$audio_convert" = ON ]; then
         exit 2
     fi
     audio_out="$repo/build/audio-adpcm-$game"
-    "${python[@]}" -I "$(native_path "$repo/tools/audio/prepare.py")" \
+    "${python[@]}" -X utf8 -I "$(native_path "$repo/tools/audio/prepare.py")" \
         --data "$(native_path "$data_dir")" --out "$(native_path "$audio_out")"
     audio_sd_out="$repo/build/audio-sd-$game/audio-adpcm"
-    "${python[@]}" -I "$(native_path "$repo/tools/audio/stage.py")" \
+    "${python[@]}" -X utf8 -I "$(native_path "$repo/tools/audio/stage.py")" \
         --data "$(native_path "$data_dir")" --prepared "$(native_path "$audio_out")" \
         --out "$(native_path "$audio_sd_out")"
     echo "ADPCM assets staged at $audio_sd_out; game adapter selection remains disabled"
@@ -1066,7 +1073,7 @@ if [ "$game" = deltarune ]; then
     if [ "$target" = n3ds ]; then
         chapter_args=(--out "$(native_path "$build/romfs/chapters.txt")")
         if [ -n "$data_dir" ]; then chapter_args+=(--data "$(native_path "$data_dir")"); fi
-        "${python[@]}" "$repo/tools/aot/chapter_manifest.py" "${chapter_args[@]}"
+        "${python[@]}" -X utf8 "$repo/tools/aot/chapter_manifest.py" "${chapter_args[@]}"
     else
         rm -f "$build/romfs/chapters.txt"
     fi
@@ -1077,7 +1084,7 @@ fi
 # $CTRPORT_CCACHE_DIR says otherwise. Reuse the already qualified interpreter.
 launcher=
 if [ "${CTRPORT_CCACHE:-1}" != 0 ]; then
-    cc_python=$("${python[@]}" -c 'import sys; print(sys.executable)' | tr -d '\r')
+    cc_python=$("${python[@]}" -X utf8 -c 'import sys; print(sys.executable)' | tr -d '\r')
     if command -v cygpath > /dev/null 2>&1; then cc_python=$(cygpath -u "$cc_python"); fi
     if [ -n "$cc_python" ]; then
         cache_dir=${CTRPORT_CCACHE_DIR:-}
@@ -1090,7 +1097,7 @@ if [ "${CTRPORT_CCACHE:-1}" != 0 ]; then
             cache_dir="$main_checkout/scratch/ccache"
         fi
         mkdir -p "$cache_dir"
-        launcher="$cc_python;-I;-S;$(native_path "$repo/tools/buildcache/compile_cache.py");--cache-dir=$(native_path "$cache_dir")"
+        launcher="$cc_python;-X;utf8;-I;-S;$(native_path "$repo/tools/buildcache/compile_cache.py");--cache-dir=$(native_path "$cache_dir")"
         export CTRPORT_CCACHE_LOG="$(native_path "$build")/compile_cache.log"
     else
         echo "compile cache: no Python 3.8 or later found (tried python3, python and py -3); building uncached" >&2
@@ -1107,7 +1114,7 @@ gog_compat=OFF
 if [ "$game" = undertale ]; then
     gog_args=(--build-flag)
     if [ -n "$data_dir" ]; then gog_args+=(--data "$(native_path "$data_dir")"); fi
-    gog_compat=$("${python[@]}" -I "$(native_path "$repo/tools/aot/gog_smart.py")" "${gog_args[@]}" | tr -d '\r')
+    gog_compat=$("${python[@]}" -X utf8 -I "$(native_path "$repo/tools/aot/gog_smart.py")" "${gog_args[@]}" | tr -d '\r')
 fi
 
 if [ "$flowcode" = ON ]; then
@@ -1118,7 +1125,7 @@ if [ "$flowcode" = ON ]; then
         flowcode_plan="$repo/build/roomplan-deltarune/chapter5-flowcode.bin"
         flowcode_args=(--record "$(native_path "$repo/tools/roomplan/records/deltarune-steam-0.0.253-chapter5.json")" --record "$(native_path "$repo/tools/roomplan/flowcode-records/chapter5-flowery.json")" --record "$(native_path "$repo/tools/roomplan/flowcode-records/chapter5-dr44.json")" --out "$(native_path "$flowcode_plan")")
         if [ -n "$data_dir" ]; then flowcode_args+=(--data "$(native_path "$data_dir")"); fi
-        "${python[@]}" -I "$(native_path "$repo/tools/roomplan/build_flowcode.py")" "${flowcode_args[@]}"
+        "${python[@]}" -X utf8 -I "$(native_path "$repo/tools/roomplan/build_flowcode.py")" "${flowcode_args[@]}"
     fi
     # MSYS CMake needs its own absolute path, including for a native Windows
     # flowcode-plan path supplied by a detached Python driver.
@@ -1182,7 +1189,7 @@ cmake -S "$here" -B "$build" -G "Unix Makefiles" \
     -DCTRPORT_PHASE_LAYOUT="$phase_layout" \
     -DCTRPORT_SPIKEREC="$spikerec" -DCTRPORT_TITANDIAG="$titandiag" -DCTRPORT_FREEWINS="$freewins" \
     -DCTRPORT_UTTC_MODE="$uttc_mode" -DCTRPORT_DPRANK_MODE="$dprank_mode" -DCTRPORT_TEST_LATE_PAGE="$testpage" \
-    -DCTRPORT_BENCHFIX_PROBE="$bfprobe" -DCTRPORT_FRAMETRACE="$frametrace" -DCTRPORT_ASG_PROBE="$asgprobe" -DCTRPORT_FLOWSTREAM_DIAG="$flowdiag" \
+    -DCTRPORT_BENCHFIX_PROBE="$bfprobe" -DCTRPORT_PACER_ARENA_LOG="$arenalog" -DCTRPORT_FRAMETRACE="$frametrace" -DCTRPORT_ASG_PROBE="$asgprobe" -DCTRPORT_FLOWSTREAM_DIAG="$flowdiag" \
     -DCTRPORT_EXITTRAIL="$exittrail" -DCTRPORT_WRITERFRONT_MODE="$writerfront" \
     -DCTRPORT_FLOWERHW_TPROF="$towerprof" -DCTRPORT_FLOWERHW_FORCE="$towerforce" \
     -DCTRPORT_FLOWERHW_L2="$ppl2" -DCTRPORT_FLOWERHW_PPFORCE="$ppforce" \
@@ -1200,7 +1207,7 @@ if [ -n "${python:-}" ]; then
     echo "Builder phase: Preparing graphics"
     font_args=(--game "$game" --target "$target" --romfs "$(native_path "$build/romfs")")
     if [ -n "$data_dir" ]; then font_args+=(--data "$(native_path "$data_dir")"); fi
-    "${python[@]}" -I "$(native_path "$repo/tools/aot/fontverdict.py")" "${font_args[@]}" || {
+    "${python[@]}" -X utf8 -I "$(native_path "$repo/tools/aot/fontverdict.py")" "${font_args[@]}" || {
         echo "Could not prepare graphics. Check the build log." >&2
         exit 1
     }
@@ -1211,7 +1218,7 @@ fi
 if [ -n "${python:-}" ]; then
     credits_args=(--game "$game" --romfs "$(native_path "$build/romfs")")
     if [ -n "$data_dir" ]; then credits_args+=(--data "$(native_path "$data_dir")"); fi
-    "${python[@]}" -I "$(native_path "$repo/tools/aot/credits.py")" "${credits_args[@]}" ||
+    "${python[@]}" -X utf8 -I "$(native_path "$repo/tools/aot/credits.py")" "${credits_args[@]}" ||
         echo "credits: tools/aot/credits.py failed; the Credits page is empty in this build" >&2
 fi
 # Crisp text's glyph pack (source/z_smalltext.c): the derived native glyphs of the player's fonts
@@ -1231,7 +1238,7 @@ if [ "$smalltext" = ON ] && [ -n "${python:-}" ]; then
     st_args=(--game "$game" --romfs "$(native_path "$build/romfs")")
     if [ -n "$data_dir" ]; then st_args+=(--data "$(native_path "$data_dir")"); fi
     st_before=$( (cat "$build/romfs/fonts/"*.dts[tmb] 2>/dev/null || true) | cksum)
-    "${python[@]}" -I "$(native_path "$repo/tools/aot/stpack.py")" "${st_args[@]}" ||
+    "${python[@]}" -X utf8 -I "$(native_path "$repo/tools/aot/stpack.py")" "${st_args[@]}" ||
         echo "smalltext: tools/aot/stpack.py failed; Crisp text has no glyphs in this build" >&2
     if [ "$st_before" != "$( (cat "$build/romfs/fonts/"*.dts[tmb] 2>/dev/null || true) | cksum)" ]; then
         touch "$build/romfs/bench_scenes.txt"
@@ -1246,7 +1253,7 @@ fi
 if [ "$game" = undertale ] && [ -n "${python:-}" ]; then
     offkill_args=(--game "$game" --romfs "$(native_path "$build/romfs")")
     if [ -n "$data_dir" ]; then offkill_args+=(--data "$(native_path "$data_dir")"); fi
-    "${python[@]}" -I "$(native_path "$repo/tools/aot/offkill.py")" "${offkill_args[@]}" ||
+    "${python[@]}" -X utf8 -I "$(native_path "$repo/tools/aot/offkill.py")" "${offkill_args[@]}" ||
         echo "offkill: tools/aot/offkill.py failed; no early destroy in this build" >&2
 fi
 # The dialogue script's case table (source/z_textcase.c, UNDERTALE Old only): its switch's constants sorted, with each
@@ -1255,7 +1262,7 @@ fi
 if [ "$game" = undertale ] && [ "$target" = o3ds ] && [ -n "${python:-}" ]; then
     textcase_args=(--game "$game" --romfs "$(native_path "$build/romfs")")
     if [ -n "$data_dir" ]; then textcase_args+=(--data "$(native_path "$data_dir")"); fi
-    "${python[@]}" -I "$(native_path "$repo/tools/aot/textcase.py")" "${textcase_args[@]}" ||
+    "${python[@]}" -X utf8 -I "$(native_path "$repo/tools/aot/textcase.py")" "${textcase_args[@]}" ||
         echo "textcase: tools/aot/textcase.py failed; no case table in this build" >&2
 fi
 # Every RomFS producer has finished. Repackage both formats even when a file was removed or was
@@ -1265,7 +1272,7 @@ echo "Builder phase: Compiling"
 cmake --build "$build" -j "$(nproc)"
 cmake --build "$build" --target cia
 if [ -n "$launcher" ]; then
-    "$cc_python" -I -S "$(native_path "$repo/tools/buildcache/compile_cache.py")" --summary "$(native_path "$build")/compile_cache.log"
+    "$cc_python" -X utf8 -I -S "$(native_path "$repo/tools/buildcache/compile_cache.py")" --summary "$(native_path "$build")/compile_cache.log"
 fi
 
 package_stem=$(<"$build/package-stem.txt")

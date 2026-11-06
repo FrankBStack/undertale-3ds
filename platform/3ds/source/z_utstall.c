@@ -244,8 +244,8 @@ static UTSTALL_TEXT uint32_t usWholeFits(CtrTextureCache* cache, const uint8_t* 
     uint32_t tiles = 0;
     uint32_t count = 0;
     for (uint32_t i = 0; s.tileCount > i; i++) {
-        int32_t t = 0;
-        uint64_t b = usTileBytes(usSceneTile(cache, scene, i, &t), t);
+        int32_t t = 0; CtrPage* page = usSceneTile(cache, scene, i, &t);
+        uint64_t b = usTileBytes(page, t);
         if (bytes + b + UTSTALL_WHOLE_HEADROOM > (uint64_t) cache->budgetBytes) break;
         bytes += b;
         tiles += b > 0;
@@ -1099,6 +1099,15 @@ UTFLPK_TEXT void utflDialogueCode(Runner* runner) {
 #endif
 static const char utflR4Log[] UTFLR4_CONST =
     "Room load (utflowey): %s: whole set's room load allowed %.0f ms more; %.0f ms in all, %u tiles resident (%u KB)\n";
+// UNDERTALE Old: the whole set's passes go through sfxshed (file end), which calls usFinish7 and then sheds cached sound
+// effects for any set tile linear memory stopped. Every other build calls usFinish7 itself.
+#ifdef CTRPORT_TARGET_O3DS
+__attribute__((noinline, noipa, section(".text_sfxshed"))) void utshedFinish(CtrTextureCache* cache, uint64_t deadline,
+        uint32_t* nowTiles, uint32_t* otherTiles);
+#define UTFL_R4_FINISH utshedFinish
+#else
+#define UTFL_R4_FINISH usFinish7
+#endif
 void __wrap_CtrTextures_roomLoadFinish(CtrTextureCache* cache, uint64_t deadline, uint32_t* nowTiles, uint32_t* otherTiles);
 UTFLR4_TEXT bool utflWholeAll(CtrTextureCache* cache);
 UTFLR4_TEXT void __wrap_CtrTextures_roomLoadFinish(CtrTextureCache* cache, uint64_t deadline, uint32_t* nowTiles, uint32_t* otherTiles) {
@@ -1107,7 +1116,7 @@ UTFLR4_TEXT void __wrap_CtrTextures_roomLoadFinish(CtrTextureCache* cache, uint6
     uint64_t start = nowNanos();
     bool all = more && utflWholeAll(cache); // the headroom waived for a set rule A cut that fits the budget itself
     if (all) cache->budgetBytes += UTSTALL_WHOLE_HEADROOM;
-    usFinish7(cache, more ? deadline + UTFL_R4_NANOS : deadline, nowTiles, otherTiles);
+    UTFL_R4_FINISH(cache, more ? deadline + UTFL_R4_NANOS : deadline, nowTiles, otherTiles);
     if (all) cache->budgetBytes -= UTSTALL_WHOLE_HEADROOM;
     if (runner == nullptr) return;
     uint32_t tiles = 0;
@@ -1669,8 +1678,8 @@ static UTFL2_TEXT void plRoomLoad(CtrTextureCache* cache) {
             memcpy(&entry, us.scene + sizeof(s) + (size_t) i * 4, 4);
             uint32_t id = UTSTALL_TILE_PAGE(entry);
             if (UTFLPK_PAGES > id) keep |= 1ull << id;
-            int32_t t = 0;
-            set += usTileBytes(usSceneTile(cache, us.scene, i, &t), t);
+            int32_t t = 0; CtrPage* page = usSceneTile(cache, us.scene, i, &t);
+            set += usTileBytes(page, t);
         }
     }
     uint64_t room = base > UTSTALL_WHOLE_HEADROOM ? base - UTSTALL_WHOLE_HEADROOM : 0;
@@ -1770,4 +1779,128 @@ UTFL2_TEXT void __wrap_CtrTextures_collectWholeRead(CtrTextureCache* cache, bool
     plSetBudget(cache);
 }
 #endif
+#endif
+
+// ===[ change omegaflowey sfxshed: a whole set's room load sheds cached sound effects at the linear floor (Old only) ]===
+// The room load's passes (ctr_textures.c) stop at the linear floor (LINEAR_FLOOR_BYTES free) without shedding anything,
+// while the floor keeper in play sheds the cached sound effects first, as they are the quicker to load again. After a
+// long session the sound cache holds more linear memory, so a whole set whose tiles fit the texture budget came in short:
+// the Omega Flowey fight room entered a second time (sweep ut_flowey then ut_flowey6, Azahar Old and o2ds alike) loaded
+// 66 of its 73 missing tiles with 4.33 MB of cached sounds (1.57 MB on the first entry: 44 of 44), and the 7 left came
+// from the SD card in play, one each at their first draw (27-47 ms frames, a held image each). So once usFinish7 is done
+// with a whole set (item 5), the set's tiles still missing are sorted by what the passes would do with them again:
+// the set's missing tiles are marked as usRoomLoadFinish marks them, and CtrTextures_shedWalk (ctr_textures.c, beside the
+// passes) goes through what the passes would load with memory no object, with their own page and tile conditions in their
+// own order: the budget's 4 MiB headroom past pass 0 and its stop, a page's retry frame, the sources, pass 2's estimate of
+// its time. Only when one of the set's tiles is among those, and linear memory is short for them (free below the floor plus
+// their size), are the cached sound effects shed (the whole shedSfx chain, as the floor keeper sheds: ranked by reload
+// class, size and last use, idle only; a shed sound plays as a stream until the next room change; the chain may also drop
+// idle packed copies) for that shortfall plus a margin, and the passes run again if linear memory free went up (the chain's
+// return counts only the sounds). The chain's own list keeps the room's first 8 planned sounds; for this shed and its
+// passes every planned sound counts as just played (CtrAudioSystem_keepPlan, a plan too long to note: no shed), so a sound
+// the room is about to play stays cached, and what can't be shed around them stays missing, as without this code. The
+// budget, the passes and their checks are as before: the walk decides only whether to shed. UNDERTALE Old only: R4's call
+// goes here instead of usFinish7 (its only change, the decoded call target); every other build calls usFinish7 as before.
+// Inside ENABLE_WAD16, as the rest of the file: DELTARUNE compiles it empty.
+#if defined(ENABLE_WAD16) && defined(CTRPORT_TARGET_O3DS)
+#define SFXSHED_TEXT __attribute__((noinline, noipa, section(".text_sfxshed")))
+#define SFXSHED_CONST __attribute__((section(".rodata.sfxshed_in_text")))
+#define SFXSHED_FLOOR (3u * 1024u * 1024u)                // ctr_textures.c's LINEAR_FLOOR_BYTES
+#define SFXSHED_MARGIN (128u * 1024u)                      // each tile's linear allocation is aligned; a little over
+#define SFXSHED_MINE_MAX 1024u                             // set entries it marks at most (RoomPlan_check: 512)
+#define SFXSHED_PLAN_MAX 64u                               // planned sounds it can keep (the built plan: 24 at most)
+static const char sfxshedLog[] SFXSHED_CONST =
+    "Room load (sfxshed): %s: %u set tiles (%u KB) left, %u (%u KB) to load again at the linear floor (%u KB free); shed "
+    "%u KB of sound effects (asked %u KB, %u KB freed); %u loaded, %u still left; %.0f ms; %u planned sounds kept\n";
+void __real_CtrTextures_roomLoadFinish(CtrTextureCache* cache, uint64_t deadline, uint32_t* nowTiles, uint32_t* otherTiles);
+void CtrTextures_shedWalk(const CtrTextureCache* cache, uint64_t deadline, const uint8_t* entries, uint32_t count, uint64_t* bytes,
+                          uint32_t* tiles, bool* ofSet);
+const uint8_t* UtSfx_planNow(uint32_t* count);
+void CtrAudioSystem_keepPlan(const uint8_t* plan, uint32_t count, uint64_t* played);
+void CtrAudioSystem_keepPlanEnd(const uint8_t* plan, uint32_t count, const uint64_t* played);
+// The set's tile at entry i, or null (a tile of a page whose grid isn't known can't be marked, as usRoomLoadFinish skips it).
+SFXSHED_TEXT static CtrTile* utshedTile(CtrTextureCache* cache, const uint8_t* entries, uint32_t i) {
+    uint32_t entry;
+    memcpy(&entry, entries + (size_t) i * 4, 4);
+    uint32_t pageId = UTSTALL_TILE_PAGE(entry);
+    int32_t t = UTSTALL_TILE_INDEX(entry);
+    if (pageId >= cache->pageCount) return nullptr;
+    CtrPage* page = &cache->pages[pageId];
+    if (!page->layoutKnown || page->failed || page->tiles == nullptr || t >= page->tilesX * page->tilesY) return nullptr;
+    CtrTile* tile = &page->tiles[t];
+    return page->formatsKnown && tile->format == CTR_TILE_EMPTY ? nullptr : tile;
+}
+
+// As usRoomLoadFinish leaves them: a marked tile the passes didn't load is no longer wanted. The set's tiles still missing.
+SFXSHED_TEXT static uint32_t utshedUnmark(CtrTextureCache* cache, const uint8_t* entries, uint32_t count, const uint32_t* mine) {
+    uint32_t left = 0;
+    for (uint32_t i = 0; count > i; i++) {
+        CtrTile* tile = utshedTile(cache, entries, i);
+        if (tile == nullptr || tile->valid) continue;
+        if (SFXSHED_MINE_MAX > i && (mine[i / 32] & (1u << (i % 32))) != 0) tile->wanted = false;
+        left++;
+    }
+    return left;
+}
+
+SFXSHED_TEXT void utshedFinish(CtrTextureCache* cache, uint64_t deadline, uint32_t* nowTiles, uint32_t* otherTiles);
+SFXSHED_TEXT void utshedFinish(CtrTextureCache* cache, uint64_t deadline, uint32_t* nowTiles, uint32_t* otherTiles) {
+    bool ours = us.cache == cache && cache != nullptr && us.runner != nullptr && 0 <= us.room && us.whole && us.scene != nullptr;
+    Runner* runner = ours ? us.runner : nullptr;
+    const uint8_t* scene = ours ? us.scene : nullptr;
+    uint32_t count = ours ? us.wholeCount : 0;
+    usFinish7(cache, deadline, nowTiles, otherTiles);
+    if (scene == nullptr || nowNanos() >= deadline) return;
+    RoomPlanScene s;
+    memcpy(&s, scene, sizeof(s));
+    if (count > s.tileCount) count = s.tileCount;
+    const uint8_t* entries = scene + sizeof(s);
+    // The set's tiles still missing, a tile's own format's size, marked for the walk and the passes.
+    uint64_t missing = 0;
+    uint32_t tiles = 0;
+    uint32_t mine[SFXSHED_MINE_MAX / 32] = {0}; // the set entries this marked, to unmark the ones not loaded
+    for (uint32_t i = 0; count > i; i++) {
+        CtrTile* tile = utshedTile(cache, entries, i);
+        if (tile == nullptr || tile->valid) continue;
+        uint32_t entry;
+        memcpy(&entry, entries + (size_t) i * 4, 4);
+        const CtrPage* page = &cache->pages[UTSTALL_TILE_PAGE(entry)];
+        missing += (uint64_t) page->tileW * (uint64_t) page->tileH *
+                   (page->formatsKnown ? CtrPack_texelBytes((CtrTileFormat) tile->format) : 4u);
+        tiles++;
+        if (tile->wanted || SFXSHED_MINE_MAX <= i) continue;
+        tile->wanted = true;
+        mine[i / 32] |= 1u << (i % 32);
+    }
+    if (tiles == 0) return;
+    uint64_t eligible = 0;
+    uint32_t eligibleTiles = 0;
+    bool ofSet = false;
+    CtrTextures_shedWalk(cache, deadline, entries, count, &eligible, &eligibleTiles, &ofSet);
+    uint32_t freeBytes = linearSpaceFree();
+    uint32_t planCount = 0;
+    const uint8_t* plan = UtSfx_planNow(&planCount);
+    // None of the set's tiles would load, or linear memory is enough for what would: the budget, the time or a retry frame
+    // stopped the passes, not the floor. Or the room's sounds can't all be kept. Nothing is shed.
+    if (!ofSet || freeBytes >= (uint64_t) SFXSHED_FLOOR + eligible || planCount > SFXSHED_PLAN_MAX) {
+        utshedUnmark(cache, entries, count, mine);
+        return;
+    }
+    uint64_t start = nowNanos();
+    uint32_t ask = (uint32_t) ((uint64_t) SFXSHED_FLOOR + eligible + SFXSHED_MARGIN - freeBytes);
+    uint64_t played[SFXSHED_PLAN_MAX];
+    CtrAudioSystem_keepPlan(plan, planCount, played);
+    uint32_t shed = CtrAudioSystem_shedSfx(ask);
+    uint32_t after = linearSpaceFree();
+    uint32_t freed = after > freeBytes ? after - freeBytes : 0;
+    // Marked as usRoomLoadFinish marks them, so the passes take them as the room's (not drawn first).
+    if (freed > 0 && nowNanos() < deadline) __real_CtrTextures_roomLoadFinish(cache, deadline, nowTiles, otherTiles);
+    CtrAudioSystem_keepPlanEnd(plan, planCount, played);
+    uint32_t left = utshedUnmark(cache, entries, count, mine);
+    uint32_t loaded = tiles > left ? tiles - left : 0;
+    logInfo(sfxshedLog, runner->currentRoom != nullptr ? runner->currentRoom->name : "?", (unsigned) tiles,
+            (unsigned) (missing / 1024), (unsigned) eligibleTiles, (unsigned) (eligible / 1024), (unsigned) (freeBytes / 1024),
+            (unsigned) (shed / 1024), (unsigned) (ask / 1024), (unsigned) (freed / 1024), (unsigned) loaded, (unsigned) left,
+            (double) (nowNanos() - start) / 1e6, (unsigned) planCount);
+}
 #endif

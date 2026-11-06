@@ -10,6 +10,7 @@ import dataclasses
 import errno
 import math
 import os
+from pathlib import Path
 import re
 import shutil
 import stat
@@ -44,6 +45,10 @@ class DeliverError(Exception):
 
 class ExistingSavesError(DeliverError):
     """The SD card already has 3DS saves and the caller did not ask to replace them. Nothing was changed."""
+
+
+class SaveCancelled(DeliverError):
+    pass
 
 
 def _is_readonly_path(path, platform=sys.platform):
@@ -413,26 +418,77 @@ def scan_saves(folder, game_key="undertale") -> SaveScan:
 
 
 def scan_sd_saves(sd_root: str, product: products.Product) -> SaveScan:
+    existing_sd_save_files(sd_root, product)  # Check containment and inventory before reading saves.
     return scan_saves(sd_save_dir(sd_root, product), product.key)
+
+
+SAVE_LIST_ERROR = ("The 3DS saves folder could not be checked. "
+                   "Check that the SD card can be read, then check the saves again.")
+
+
+def prove_folder_absent(folder, list_names):
+    """A missing-path reply alone is insufficient: a readable parent must omit the name.
+
+    Adapters raise FileNotFoundError only for their exact missing-path result.
+    Native SD and FTP callers use the same FAT case comparison and parent walk.
+    """
+    folder = str(folder).replace('\\', '/').rstrip('/')
+    parent, _, name = folder.rpartition('/')
+    if not name or ':' in name:
+        return False
+    parent = parent or '/'
+    if parent.endswith(':'):
+        parent += '/'
+    try:
+        names = list_names(parent)
+    except FileNotFoundError:
+        return prove_folder_absent(parent, list_names)
+    return all(isinstance(item, str) and item and '/' not in item and '\\' not in item
+               and item.casefold() != name.casefold() for item in names)
 
 
 def existing_sd_save_files(sd_root: str, product: products.Product) -> list[str]:
     d = sd_save_dir(sd_root, product)
-    if not os.path.isdir(d):
-        return []
+    require_sd_save_path(sd_root, d)
     out = []
     try:
         names = sorted(os.listdir(d))
-    except OSError:
-        return []
+    except FileNotFoundError as exc:
+        try:
+            if prove_folder_absent(d, os.listdir):
+                return []
+        except OSError:
+            pass
+        raise DeliverError(SAVE_LIST_ERROR) from exc
+    except OSError as exc:
+        raise DeliverError(SAVE_LIST_ERROR) from exc
     for name in names:
+        p = os.path.join(d, name)
+        require_sd_save_path(sd_root, p)
         low = name.lower()
         if low in IGNORED_SAVE_NAMES or low.startswith(".") or low.endswith((".tmp", ".part")):
             continue
-        p = os.path.join(d, name)
-        if os.path.isfile(p):
-            out.append(p)
+        try:
+            if stat.S_ISREG(os.stat(p).st_mode):
+                out.append(p)
+        except OSError as exc:
+            raise DeliverError("The SD card saves could not all be checked. No saves were replaced. "
+                               "Check the card connection, then check again.") from exc
     return out
+
+
+def require_sd_save_path(sd_root, path):
+    """Use the installer's containment rule, also rejecting Windows reparse points."""
+    import cleanup
+    import install_record
+    try:
+        relative = os.path.relpath(path, sd_root).replace('\\', '/')
+        install_record.target(sd_root, relative)
+        if cleanup.linked(Path(path).absolute()):
+            raise OSError('linked save path')
+    except (OSError, ValueError) as exc:
+        raise DeliverError('This card has a saves path that points to another folder. '
+                           'No saves were replaced. Choose a card with ordinary folders for the game and saves.') from exc
 
 
 def has_existing_sd_saves(sd_root: str, product: products.Product) -> bool:
@@ -498,7 +554,8 @@ def _unique_backup_dir(dst_dir: str, now=None) -> str:
 
 
 def copy_pc_saves(sd_root: str, product: products.Product, pc_scan_or_folder, overwrite: bool = False,
-                  now=None) -> SaveCopyResult:
+                  now=None, *, progress=lambda phase, done, total, name: None,
+                  cancelled=lambda: False) -> SaveCopyResult:
     """Copies verified PC saves to sd:/<sd_data_dir>/saves/, backing up any existing 3DS saves first."""
     if not os.path.isdir(os.path.join(sd_root, "3ds")):
         raise DeliverError(NO_3DS_FOLDER_MESSAGE)
@@ -525,6 +582,9 @@ def copy_pc_saves(sd_root: str, product: products.Product, pc_scan_or_folder, ov
                                  "Nothing was copied." % (dst_dir, who))
 
     target_paths = ([dst_dir] + existing + [os.path.join(dst_dir, f.name) for f in pc_scan.valid_files])
+    target_paths += [os.path.join(dst_dir, f.name) + '.part' for f in pc_scan.valid_files]
+    for path in target_paths:
+        require_sd_save_path(sd_root, path)
     checker = getattr(sys.modules.get("deliver"), "check_sd_writable", check_sd_writable)
     checker(sd_root, target_paths)
 
@@ -544,14 +604,27 @@ def copy_pc_saves(sd_root: str, product: products.Product, pc_scan_or_folder, ov
     staged = []
     changing = False
     bytes_copied = 0
+    done = 0
+    def tick(phase, name='', count=0):
+        nonlocal done
+        if cancelled():
+            raise SaveCancelled('Copy cancelled. The 3DS saves were not replaced.')
+        done += count
+        progress(phase, done, need, name)
     try:
+        tick('Checking saves')
+        require_sd_save_path(sd_root, dst_dir)
         os.makedirs(dst_dir, exist_ok=True)
         if existing:
             backup_dir = _unique_backup_dir(dst_dir, now=now)
+            require_sd_save_path(sd_root, backup_dir)
             os.makedirs(backup_dir, exist_ok=True)
             for old_path in existing:
+                tick('Backing up 3DS saves', os.path.basename(old_path))
                 b_dst = os.path.join(backup_dir, os.path.basename(old_path))
                 b_tmp = b_dst + ".part"
+                for path in (old_path, b_tmp, b_dst):
+                    require_sd_save_path(sd_root, path)
                 _copy_file(old_path, b_tmp)
                 # Read the backup back before any live save is replaced: it may be the only copy left (SCOURSOL4-001).
                 if not _same_bytes(old_path, b_tmp):
@@ -559,31 +632,47 @@ def copy_pc_saves(sd_root: str, product: products.Product, pc_scan_or_folder, ov
                 os.replace(b_tmp, b_dst)
                 if not _same_bytes(old_path, b_dst):
                     raise BackupMismatch(errno.EIO, "the backup does not match the 3DS save", b_dst)
+                tick('Backing up 3DS saves', os.path.basename(old_path), os.path.getsize(b_dst))
 
         # Stage every incoming file before replacing any, so a failed copy (card pulled, card full) leaves the 3DS
         # saves exactly as they were instead of a mix of PC and 3DS files.
         incoming_names = {f.name.lower() for f in pc_scan.valid_files}
         for sf, data in payloads:
+            tick('Copying PC saves', sf.name)
             tmp = os.path.join(dst_dir, sf.name) + ".part"
+            require_sd_save_path(sd_root, tmp)
             staged.append(tmp)
             _write_checked(tmp, data, sf.mtime)
+            tick('Checking PC saves', sf.name, len(data))
 
+        tick('Finishing the copy')  # Cancel is safe until publishing starts, as on the Wi-Fi path.
+        # Recheck the whole live inventory before publication; an unreadable card
+        # or a new link must not turn a previous preview into permission to replace.
+        if existing_sd_save_files(sd_root, product) != existing:
+            raise DeliverError('The 3DS saves changed while copying. No saves were replaced. Check them again.')
         changing = True
         for (sf, data), tmp in zip(payloads, staged):
+            require_sd_save_path(sd_root, tmp)
+            require_sd_save_path(sd_root, os.path.join(dst_dir, sf.name))
             os.replace(tmp, os.path.join(dst_dir, sf.name))
             bytes_copied += len(data)
 
         if existing:
             for old_path in existing:
                 if os.path.basename(old_path).lower() not in incoming_names and os.path.exists(old_path):
+                    require_sd_save_path(sd_root, old_path)
                     os.remove(old_path)
-    except OSError as e:
+    except (OSError, SaveCancelled) as e:
         for tmp in staged:
             try:
                 if os.path.exists(tmp):
                     os.remove(tmp)
             except OSError:
                 pass
+        if isinstance(e, SaveCancelled):
+            if backup_dir:
+                shutil.rmtree(backup_dir, ignore_errors=True)
+            raise
         if isinstance(e, BackupMismatch) and not changing:
             # Nothing live was touched. A backup that can't be trusted is removed so nobody restores from it.
             shutil.rmtree(backup_dir, ignore_errors=True)

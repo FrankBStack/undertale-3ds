@@ -6,7 +6,6 @@ import io
 import json
 import os
 from pathlib import Path
-import sqlite3
 import sys
 import tempfile
 import unittest
@@ -119,8 +118,8 @@ class NativeLinuxTests(unittest.TestCase):
                 self.assertIn('has no data.win', result.message)
                 self.assertNotIn('Proton', result.message)
 
-    def test_supported_windows_layout_keeps_hash_and_account_checks(self):
-        for owner, data, expected in [(OWNER, UT, vg.OK), (OTHER, UT, vg.ACCOUNT),
+    def test_supported_windows_layout_keeps_hash_checks(self):
+        for owner, data, expected in [(OWNER, UT, vg.OK), (OTHER, UT, vg.OK),
                                       (OWNER, bytes(len(UT)), vg.UNKNOWN_VERSION)]:
             with self.subTest(owner=owner, expected=expected), tempfile.TemporaryDirectory() as tmp:
                 tree = Tree(tmp)
@@ -140,13 +139,13 @@ class NativeLinuxTests(unittest.TestCase):
             result = vg.verify('undertale', game_dir=folder, steam_roots=[tree.root], gog_dirs=[],
                                allow_list=ALLOW, macos_allow_list=MAC_ALLOW, platform='darwin')
             self.assertEqual((result.status, result.layout), (vg.OK, 'macos'))
-            # Presence of native data cannot admit an unrecorded Windows copy.
+            # Native data alongside a known Windows copy does not block acceptance.
             copy = Path(tmp) / 'unrecorded'
             write(str(copy / 'data.win'), UT)
             write(str(copy / 'game.unx'), UT)
             result = self.verify(copy, platform='linux')
-            self.assertEqual((result.status, result.layout), (vg.NO_RECORD, 'windows'))
-            self.assertEqual(result.accepted_parts, [])
+            self.assertEqual((result.status, result.layout), (vg.OK, 'windows'))
+            self.assertEqual(result.accepted_parts, ['root'])
 
 
 class VdfTests(unittest.TestCase):
@@ -211,331 +210,186 @@ class DigestTests(unittest.TestCase):
             self.assertIn("fixture denied", error)
 
 
-class SteamTests(unittest.TestCase):
+class LibraryFolderTests(unittest.TestCase):
+    """Library lists are search hints; acceptance still depends only on the selected file bytes."""
+
     def setUp(self):
-        self.td = tempfile.TemporaryDirectory()
-        self.t = Tree(self.td.name)
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        self.tmp = temporary.name
+        self.tree = Tree(self.tmp)
 
-    def tearDown(self):
-        self.td.cleanup()
-
-    def run_ut(self, **kw):
-        return vg.verify("undertale", steam_roots=[self.t.root], gog_dirs=[], allow_list=ALLOW, platform="win32", **kw)
+    def verify(self):
+        return vg.verify('undertale', steam_roots=[self.tree.root], gog_dirs=[], allow_list=ALLOW,
+                         platform='win32')
 
     def test_ok_second_library(self):
-        folder = self.t.install("391540", "Undertale", {"data.win": UT})
-        r = self.run_ut()
-        self.assertEqual(r.status, vg.OK, r.message)
-        self.assertEqual(vg._norm(r.folder), vg._norm(folder))
-        self.assertEqual(r.store, "steam")
-        self.assertIn("test 1.0", r.message)
+        folder = self.tree.install('391540', 'Undertale', {'data.win': UT})
+        result = self.verify()
+        self.assertTrue(result.accepted, result.message)
+        self.assertEqual(vg._norm(result.folder), vg._norm(folder))
+        self.assertEqual(result.store, 'steam')
 
     def test_old_libraryfolders_format(self):
-        td = tempfile.TemporaryDirectory()
-        self.addCleanup(td.cleanup)
-        t = Tree(td.name, old_format=True)
-        t.install("391540", "Undertale", {"data.win": UT})
-        r = vg.verify("undertale", steam_roots=[t.root], gog_dirs=[], allow_list=ALLOW, platform="win32")
-        self.assertEqual(r.status, vg.OK, r.message)
+        self.tree = Tree(self.tmp, old_format=True)
+        folder = self.tree.install('391540', 'Undertale', {'data.win': UT})
+        result = self.verify()
+        self.assertTrue(result.accepted, result.message)
+        self.assertEqual(vg._norm(result.folder), vg._norm(folder))
 
     def test_library_in_steam_root(self):
-        self.t.install("391540", "Undertale", {"data.win": UT}, lib=self.t.root)
-        self.assertEqual(self.run_ut().status, vg.OK)
-
-    def test_not_found(self):
-        r = self.run_ut()
-        self.assertEqual(r.status, vg.NOT_FOUND)
-        self.assertIn("store.steampowered.com/app/391540", r.message)
-        self.assertIn("gog.com", r.message)
-
-    def test_files_without_manifest(self):
-        write(os.path.join(self.t.lib, "steamapps", "common", "Undertale", "data.win"), UT)
-        r = self.run_ut()
-        self.assertEqual(r.status, vg.NO_RECORD)
-        self.assertIn("no install record", r.message)
+        folder = self.tree.install('391540', 'Undertale', {'data.win': UT}, lib=self.tree.root)
+        result = self.verify()
+        self.assertTrue(result.accepted, result.message)
+        self.assertEqual(vg._norm(result.folder), vg._norm(folder))
 
     def test_unlisted_library_is_ignored(self):
-        stray = os.path.join(self.td.name, "Stray")
-        self.t.install("391540", "Undertale", {"data.win": UT}, lib=stray)
-        self.assertEqual(self.run_ut().status, vg.NOT_FOUND)
-
-    def test_account_never_signed_in_here(self):
-        self.t.install("391540", "Undertale", {"data.win": UT}, owner=OTHER)
-        r = self.run_ut()
-        self.assertEqual(r.status, vg.ACCOUNT)
-        self.assertNotIn(OTHER, r.message + json.dumps(r.details))
-
-    def test_owner_zero_refused(self):
-        self.t.users(["0", OWNER])
-        self.t.install("391540", "Undertale", {"data.win": UT}, owner="0")
-        self.assertEqual(self.run_ut().status, vg.ACCOUNT)
-
-    def test_missing_loginusers(self):
-        os.remove(os.path.join(self.t.root, "config", "loginusers.vdf"))
-        self.t.install("391540", "Undertale", {"data.win": UT})
-        self.assertEqual(self.run_ut().status, vg.ACCOUNT)
-
-    def test_updating(self):
-        self.t.install("391540", "Undertale", {"data.win": UT}, flags=6)
-        self.assertEqual(self.run_ut().status, vg.NOT_INSTALLED)
-
-    def test_unknown_version(self):
-        self.t.install("391540", "Undertale", {"data.win": UT + b"x"})
-        r = self.run_ut()
-        self.assertEqual(r.status, vg.UNKNOWN_VERSION)
-        self.assertIn("Verify integrity", r.message)
-
-    def test_same_size_different_bytes(self):
-        self.t.install("391540", "Undertale", {"data.win": bytes(len(UT))})
-        self.assertEqual(self.run_ut().status, vg.UNKNOWN_VERSION)
-
-    def test_missing_data_win(self):
-        self.t.install("391540", "Undertale", {"UNDERTALE.exe": b"x"})
-        r = self.run_ut()
-        self.assertEqual(r.status, vg.MISSING_FILES)
-
-    def test_copy_outside_library_refused(self):
-        self.t.install("391540", "Undertale", {"data.win": UT})
-        copy = os.path.join(self.td.name, "Copy")
-        write(os.path.join(copy, "data.win"), UT)
-        r = self.run_ut(game_dir=copy)
-        self.assertEqual(r.status, vg.NO_RECORD)
-        self.assertEqual(r.accepted_parts, [])
-
-    def test_explicit_dir_of_real_install(self):
-        folder = self.t.install("391540", "Undertale", {"data.win": UT})
-        self.assertEqual(self.run_ut(game_dir=folder + os.sep).status, vg.OK)
-
-    def test_manifest_appid_mismatch_ignored(self):
-        write(os.path.join(self.t.lib, "steamapps", "appmanifest_391540.acf"),
-              '"AppState" { "appid" "1" "StateFlags" "4" "installdir" "Undertale" "LastOwner" "%s" }' % OWNER)
-        write(os.path.join(self.t.lib, "steamapps", "common", "Undertale", "data.win"), UT)
-        self.assertEqual(self.run_ut().status, vg.NO_RECORD)
-
-    def test_cli_json(self):
-        self.t.install("391540", "Undertale", {"data.win": UT})
-        out = io.StringIO()
-        with contextlib.redirect_stdout(out):
-            rc = vg.main(["x", "undertale", "--steam-root", self.t.root, "--gog-dir", os.path.join(self.td.name, "no"),
-                          "--json"])
-            self.assertEqual(vg.main(["x"]), 2)
-            self.assertEqual(vg.main(["x", "undertale", "--bogus", "1"]), 2)
-        self.assertEqual(rc, 1)   # the real allow-list refuses fake bytes
-        first = json.JSONDecoder().raw_decode(out.getvalue())[0]
-        self.assertEqual(first["status"], vg.UNKNOWN_VERSION)
-        self.assertFalse(first["accepted"])
+        folder = self.tree.install('391540', 'Undertale', {'data.win': UT}, lib=os.path.join(self.tmp, 'Unlisted'))
+        self.assertEqual(self.verify().status, vg.NOT_FOUND)
+        # A hand-picked copy outside the list is still accepted: discovery is never a gate.
+        result = vg.verify('undertale', game_dir=folder, steam_roots=[], gog_dirs=[], allow_list=ALLOW)
+        self.assertTrue(result.accepted, result.message)
 
 
-class DeltaruneTests(unittest.TestCase):
-    def setUp(self):
-        self.td = tempfile.TemporaryDirectory()
-        self.t = Tree(self.td.name)
+class HashOnlyTests(unittest.TestCase):
+    def verify(self, folder, allow=ALLOW, game='undertale', **kwargs):
+        return vg.verify(game, game_dir=folder, steam_roots=[], gog_dirs=[], allow_list=allow,
+                         macos_allow_list=MAC_ALLOW, **kwargs)
 
-    def tearDown(self):
-        self.td.cleanup()
+    def test_copied_windows_steam_and_gog_without_any_record(self):
+        for store in ('steam', 'gog'):
+            with self.subTest(store=store), tempfile.TemporaryDirectory() as tmp:
+                write(os.path.join(tmp, 'data.win'), UT)
+                result = self.verify(tmp, [row('undertale', 'root', UT, store=store)])
+                self.assertTrue(result.accepted, result.message)
+                self.assertEqual(result.store, store)
 
-    def run_dr(self, **kw):
-        return vg.verify("deltarune", steam_roots=[self.t.root], gog_dirs=[], allow_list=ALLOW, platform="win32", **kw)
+    def test_copied_app_in_fake_downloads_without_steam_root(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            folder = os.path.join(tmp, 'Downloads')
+            write(os.path.join(folder, BUNDLE + 'game.ios'), MAC)
+            for pick in (folder, os.path.join(folder, 'UNDERTALE.app'),
+                         os.path.join(folder, BUNDLE.rstrip('/'))):
+                with mock.patch.object(vg, 'default_steam_roots', side_effect=AssertionError('store probe')), \
+                     mock.patch.object(vg, 'default_gog_dirs', side_effect=AssertionError('store probe')):
+                    result = vg.verify('undertale', game_dir=pick, allow_list=ALLOW,
+                                       macos_allow_list=MAC_ALLOW, platform='darwin')
+                self.assertTrue(result.accepted, result.message)
+                self.assertEqual(result.layout, 'macos')
 
-    def test_full_game_ok(self):
-        self.t.install("1671210", "DELTARUNE", dr_files())
-        r = self.run_dr()
-        self.assertEqual(r.status, vg.OK, r.message)
-        self.assertEqual(len(r.accepted_parts), 6)
+    def test_one_changed_byte_is_refused(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            write(os.path.join(tmp, 'data.win'), UT[:-1] + bytes([UT[-1] ^ 1]))
+            result = self.verify(tmp)
+            self.assertEqual(result.status, vg.UNKNOWN_VERSION)
+            self.assertEqual(result.accepted_parts, [])
 
-    def test_other_account_gets_free_chapters_only(self):
-        self.t.install("1671210", "DELTARUNE", dr_files(), owner=OTHER)
-        r = self.run_dr()
-        self.assertEqual(r.status, vg.OK_FREE, r.message)
-        self.assertEqual(set(r.accepted_parts), {"root", "chapter1_windows", "chapter2_windows"})
-        self.assertEqual(set(r.refused_parts), {"chapter3_windows", "chapter4_windows", "chapter5_windows"})
-        self.assertIn("sign in to Steam", r.message)
-        self.assertTrue(r.accepted)
+    def test_store_files_are_never_opened_for_search_or_verification(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tree = Tree(tmp)
+            folder = tree.install('391540', 'Undertale', {'data.win': UT}, owner=OTHER, flags=6)
+            for path in (os.path.join(tree.root, 'config', 'config.vdf'),
+                         os.path.join(folder, 'goggame-1456487183.info'),
+                         os.path.join(folder, 'goggame-1456487183.hashdb'),
+                         os.path.join(tmp, 'galaxy-2.0.db')):
+                write(path, 'poison')
+            real_open = open
+            opened = []
+            def guarded(path, *args, **kwargs):
+                name = os.path.basename(os.fspath(path)).lower()
+                opened.append(name)
+                if name in ('loginusers.vdf', 'config.vdf') or name.startswith(('appmanifest_', 'goggame-')) or name.endswith('.db'):
+                    raise AssertionError('opened forbidden store file: ' + name)
+                return real_open(path, *args, **kwargs)
+            with mock.patch('builtins.open', side_effect=guarded):
+                result = vg.verify('undertale', steam_roots=[tree.root], gog_dirs=[], allow_list=ALLOW)
+                self.assertTrue(result.accepted, result.message)
+                self.assertTrue(self.verify(folder).accepted)
+            self.assertIn('libraryfolders.vdf', opened)
 
-    def test_demo_app(self):
-        self.t.install("1690940", "DELTARUNEdemo", dr_files(["root", "chapter1_windows", "chapter2_windows"]))
-        r = self.run_dr()
-        self.assertEqual(r.status, vg.OK, r.message)
-        self.assertIn("Only the free chapters", r.message)
+    def test_missing_manifest_and_login_file_do_not_refuse(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tree = Tree(tmp, old_format=True)
+            folder = tree.install('391540', 'Undertale', {'data.win': UT})
+            os.remove(os.path.join(tree.lib, 'steamapps', 'appmanifest_391540.acf'))
+            os.remove(os.path.join(tree.root, 'config', 'loginusers.vdf'))
+            result = vg.verify('undertale', steam_roots=[tree.root], gog_dirs=[], allow_list=ALLOW)
+            self.assertTrue(result.accepted, result.message)
+            self.assertEqual(vg._norm(folder), vg._norm(result.folder))
 
-    def test_demo_folder_with_paid_chapters_copied_in(self):
-        self.t.install("1690940", "DELTARUNEdemo", dr_files())
-        r = self.run_dr()
-        self.assertEqual(r.status, vg.OK_FREE)
-        self.assertIn("demo includes only Chapters 1 and 2", r.message)
+    def test_malformed_library_list_only_reduces_discovery(self):
+        for text in ('"libraryfolders" "bad"', '"libraryfolders" {',
+                     '"libraryfolders" { "1" { "path" { "bad" "value" } } }'):
+            with self.subTest(text=text), tempfile.TemporaryDirectory() as tmp:
+                tree = Tree(tmp)
+                folder = tree.install('391540', 'Undertale', {'data.win': UT})
+                write(os.path.join(tree.root, 'steamapps', 'libraryfolders.vdf'), text)
+                result = vg.verify('undertale', steam_roots=[tree.root], gog_dirs=[], allow_list=ALLOW)
+                self.assertEqual(result.status, vg.NOT_FOUND)
+                self.assertTrue(self.verify(folder).accepted)
 
-    def test_purchased_preferred_over_demo(self):
-        self.t.install("1690940", "DELTARUNEdemo", dr_files(["root", "chapter1_windows", "chapter2_windows"]))
-        self.t.install("1671210", "DELTARUNE", dr_files())
-        self.assertEqual(self.run_dr().status, vg.OK)
+    def test_gog_registry_is_only_a_folder_hint(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            write(os.path.join(tmp, 'data.win'), UT)
+            dirs = vg.default_gog_dirs(vg.GAMES['undertale'], registry=lambda *args: tmp, platform='win32')
+            self.assertIn(tmp, dirs)
+            self.assertTrue(self.verify(tmp).accepted)
+            write(os.path.join(tmp, 'data.win'), b'unknown')
+            self.assertFalse(self.verify(tmp).accepted)
 
-    def test_free_chapters_from_unrecorded_folder(self):
-        loose = os.path.join(self.td.name, "itch")
-        for rel, data in dr_files(["root", "chapter1_windows", "chapter2_windows"]).items():
-            write(os.path.join(loose, rel), data)
-        r = self.run_dr(game_dir=loose)
-        self.assertEqual(r.status, vg.OK, r.message)
+    def test_all_deltarune_chapters_need_only_known_files(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            for rel, data in dr_files().items(): write(os.path.join(tmp, rel), data)
+            result = self.verify(tmp, game='deltarune')
+            self.assertTrue(result.accepted, result.message)
+            self.assertEqual(result.accepted_parts, list(vg.GAMES['deltarune'].parts))
 
-    def test_paid_chapters_from_unrecorded_folder(self):
-        loose = os.path.join(self.td.name, "copy")
-        for rel, data in dr_files().items():
-            write(os.path.join(loose, rel), data)
-        r = self.run_dr(game_dir=loose)
-        self.assertEqual(r.status, vg.OK_FREE)
-        self.assertEqual(len(r.refused_parts), 3)
+    def test_unknown_chapter_is_refused_even_with_known_free_chapters(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            for rel, data in dr_files(override={'chapter3_windows': b'changed'}).items():
+                write(os.path.join(tmp, rel), data)
+            result = self.verify(tmp, game='deltarune')
+            self.assertEqual(result.status, vg.UNKNOWN_VERSION)
+            self.assertEqual(result.accepted_parts, [])
 
-    def test_unknown_launcher(self):
-        self.t.install("1671210", "DELTARUNE", dr_files(override={"root": b"other"}))
-        self.assertEqual(self.run_dr().status, vg.UNKNOWN_VERSION)
+    def test_deltarune_missing_chapters_are_not_claimed_as_accepted(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            for rel, data in dr_files(parts=('root', 'chapter3_windows')).items():
+                write(os.path.join(tmp, rel), data)
+            result = self.verify(tmp, game='deltarune')
+            self.assertTrue(result.accepted, result.message)
+            self.assertEqual(result.accepted_parts, ['root', 'chapter3_windows'])
+            os.remove(os.path.join(tmp, 'chapter3_windows', 'data.win'))
+            self.assertEqual(self.verify(tmp, game='deltarune').status, vg.MISSING_FILES)
 
-    def test_one_unknown_chapter(self):
-        self.t.install("1671210", "DELTARUNE", dr_files(override={"chapter4_windows": b"modded"}))
-        r = self.run_dr()
-        self.assertEqual(r.status, vg.OK_FREE)
-        self.assertEqual(r.refused_parts, ["chapter4_windows"])
-        self.assertIn("Chapter 4 does not match", r.message)
+    def test_mixed_editions_including_free_parts_are_refused(self):
+        for part in ('chapter1_windows', 'chapter3_windows'):
+            with self.subTest(part=part), tempfile.TemporaryDirectory() as tmp:
+                for rel, data in dr_files().items(): write(os.path.join(tmp, rel), data)
+                allow = [r[:-1] + ('different edition',) if r[0] == 'deltarune' and r[1] == part else r for r in ALLOW]
+                result = self.verify(tmp, allow, game='deltarune')
+                self.assertEqual(result.status, vg.UNKNOWN_VERSION)
+                self.assertIn('different editions', result.message)
 
+    def test_demo_refused_by_content_without_store_metadata(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            demo = b'synthetic combined demo'
+            write(os.path.join(tmp, 'data.win'), demo)
+            with mock.patch.object(vg, 'DELTARUNE_DEMO_ALLOW_LIST', [row('deltarune-demo', 'root', demo)]):
+                result = self.verify(tmp, game='deltarune')
+            self.assertFalse(result.accepted)
+            self.assertIn("demo isn't supported", result.message)
 
-class GogTests(unittest.TestCase):
-    def setUp(self):
-        self.td = tempfile.TemporaryDirectory()
-        self.dir = os.path.join(self.td.name, "GOG Games", "Undertale")
-        write(os.path.join(self.dir, "data.win"), UT)
-        self.allow = [row("undertale", "root", UT, "gog", "1.08 GOG test")]
-
-    def tearDown(self):
-        self.td.cleanup()
-
-    def info(self, product="1456487183"):
-        write(os.path.join(self.dir, "goggame-1456487183.info"),
-              json.dumps({"gameId": product, "rootGameId": product, "name": "Undertale"}))
-
-    def run_gog(self, records, platform="win32", **kw):
-        return vg.verify("undertale", steam_roots=[], gog_dirs=[self.dir], gog_records=lambda p: records,
-                         allow_list=self.allow, platform=platform, **kw)
-
-    def test_registry_record(self):
-        self.info()
-        r = self.run_gog([self.dir.replace("\\", "/") + "/"])
-        self.assertEqual(r.status, vg.OK, r.message)
-        self.assertEqual(r.store, "gog")
-
-    def test_info_without_registry(self):
-        self.info()
-        self.assertEqual(self.run_gog([]).status, vg.NO_RECORD)
-        info = os.path.join(self.dir, 'goggame-1456487183.info')
-        hashdb = os.path.join(self.dir, 'goggame-1456487183.hashdb')
-        write(hashdb, b'fixture installer hash database')
-        pair = (vg.sha256_file(info), vg.sha256_file(hashdb))
-        with mock.patch.dict(vg.GOG_INSTALL_RECORDS, {'1456487183': pair}):
-            self.assertEqual(self.run_gog([]).status, vg.OK)
-            write(hashdb, b'changed installer hash database')
-            self.assertEqual(self.run_gog([]).status, vg.NO_RECORD)
-
-    def test_root_id_or_title_is_not_product_evidence(self):
-        for record in ({'rootGameId': '1456487183'},
-                       {'gameId': 'DLC', 'rootGameId': '1456487183', 'name': 'Undertale'},
-                       {'gameId': '1456487183', 'name': 'Wrong Game'}):
-            self.info()
-            info = os.path.join(self.dir, 'goggame-1456487183.info')
-            hashdb = os.path.join(self.dir, 'goggame-1456487183.hashdb')
-            write(info, json.dumps(record))
-            write(hashdb, b'fixture')
-            with mock.patch.dict(vg.GOG_INSTALL_RECORDS, {'1456487183': (vg.sha256_file(info),vg.sha256_file(hashdb))}):
-                self.assertEqual(self.run_gog([]).status, vg.NO_RECORD)
-
-    def test_cross_store_digest_is_refused(self):
-        r = vg.verify(
-            'undertale', game_dir=self.dir, steam_roots=[], gog_records=lambda _: [self.dir],
-            allow_list=ALLOW, platform='win32')
-        self.assertEqual(r.status, vg.UNKNOWN_VERSION)
-        self.assertIn('different store', r.message)
-
-    def test_nonwindows_supplied_record_is_used(self):
-        for platform in ('linux', 'darwin'):
-            self.assertEqual(self.run_gog([self.dir],platform=platform).status,vg.OK)
-
-    def test_registry_without_info(self):
-        self.assertEqual(self.run_gog([self.dir]).status, vg.OK)
-
-    def test_digest_without_store_evidence_is_refused(self):
-        self.assertEqual(self.run_gog([]).status, vg.NO_RECORD)
-
-    def test_info_does_not_allow_modded_data(self):
-        self.info()
-        write(os.path.join(self.dir, 'data.win'), b'modded data')
-        self.assertEqual(self.run_gog([]).status, vg.UNKNOWN_VERSION)
-
-    def test_malformed_info_is_not_store_evidence(self):
-        for data in ('{', '[]', 'null', '{"gameId": "wrong"}'):
-            with self.subTest(data=data):
-                write(os.path.join(self.dir, 'goggame-1456487183.info'), data)
-                self.assertEqual(self.run_gog([]).status, vg.NO_RECORD)
-
-    def test_checked_in_gog_digest(self):
-        import re
-        path = os.path.join(os.path.dirname(__file__), '..', '..', 'platform', '3ds', 'data_versions.inc')
-        with open(path, encoding='utf-8') as stream:
-            digest = re.search(r'DATA_VERSION\("undertale", "root", 62951906ULL, "([0-9a-f]{64})"\)',
-                               stream.read()).group(1)
-        rows = [r for r in vg.ALLOW_LIST if r[0] == 'undertale' and r[4] == 'gog']
-        self.assertEqual(rows, [('undertale', 'root', 62951906, digest, 'gog', '1.08 (GOG)')])
-
-    def test_wrong_product(self):
-        self.info("1")
-        info = os.path.join(self.dir, 'goggame-1456487183.info')
-        hashdb = os.path.join(self.dir, 'goggame-1456487183.hashdb')
-        write(hashdb, b'wrong product installer record')
-        with mock.patch.dict(vg.GOG_INSTALL_RECORDS, {'1456487183': (vg.sha256_file(info), vg.sha256_file(hashdb))}):
-            self.assertEqual(self.run_gog([]).status, vg.NO_RECORD)
-        # A valid install record cannot make another game's payload UNDERTALE.
-        write(os.path.join(self.dir, 'data.win'), b'another purchased game, not Undertale')
-        r = self.run_gog([self.dir])
-        self.assertEqual(r.status, vg.UNKNOWN_VERSION)
-        self.assertEqual(r.accepted_parts, [])
-
-    def test_linux_gameinfo(self):
-        game = os.path.join(self.td.name, "lin", "Undertale", "game")
-        write(os.path.join(game, "data.win"), UT)
-        write(os.path.join(self.td.name, "lin", "Undertale", "gameinfo"), "Undertale\n1.08\n")
-        r = vg.verify("undertale", steam_roots=[], gog_dirs=[game], allow_list=self.allow, platform="linux")
-        self.assertEqual(r.status, vg.OK, r.message)
-
-    def test_nonwindows_gog_metadata_is_optional(self):
-        for platform in ('linux', 'darwin'):
-            for metadata in (None, '{', '{"gameId":"1456487183","newInstallerField":true}'):
-                with self.subTest(platform=platform, metadata=metadata):
-                    info = Path(self.dir) / 'goggame-1456487183.info'
-                    info.unlink(missing_ok=True)
-                    if metadata is not None:
-                        info.write_text(metadata)
-                    result = self.run_gog([], platform=platform)
-                    self.assertEqual((result.status, result.store), (vg.OK, 'gog'), result.message)
-                    self.assertNotIn('official', result.message)
-        write(os.path.join(self.dir, 'data.win'), b'unknown version')
-        self.assertEqual(self.run_gog([], platform='linux').status, vg.UNKNOWN_VERSION)
-
-    def test_nonwindows_optional_metadata_does_not_accept_steam_hash(self):
-        for platform in ('linux', 'darwin'):
-            result = vg.verify('undertale', game_dir=self.dir, steam_roots=[], gog_records=lambda _: [],
-                               allow_list=ALLOW, platform=platform)
-            self.assertEqual(result.status, vg.NO_RECORD, result.message)
-
-    def test_galaxy_db(self):
-        db = os.path.join(self.td.name, "galaxy %23 # café.db")
-        con = sqlite3.connect(db)
-        con.execute("CREATE TABLE InstalledBaseProducts (productId INTEGER, installationPath TEXT)")
-        con.execute("INSERT INTO InstalledBaseProducts VALUES (1456487183, ?)", (self.dir,))
-        con.commit()
-        con.close()
-        self.assertEqual(vg.galaxy_install_paths(db, "1456487183"), [self.dir])
-        self.assertEqual(vg.galaxy_install_paths(db, "2"), [])
-        self.assertEqual(vg.galaxy_install_paths(os.path.join(self.td.name, "none.db"), "1"), [])
-        recs = vg.default_gog_records("1456487183", registry=lambda *a: None, galaxy_db=db, platform="win32")
-        self.assertEqual(recs, [self.dir])
-
-    def test_deltarune_has_no_gog(self):
-        self.assertIsNone(vg.GAMES["deltarune"].gog_product)
+    def test_cli_output_has_no_record_requirement(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            write(os.path.join(tmp, 'data.win'), UT)
+            real = vg.verify
+            with mock.patch.object(vg, 'verify', side_effect=lambda *a, **kw: real(*a, **kw, allow_list=ALLOW)), \
+                 contextlib.redirect_stdout(io.StringIO()) as output:
+                code = vg.main(['verify_game.py', 'undertale', '--game-dir', tmp])
+            self.assertEqual(code, 0)
+            self.assertIn('supported official copy', output.getvalue())
+            self.assertNotIn('account', output.getvalue())
 
 
 MAC = blob("ut mac")
@@ -544,7 +398,7 @@ BUNDLE = "UNDERTALE.app/Contents/Resources/"
 
 
 class MacTests(unittest.TestCase):
-    """UNDERTALE's macOS depot: game.ios in the bundle, its own rows, the same install record rule."""
+    """UNDERTALE's macOS depot: game.ios in the bundle, its own allow-list, without store records."""
 
     def setUp(self):
         self.td = tempfile.TemporaryDirectory()
@@ -590,13 +444,13 @@ class MacTests(unittest.TestCase):
         r = self.run_ut()
         self.assertEqual((r.status, r.layout, r.version), (vg.OK, "windows", "test 1.0"))
 
-    def test_same_ownership_rule(self):
+    def test_same_hash_only_rule(self):
         self.t.install("391540", "Undertale", {BUNDLE + "game.ios": MAC}, owner=OTHER)
-        self.assertEqual(self.run_ut().status, vg.ACCOUNT)
+        self.assertEqual(self.run_ut().status, vg.OK)
         td = tempfile.TemporaryDirectory()
         self.addCleanup(td.cleanup)
         write(os.path.join(td.name, BUNDLE + "game.ios"), MAC)
-        self.assertEqual(self.run_ut(game_dir=td.name).status, vg.NO_RECORD)
+        self.assertEqual(self.run_ut(game_dir=td.name).status, vg.OK)
 
     def test_deltarune_has_no_mac_layout(self):
         self.t.install("1671210", "DELTARUNE", {BUNDLE + "game.ios": MAC})

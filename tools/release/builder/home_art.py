@@ -556,6 +556,6 @@ def generate(game, data_dir, destination, tex3ds, roots=None, specs=CACHE_ART, d
             (destination / "banner.wav").write_bytes(sound)
             result["sound"] = {"source": "player data", "name": HOME_SOUND, "sha256": hashlib.sha256(sound).hexdigest()}
     except (ValueError, KeyError, IndexError, struct.error, zlib.error, EOFError, wave.Error) as exc:
-        raise ArtError("Could not read HOME Menu art from your game. Verify the game files and try again.") from exc
+        raise ArtError("Could not read HOME Menu art from your game. Restore the original game files and try again.") from exc
     (destination / "home-art.json").write_text(json.dumps(result, indent=2) + "\n", encoding="utf-8")
     return result

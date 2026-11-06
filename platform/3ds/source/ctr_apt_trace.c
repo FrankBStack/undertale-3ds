@@ -91,6 +91,14 @@ static void onDspEvent(DSP_HookType hook) {
 static volatile u64 suspendTick = 0;
 static volatile bool closing = false;
 
+#ifdef ENABLE_WAD16
+void auditfixgF2Wait(s64 timeout);
+void auditfixgF2Wake(void);
+void auditfixgF2Exit(int status) __attribute__((noreturn));
+// Retain the worker's instruction shape; only its timed-wait call target changes.
+#define svcSleepThread auditfixgF2Wait
+#endif
+#line 94
 static void heartbeatMain(void* arg) {
     const char* name = arg;
     while (!closing) {
@@ -103,6 +111,8 @@ static void heartbeatMain(void* arg) {
     }
 }
 
+#undef svcSleepThread
+#line 106
 static void onAptEvent(APT_HookType hook, void* param) {
     (void) param;
     if (hook == APTHOOK_ONSUSPEND || hook == APTHOOK_ONSLEEP) {
@@ -118,6 +128,13 @@ static void onAptEvent(APT_HookType hook, void* param) {
     }
 }
 
+#ifdef ENABLE_WAD16
+static Thread auditfixgR2TraceCreate(ThreadFunc entry, void* arg, size_t stack, int priority, int core, bool detached);
+static void auditfixgR2TraceStop(void) __attribute__((used));
+#else
+#define auditfixgR2TraceCreate threadCreate
+#endif
+
 void CtrAptTrace_init(void) {
     if (hooked) return;
     hooked = true;
@@ -125,11 +142,75 @@ void CtrAptTrace_init(void) {
     // watchdog's, citro3d's and NDSP's.
     aptHook(&aptCookie, onAptEvent, nullptr);
     dspHook(&dspCookie, onDspEvent);
-    threadCreate(heartbeatMain, (void*) "high-priority (0x18)", HEARTBEAT_STACK_SIZE, 0x18, 0, true);
-    threadCreate(heartbeatMain, (void*) "low-priority (0x3F)", HEARTBEAT_STACK_SIZE, 0x3F, 0, true);
+    auditfixgR2TraceCreate(heartbeatMain, (void*) "high-priority (0x18)", HEARTBEAT_STACK_SIZE, 0x18, 0, true);
+    auditfixgR2TraceCreate(heartbeatMain, (void*) "low-priority (0x3F)", HEARTBEAT_STACK_SIZE, 0x3F, 0, true);
 }
 
 void CtrAptTrace_stop(void) {
     closing = true;
     tracing = false;
+#ifdef ENABLE_WAD16
+    auditfixgF2Wake();
+#endif
 }
+#line 140
+
+#ifdef ENABLE_WAD16
+// SCOURS2-009: retain the original init call shape and pool; the adapter owns
+// joinable handles. New code/state are appended, with no new log strings.
+#define TRACE_R2_CODE __attribute__((noinline, noipa, optimize("Os"), section(".auditfixg_r2_heartbeat_text")))
+static Thread auditfixgR2Threads[2] __attribute__((section(".bss_auditfixg_r2_heartbeat,\"aw\",%nobits @")));
+// 0: accepting creates, 1: create/handle publication in progress, 2: exit owns
+// the handles. Never wait for a possibly faulted initializer at process exit.
+static u32 auditfixgR2CreateState __attribute__((section(".bss_auditfixg_r2_heartbeat,\"aw\",%nobits @")));
+
+static TRACE_R2_CODE Thread auditfixgR2TraceCreate(ThreadFunc entry, void* arg, size_t stack, int priority, int core, bool detached) {
+    (void) detached;
+    u32 idle = 0;
+    if (!__atomic_compare_exchange_n(&auditfixgR2CreateState, &idle, 1, false, __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE)) return NULL;
+    Thread thread = threadCreate(entry, arg, stack, priority, core, false);
+    auditfixgR2Threads[priority == 0x18 ? 0 : 1] = thread;
+    __atomic_store_n(&auditfixgR2CreateState, 0, __ATOMIC_RELEASE);
+    return thread;
+}
+
+static TRACE_R2_CODE void auditfixgR2TraceStop(void) {
+    closing = true;
+    tracing = false;
+    u32 idle = 0;
+    // If exit interrupted a create, its not-yet-published stack cannot be
+    // joined safely. End the still-mapped process; never race heap teardown.
+    if (!__atomic_compare_exchange_n(&auditfixgR2CreateState, &idle, 2, false, __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE)) svcExitProcess();
+    for (unsigned i = 0; i < 2; ++i) {
+        Thread thread = auditfixgR2Threads[i];
+        if (thread == NULL) continue;
+        // Shutdown signals the sticky event before joining. Retain the finite
+        // four-second scheduling/failure deadline; a fatal exit never joins.
+        // Any nonzero result (including libctru's positive timeout result)
+        // ends the process while its heap is mapped. Never free a live thread
+        // or return to heap teardown after a failed join.
+        if (threadJoin(thread, 4000000000ULL) != 0) svcExitProcess();
+        threadFree(thread);
+        auditfixgR2Threads[i] = NULL;
+    }
+}
+
+// Cover _exit callers as well as main's normal/error-screen stops. The exit
+// owner reaches this adapter before libctru can unmap either worker's stack.
+// Only that owner joins/frees handles. Main's earlier stop only signals them,
+// so an error-exit thread cannot race main through two joins or two frees.
+void __real__exit(int status) __attribute__((noreturn));
+TRACE_R2_CODE __attribute__((noreturn)) void CtrAptTrace_exit(int status) {
+    auditfixgF2Exit(status);
+}
+
+// A named alias lets the appended TU reach the unchanged owner-only join body.
+// No old definition moves; the alias occupies the same late address and bytes.
+__asm__(".global auditfixgF2Join\n.set auditfixgF2Join, auditfixgR2TraceStop\n");
+// Retain the old 20 B exit adapter's slot after its new noreturn redirect.
+// Hard section limit: 300 B, with 12 B slack after the current 288 B of code;
+// growth beyond that slack fails assembly rather than moving frozen inputs.
+#if defined(__3DS__) && defined(NDEBUG)
+__asm__(".pushsection .auditfixg_r2_heartbeat_text,\"ax\",%progbits\n.subsection 1\n.org 300, 0\n.popsection\n");
+#endif
+#endif // ENABLE_WAD16: shared fixes await DELTARUNE qualification.

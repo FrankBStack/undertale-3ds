@@ -143,6 +143,41 @@ class CheckedBytesTests(SaveFixture):
         self.assertEqual(self.live(), {})
 
 
+class CancelCleanupTests(SaveFixture):
+    def test_cancel_at_every_progress_event_removes_only_this_imports_parts_and_backup(self):
+        old = {'file0': b'OLD\n1\n0\n', 'file9': b'OLD\n1\n0\n'}
+        new = {'file0': b'NEW\n2\n0\n', 'file8': b'NEW\n2\n0\n',
+               'file9': b'NEW\n2\n0\n', 'undertale.ini': b'[General]\nName="NEW"\nLove="2"\n'}
+        for name, data in new.items():
+            (self.pc/name).write_bytes(data)
+        scan = saves.scan_saves(str(self.pc))
+        def reset():
+            for path in sorted(self.saves.rglob('*'), key=lambda p: len(p.parts), reverse=True):
+                path.rmdir() if path.is_dir() else path.unlink()
+            for name, data in old.items():
+                (self.saves/name).write_bytes(data)
+            kept = self.saves/'backup-keep'
+            kept.mkdir()
+            (kept/'file0').write_bytes(b'OLDER\n1\n0\n')
+            return ftp_saves.inspect(self.address, UT)
+        expected = reset()
+        events = []
+        ftp_saves.copy(self.address, UT, scan, expected, overwrite=True, progress=events.append)
+        for cancel_at in range(1, len(events)+1):
+            with self.subTest(cancel_at=cancel_at):
+                expected = reset()
+                seen = []
+                def progress(event):
+                    seen.append(event)
+                with self.assertRaises(ftp_delivery.Cancelled):
+                    ftp_saves.copy(self.address, UT, scan, expected, overwrite=True,
+                        progress=progress, cancelled=lambda: len(seen) >= cancel_at)
+                self.assertEqual(self.live(), old)
+                self.assertEqual(sorted(p.name for p in self.saves.iterdir()), sorted([*old, 'backup-keep']))
+                self.assertEqual((self.saves/'backup-keep/file0').read_bytes(), b'OLDER\n1\n0\n')
+                self.assertEqual({p.name: p.read_bytes() for p in self.pc.iterdir()}, new)
+
+
 class StoppedPublishTests(SaveFixture):
     """DEEP-07: a failure while live saves are replaced says what the card holds, where the backup is, how to finish
     and how to undo; and the retry finishes."""
@@ -251,6 +286,23 @@ class StoppedPublishTests(SaveFixture):
         self.assertEqual(result.backup_dir, caught.exception.backup)
         self.assertEqual(len(self.backups()), 1)
 
+    def test_cancelled_resume_keeps_the_backup_of_saves_already_replaced(self):
+        scan, expected = self.prepare()
+        with self.assertRaises(ftp_saves.IncompleteImport) as caught:
+            ftp_saves.copy(self.address, UT, scan, expected, overwrite=True,
+                           factory=self.failing('rename', 'undertale.ini', 'before'))
+        stopped = caught.exception
+        current = ftp_saves.inspect(self.address, UT)
+        backup = self.card/stopped.backup.lstrip('/')
+        seen = []
+        with self.assertRaises(ftp_delivery.Cancelled):
+            ftp_saves.copy(self.address, UT, scan, current, overwrite=True, resume=stopped,
+                progress=seen.append, cancelled=lambda: bool(seen))
+        self.assertEqual(self.live(), current.files)
+        self.assertEqual({p.name: p.read_bytes() for p in backup.iterdir()}, self.old)
+        self.assertFalse(list(self.saves.glob('*.save-part')))
+        self.assertFalse(list(self.saves.glob('*.builder-part')))
+
     def test_command_line_retry_finishes_and_keeps_the_first_backup(self):
         scan, expected = self.prepare()
         with self.assertRaises(ftp_saves.IncompleteImport) as caught:
@@ -348,7 +400,7 @@ class AddedSaveStopTests(SaveFixture):
                     text = exc.describe(wizard=wizard)
                     self.assertEqual(self.undo(text), self.folded(self.old), text)
 
-    def test_the_undo_with_no_saves_before_deletes_what_the_import_added(self):
+    def test_proven_empty_original_has_accurate_no_saves_and_undo_advice(self):
         self.old = {}
         scan, expected = self.prepare()
         with self.assertRaises(ftp_saves.IncompleteImport) as caught:
@@ -424,6 +476,11 @@ class WizardResumeTests(unittest.TestCase):
         page.ftp_running, page.ftp_resume, page.ftp_cancel = False, None, threading.Event()
         page.status = page.ftp_cancel_button = page.scan_button = page.choose_button = widget
         page.ftp_job, page.ftp_importing = 0, False
+        page.copy_controls = lambda: (widget,)
+        page.bar = page.card = widget
+        page.copy_key = lambda: ('wifi', '127.0.0.1:5000', scan)
+        page.addr = mock.Mock()
+        page.addr.get.return_value = '127.0.0.1:5000'
         with mock.patch.object(ftp_saves, 'copy', side_effect=copy):
             page.import_ftp()
             self.assertIs(page.ftp_resume, stopped)
@@ -450,6 +507,7 @@ class SavesPageJobTests(unittest.TestCase):
                               opts=SimpleNamespace(probes=SimpleNamespace(pc_save_dir=lambda game: '/fixture-pc'),
                                                    confirm_overwrite=lambda *args: True))
         app.work = lambda job, done, errors=False: self.jobs.append((job, done))
+        app.root = mock.Mock()
         self.scan_result = SimpleNamespace(has_corrupt=False, valid_files=[object()], files=[object()],
                                            corrupt_files=[], player_summary='PC', folder='/fixture-pc', exists=True)
         self.scan_result.files = []
@@ -459,10 +517,14 @@ class SavesPageJobTests(unittest.TestCase):
         page.custom_dir, page.ftp_resume, page.ftp_running, page.ftp_importing = None, None, False, False
         page.ftp_job, page.ftp_cancel = 0, threading.Event()
         page.choice = mock.Mock()
-        page.choice.get.return_value = 'copy'
+        page.choice.get.return_value = 'wifi'
+        page.last_method, page.completed_key, page.card_roots = 'wifi', None, {}
         for name in ('status', 'ftp_cancel_button', 'folder_label', 'notice', 'copy_radio', 'scan_button',
-                     'choose_button', 'tree'):
+                     'choose_button', 'tree', 'card', 'addr', 'sd', 'wifi', 'bar', 'wifi_radio',
+                     'skip_radio', 'card_button', 'refresh_button', 'check_button'):
             setattr(page, name, mock.Mock())
+        page.addr.get.return_value = '127.0.0.1:5000'
+        page.card.get.return_value = ''
         page.tree.get_children.return_value = []
         self.page = page
         self.old = ftp_saves.Snapshot({'file0': b'OLD\n1\n0\n'}, 'OLD')
@@ -490,7 +552,8 @@ class SavesPageJobTests(unittest.TestCase):
         self.jobs[0][1](result)
         self.assertFalse(self.page.busy())
         self.page.scan_button.state.assert_called_with(['!disabled'])
-        self.page.app.show.assert_called_once_with(8)
+        self.page.app.show.assert_not_called()
+        self.assertIn('Copied 1 save to the 3DS over Wi-Fi', self.page.status.config.call_args.kwargs['text'])
 
     def test_an_older_check_finishing_late_is_ignored(self):
         self.scan()

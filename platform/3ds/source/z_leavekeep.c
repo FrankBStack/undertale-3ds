@@ -64,7 +64,11 @@ Result LK_NEXT_CONTROL(u32* addr_out, u32 addr0, u32 addr1, u32 size, MemOp op, 
 // LK_NEXT_CONTROL. (Not a macro rename of __real_svcControlMemory: in DELTARUNE LK_NEXT_CONTROL is that name.)
 Result CtrSvcControlMemory_exitpanic(u32* addr_out, u32 addr0, u32 addr1, u32 size, MemOp op, MemPerm perm);
 Result __wrap_svcControlMemory(u32* addr_out, u32 addr0, u32 addr1, u32 size, MemOp op, MemPerm perm);
-void __real__exit(int status) __attribute__((noreturn));
+#ifndef ENABLE_WAD16
+#define CtrAptTrace_exit __real__exit
+#endif
+#line 67
+void CtrAptTrace_exit(int status) __attribute__((noreturn));
 void CTR_EXIT_ONCE(int status) __attribute__((noreturn));
 
 static u32 lkKeepHeap LK_BSS; // thread id + 1 of the lab leave or filesRecover caller
@@ -98,7 +102,7 @@ LK_CODE void CTR_EXIT_ONCE(int status) {
         svcSleepThread(LK_WAIT_SECONDS * 1000000000LL);
         svcExitProcess();
     }
-    __real__exit(status);
+    CtrAptTrace_exit(status);
 }
 
 // The heap stays mapped when a lab leave owns the exit, or when another thread waits in _exit.

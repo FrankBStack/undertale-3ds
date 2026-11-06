@@ -176,6 +176,13 @@ class FakeFtpd:
                                 outer.after_rename(arg)
                             self.reply("250 renamed")
                         rnfr = None
+                    elif cmd == "RMD":
+                        try:
+                            local.rmdir()
+                        except OSError:
+                            self.reply("550 cannot remove directory")
+                        else:
+                            self.reply("250 removed directory")
                     elif cmd == "DELE":
                         if local.is_file():
                             local.unlink()

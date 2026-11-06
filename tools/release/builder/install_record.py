@@ -16,6 +16,50 @@ MAX_BYTES = 8 * 1024 * 1024
 PROTECTED = {'saves', 'settings.ini', 'log.txt', 'install.json', 'crash.txt', 'hang.txt'}
 
 
+class ModelInputMismatch(ValueError):
+    """Publishing shared data would strand a retained personal executable."""
+
+
+def check_retained_models(product, names, data_hashes, *, previous, present, digest):
+    """Check before publication; a retained executable keeps its original input binding.
+
+    Inventory hashes describe the copy used for the previous install, even if its
+    data.win has since been damaged. Legacy installs without a record use the
+    actual destination data. Never delete an executable or weaken its runtime gate.
+    Installed CIA titles cannot be inspected through the SD filesystem.
+    """
+    replacing = {name.casefold() for name in names}
+    retained = []
+    for model in products.TARGETS:
+        stem = products.package_stem(product, model)
+        for name in (product.sd_app_dir() + '/' + stem + '.3dsx', 'cia/' + stem + '.cia'):
+            if name.casefold() not in replacing and present(name):
+                retained.append(name)
+    if not retained or not data_hashes:
+        return
+    record = validated(previous, product)
+    old_hashes = {entry['path'].casefold(): entry['sha256'] for entry in record['files']} if record else {}
+    for name, incoming in data_hashes.items():
+        expected = old_hashes.get(name.casefold())
+        from_record = expected is not None
+        if expected is None and present(name):
+            expected = digest(name)
+        if expected != incoming:
+            if from_record:
+                reason = 'The other model on this card was made from a different copy of the game.'
+            elif expected:
+                reason = ('The data.win on this card does not match this copy. '
+                          'It may be damaged or from a different copy of the game.')
+            else:
+                reason = "The builder couldn't check which copy of the game the other model on this card was made from."
+            raise ModelInputMismatch(reason + '\nBuild both models from this copy, including any .cia you use, '
+                'then try again. Or remove only these files:\n' + '\n'.join(retained) +
+                '\nDo NOT delete the ' + product.sd_data_dir + ' folder: it also contains your saves and settings. '
+                'Keep ' + product.sd_save_dir() + '/ and ' + product.sd_data_dir + '/settings.ini. '
+                'If you installed a .cia with FBI, install the matching rebuilt .cia too, or uninstall that title '
+                'before changing copies. Nothing has been replaced.')
+
+
 def relative_path(product):
     return product.sd_data_dir + '/install.json'
 

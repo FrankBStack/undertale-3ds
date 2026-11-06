@@ -59,7 +59,7 @@ for f in "${ours[@]}" "${vendor[@]}"; do
     "$cc" "${base[@]}" -DTEXPREP_DEPS_PASS -w -M -MT x -MF "$d" "$f"
     deps+=("$d")
 done
-"${py[@]}" -I "$here/sources.py" header "$root" "$objdir/texprep_sources.h" "${deps[@]}" >/dev/null
+"${py[@]}" -X utf8 -I "$here/sources.py" header "$root" "$objdir/texprep_sources.h" "${deps[@]}" >/dev/null
 common+=(-I"$objdir")
 objs=()
 for f in "${ours[@]}"; do

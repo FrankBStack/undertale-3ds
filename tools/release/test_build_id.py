@@ -13,6 +13,7 @@ GIT = shutil.which('git')
 @unittest.skipUnless(CMAKE and GIT, 'CMake and Git required')
 class BuildIdTests(unittest.TestCase):
     def setUp(self):
+        (ROOT / 'scratch').mkdir(exist_ok=True)
         self.temp = tempfile.TemporaryDirectory(dir=ROOT / 'scratch')
         self.addCleanup(self.temp.cleanup)
         self.root = pathlib.Path(self.temp.name)

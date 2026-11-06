@@ -123,4 +123,12 @@ void CtrPacer_loadStress(const char* path);
 // For hang reports (ctr_watchdog.c): the pacer's state, read without its lock.
 void CtrPacer_describeStall(char* out, size_t size);
 
+#ifdef CTRPORT_PACEALIGN
+// pacealign (UNDERTALE only; z_pacealign.c): whether a bench window's edge waits for its cut, and the cut's lines (the
+// edges' "[perf] frame N: bench window opens|ends" lines and CtrPacer_logStats). The pacer cuts at the frame's end
+// (ctr_frame_pacer.c's end says what each report holds).
+bool CtrBench_paceCutDue(void);
+void CtrBench_paceCutLog(void);
+#endif
+
 #endif

@@ -1,8 +1,9 @@
-# Experimental DSP-ADPCM container, version 1
+# DSP-ADPCM container, version 1, and experimental paths
 
-Conversion is opt-in. All derived files stay in private build/output folders.
-No runtime or release build selects this format yet. Listening approval is
-required before enabling it in any shipping builder or game.
+These notes cover experimental ADPCM paths. The normal UNDERTALE builder also
+creates `adpcm-sfx.dtsp` for verified dual-mono effects, using DTAD v1 payloads
+inside a DTSP v2 pack. That SFX pack uses content checks, not a catalog receipt.
+All derived files stay in private build/output folders.
 
 The six listening pairs were approved on 2026-10-26:
 3 of 11 correct across two blind rounds with good headphones, and "side by
@@ -17,7 +18,8 @@ Private build preparation is available with
 The build option uses a separate `-audioconvert` build directory and writes
 private assets under `build/audio-adpcm-<game>/`. It does not enable playback
 or copy these assets to an SD card. The builder's source mirror includes the
-audio tools; the normal wizard and release defaults do not invoke conversion.
+audio tools. The normal wizard does not invoke this experimental catalog/music
+preparation route; its SFX pack is prepared separately.
 
 The preparation manifest covers every SOND slot (including absent ones) and
 every OGG file under the input root. It identifies each data.win and sound
@@ -32,8 +34,9 @@ source-invalidation lookup and native playback remain separate gates.
 embedded WAV sources. Original PCM8/PCM16 stereo channel bytes must match
 exactly. Only then does the converter encode one channel; source rate, frame
 count and original channel count stay exact. True stereo and unsupported WAVs
-remain PCM fallbacks. This opt-in is bound into the encoder/cache signature.
-It is not yet enabled by normal PC-builder delivery or game SFX playback.
+remain PCM fallbacks. This option is bound into the encoder/cache signature.
+Only exactly matching stereo WAV channels qualify for mono projection. Normal
+UNDERTALE SFX packs use this policy; the experimental catalog route is separate.
 The projected object key is SHA-256(policy ASCII, NUL, original source blob),
 separate from an unprojected object's source SHA-256, so aliases used for
 stereo music cannot select a mono payload accidentally.
@@ -105,7 +108,7 @@ PCM reference and captures the final mix for a byte comparison. It is not
 the game's ADPCM streaming/cache backend. The ordinary build defaults do
 not run it; private probe assets/captures live under the Azahar game folder.
 
-The native queue primitive is `ctr_adpcm_player.h` / `z_adpcm_player.c`.
+The experimental native queue primitive is `ctr_adpcm_player.h` / `z_adpcm_player.c`.
 It uses four blocks: 4,704 B linear for mono or 9,408 B for stereo SD streams,
 versus the existing 65,536 B per PCM stream. A compressed resident SFX instead
 queues pointers into its pinned linear DTAD, using one block of ordinary
@@ -121,14 +124,15 @@ until the read returns. Final buffers exclude padding and a loop queues the
 original block-zero history, without inserting samples. Native entry currently
 accepts only exact block boundaries; the game adapter must retain exact legacy
 playback for other seeks. Channel admission, stop tails and seam correction
-belong to that adapter. Their gameplay integration is still pending.
+belong to that adapter. These integration notes describe the experimental queue
+route, not the normal UNDERTALE SFX pack backend.
 
 Host device tests cover mono/stereo completion, 50 loops, frame positions,
 pause, explicit mix/rate changes, zero-copy resident playback, short reads,
 refill stalls and stale read cancellation. The updated native diagnostic
 compares up to six consecutive blocks against PCM through the production
-queue, refilling its four-block ring outside the callback. Its DSP-on result
-and linked layout/cost gates remain pending.
+queue, refilling its four-block ring outside the callback. The historical
+DSP-on and layout result for this batch follows; it is not final game qualification.
 
 The first six-block queue batch passed on DSP-on Azahar Old64: 36 cases,
 273,927 nonzero sample pairs, 0 unequal samples. At least 20 cases crossed
@@ -136,6 +140,8 @@ the four-block ring and required a refill. The session retained 0 B, and the
 ordinary Snowdin benchmark completed afterward. Both UT model builds had
 0 warnings and 0 full layout failures. This validates the native queue;
 it does not establish the game's voice, seek, stop or loop behavior.
+
+## Experimental DTAI catalog path
 
 `stage.py` turns a prepared cache into a separate private SD asset folder:
 `objects/<source SHA-256>.dtad`, `index/<data.win SHA-256>.dtai`, and a staging
@@ -183,7 +189,11 @@ nothing. Body integrity alone does not validate the corresponding SD source
 or payload: the game adapter must verify their identities before selecting
 native playback.
 
-`CtrAdpcmStore` supplies the SD-file side of that selection. It tries the
+This experimental catalog/receipt route is not a normal UNDERTALE builder step.
+Its receipt tool is available in the full source tree; it is not included in
+this builder kit. Normal `adpcm-sfx.dtsp` SFX packs need no catalog or receipt.
+
+`CtrAdpcmStore` supplies the SD-file side of that experimental selection. It tries the
 data.win directory and parent for the index, retaining verified metadata
 in caller-supplied ordinary heap. Run `receipts.py --sd-root <game-folder>
 --assets <game-folder>/audio-adpcm --index <installed-index>` **after the final
@@ -234,8 +244,11 @@ PCM worker. ARM/gameplay and first-play latency gates are pending.
 Catalogs with projected records retain their original SOND slots and receipt
 slots in ordinary heap. Music-only catalogs keep the existing compaction;
 retained metadata must be included in later net-memory measurements.
-Other embedded sources retain the existing fallback. Game stream selection,
-channel leases, loop-seam handling and normal builder delivery are pending.
+Other embedded sources retain the existing fallback. The pending game stream
+selection, channel leases, loop-seam handling and builder delivery notes here
+apply to this experimental catalog route, not the normal SFX pack.
+
+### Historical developer diagnostic
 
 For the approved Azahar measurement only, `build.sh adpcmmusic
 adpcmtestmtime` enables `CTRPORT_ADPCM_TEST_UNKNOWN_MTIME`. It is OFF by
@@ -250,7 +263,10 @@ path with the switch OFF and real FAT timestamps. The switch-off proof
 compares all mapped ELF bytes/extents against the no-switch frozen build,
 exempting only the fixed 40 B build ID. No emulator executable is modified.
 
-## Combined Option B candidate (charter rev 2, 2026-10-28)
+## Historical combined Option B candidate (charter rev 2, 2026-10-28)
+
+These budgets and status notes describe the dated candidate, not the selected
+normal UNDERTALE beta SFX backend.
 
 Music decodes true-stereo ADPCM through the existing core-1 PCM feeder. Only
 verified dual-mono embedded WAV SFX use resident mono DTAD; true-stereo SFX

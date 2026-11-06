@@ -18,7 +18,7 @@ def read_files(root, *, omit_caches=False):
     """Read once so the checked bytes are the bytes subsequently packaged."""
     root = Path(root)
     if root.is_symlink() or not root.is_dir():
-        raise ValueError('Runtime input must be a regular directory')
+        raise ValueError('Runtime input must be a regular directory: ' + str(root))
     files = {}
     for path in root.rglob('*'):
         name = path.relative_to(root).as_posix()
@@ -38,9 +38,32 @@ def inventory_pin(files):
     return dict(files=len(rows), sha256=digest)
 
 
-def validate_inventory(files, expected, label):
-    if inventory_pin(files) != expected:
-        raise ValueError(label + ' inventory does not match its pin (missing, extra or modified file)')
+def validate_inventory(files, expected, label, members=None):
+    if inventory_pin(files) == expected:
+        return
+    details = []
+    count = 0
+    if members is not None:
+        # Expected rows are trusted pin data; extra names come from the rejected runtime.
+        # Escape and bound all displayed names. The aggregate remains the acceptance gate.
+        encoded = json.dumps(members, ensure_ascii=True, separators=(',', ':')).encode('ascii')
+        if dict(files=len(members), sha256=hashlib.sha256(encoded).hexdigest()) != expected:
+            raise ValueError(label + ' pin inventory metadata disagrees: builder-runtime-pins.json')
+        wanted = {name: (size, digest) for name, size, digest in members}
+        for name in sorted(set(wanted) | set(files)):
+            kind = ('missing' if name not in files else 'extra' if name not in wanted else
+                    'modified' if (len(files[name]), hashlib.sha256(files[name]).hexdigest()) != wanted[name] else '')
+            if kind:
+                count += 1
+                if len(details) < 20:
+                    shown = ascii(name[:80])
+                    if len(shown) > 160:
+                        shown = shown[:157] + '...'
+                    details.append(kind + ' ' + shown + ('...' if len(name) > 80 else ''))
+    suffix = '; '.join(details) if details else 'missing, extra or modified file'
+    if count > len(details):
+        suffix += '; %d more differences' % (count - len(details))
+    raise ValueError(label + ' inventory does not match its pin: ' + suffix)
 
 
 def windows_files(root):
@@ -54,11 +77,12 @@ def windows_files(root):
     expected = PINS['windows']
     if hashlib.sha256(files.get('python.exe', b'')).hexdigest() != expected['python_exe_sha256']:
         raise ValueError('Windows python.exe does not match its pin')
-    validate_inventory(files, expected['inventory'], 'Windows runtime')
+    validate_inventory(files, expected['inventory'], 'Windows runtime', expected.get('inventory_members'))
     return files
 
 
 def mac_licence_files(root):
     files = read_files(root)
-    validate_inventory(files, PINS['macos']['licences_inventory'], 'Mac runtime licence')
+    validate_inventory(files, PINS['macos']['licences_inventory'], 'Mac runtime licence',
+                       PINS['macos'].get('licences_members'))
     return files

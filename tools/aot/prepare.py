@@ -280,6 +280,10 @@ def prepare_chapters(game, target, found, out, selection, runs):
 
 
 def main(argv):
+    # Isolated Windows Python ignores PYTHONIOENCODING; redirected logs can be cp1252.
+    for stream in (sys.stdout, sys.stderr):
+        if hasattr(stream, 'reconfigure'):
+            stream.reconfigure(errors='backslashreplace')
     game = target = out = data = typed = late_numeric = None
     chapters = "--chapters" in argv
     check_only = "--check-only" in argv

@@ -1,6 +1,7 @@
 """Wizard page 4: find devkitPro and the other build tools, and set up what is missing, each step behind consent.
 
-devkitPro is never bundled. Missing pieces come from devkitPro's official installer and pacman repositories, and the
+devkitPro is never bundled. The compiler and tools come from its official installer and pacman repositories
+with consent. Tested game libraries may be downloaded into the private work folder, and the
 .cia tools from their upstream GitHub releases, each download checked against a SHA-256 pinned here. A dry run
 (`builder.py --dry-run`) prints every detection result, URL, pin and command without downloading or running anything;
 it is the support tool and the only mode exercised on the development PC.
@@ -10,10 +11,14 @@ from __future__ import annotations
 import dataclasses
 import errno
 import hashlib
+import io
+import ntpath
 import os
+from pathlib import Path
 import re
 import shlex
 import shutil
+import ssl
 import subprocess
 import sys
 import tarfile
@@ -104,6 +109,7 @@ class Toolchain:
     threedslink: str | None
     platform: str = sys.platform
     package_versions: dict = dataclasses.field(default_factory=dict)
+    compiler_info: dict = dataclasses.field(default_factory=dict)
 
     @property
     def can_build(self):
@@ -120,6 +126,32 @@ def run_capture(argv, timeout=60):
     return p.returncode, p.stdout
 
 
+def windows_install_roots(registry=None):
+    """Read the official installer's location, never modify its registry record.
+
+    v3.0.3 nsis/devkitPro.nsi writes HKLM's devkitProUpdater uninstall key,
+    InstallLocation=$INSTDIR; DEVKITPRO itself is only /opt/devkitpro.
+    Read both views so detection works from either width of Python.
+    """
+    if registry is None:
+        try:
+            import winreg as registry
+        except ImportError:
+            return []
+    locations = []
+    key = r'Software\Microsoft\Windows\CurrentVersion\Uninstall\devkitProUpdater'
+    for view in (registry.KEY_WOW64_32KEY, registry.KEY_WOW64_64KEY):
+        try:
+            with registry.OpenKey(registry.HKEY_LOCAL_MACHINE, key, 0, registry.KEY_READ | view) as handle:
+                value, kind = registry.QueryValueEx(handle, 'InstallLocation')
+            if (kind == registry.REG_SZ and isinstance(value, str) and '\0' not in value
+                    and re.fullmatch(r'[A-Za-z]:', ntpath.splitdrive(value)[0]) and ntpath.isabs(value)):
+                locations.append(value)
+        except OSError:
+            continue
+    return locations
+
+
 def candidate_roots(env=None, platform=sys.platform):
     env = os.environ if env is None else env
     out = []
@@ -128,6 +160,7 @@ def candidate_roots(env=None, platform=sys.platform):
         # The installer sets DEVKITPRO=/opt/devkitpro (an MSYS2 path), so a Windows path there is a user override.
         if v and not v.startswith("/"):
             out.append(v)
+        out.extend(windows_install_roots())
         out.append("C:/devkitPro")
     else:
         if v:
@@ -137,21 +170,179 @@ def candidate_roots(env=None, platform=sys.platform):
 
 
 def compiler_details(tc, run=run_capture):
-    """Query the selected compiler just before building; an unknown version only warns."""
+    """Read-only queries, each bounded to five seconds with one cold-start retry."""
     exe = 'arm-none-eabi-gcc' + ('.exe' if tc.platform == 'win32' else '')
     path = os.path.join(tc.root or '', 'devkitARM', 'bin', exe)
-    result = dict(path=path, version='unknown', target='unknown')
+    result = dict(path=path, installed=bool(tc.root and os.path.isfile(path)),
+                  version=None, target=None, vendor=None, package=None, errors={}, queries={})
     if not tc.root:
         return result
-    for key, args, pattern in (('version', ['-dumpfullversion', '-dumpversion'], r'[0-9]+\.[0-9]+\.[0-9]+'),
-                               ('target', ['-dumpmachine'], r'[a-z0-9_-]+')):
-        try:
-            rc, out = run([path] + args)
-            if rc == 0 and re.fullmatch(pattern, out.strip()):
-                result[key] = out.strip()
-        except (OSError, subprocess.SubprocessError):
-            pass
+
+    def query(key, command, parse):
+        result['queries'][key] = (subprocess.list2cmdline(command) if tc.platform == 'win32'
+                                  else shlex.join(command))
+        value, reason = bounded_query(command, parse, run)
+        if value is None:
+            result['errors'][key] = reason
+        else:
+            result[key] = value
+
+    query('version', [path, '-dumpfullversion', '-dumpversion'],
+          lambda out: single(r'([0-9]+\.[0-9]+\.[0-9]+)', out))
+    query('target', [path, '-dumpmachine'], lambda out: single(r'([a-z0-9_-]+)', out))
+    query('vendor', [path, '--version'],
+          lambda out: single(r'arm-none-eabi-gcc(?:\.exe)? \(([^\r\n]+)\) ' +
+                             re.escape(result['version'] or ''), out))
+    command = ([tc.bash, '--login', '-c', 'pacman -Q devkitarm-gcc'] if tc.platform == 'win32'
+               else [pacman_exe(tc.root), '-Q', 'devkitarm-gcc'])
+    query('package', command, lambda out: single(r'devkitarm-gcc ([0-9.]+-[0-9]+)', out))
     return result
+
+
+def single(pattern, text):
+    values = [m.group(1) for line in text.splitlines() if (m := re.fullmatch(pattern, line.strip()))]
+    return values[0] if len(values) == 1 else None
+
+
+def bounded_query(command, parse, run):
+    for _attempt in range(2):
+        try:
+            rc, out = run(command, timeout=5)
+            value = parse(out) if rc == 0 else None
+            if value is not None:
+                return value, None
+            reason = 'the command failed' if rc else 'the reply was not readable'
+        except subprocess.TimeoutExpired:
+            reason = 'the command took more than 5 seconds'
+        except (OSError, subprocess.SubprocessError):
+            reason = 'the command could not run'
+    return None, reason
+
+
+def compiler_requirement(tested):
+    return 'devkitARM %s, GCC %s (devkitarm-gcc %s)' % (
+        tested['distribution_release'], tested['version'], tested['package_version'])
+
+
+def compiler_status(compiler, tested):
+    version = compiler.get('version')
+    package = compiler.get('package')
+    found = ('GCC %s, package %s' % (version, package)
+             if version and package and 'unknown' not in (version, package) else
+             'Not installed yet' if compiler.get('installed') is False else 'Could not check the compiler')
+    return 'Found: %s. Required for UNDERTALE: %s.' % (found, compiler_requirement(tested))
+
+
+def require_release_compiler(compiler, tested, platform, releases_url=''):
+    """UNDERTALE's assembly adapters preserve exactness and must never be bypassed."""
+    package = tested['package_version']
+    if (compiler.get('version') == tested['version'] and compiler.get('target') == tested['target']
+            and compiler.get('vendor') == 'devkitARM' and compiler.get('package') == package):
+        return
+    required = compiler_requirement(tested)
+    unreadable = [key for key in ('version', 'target', 'vendor', 'package')
+                  if compiler.get(key) in (None, '', 'unknown')]
+    if unreadable or compiler.get('errors'):
+        commands = '\n'.join(dict.fromkeys(compiler.get('queries', {}).get(key, '') for key in unreadable)).strip()
+        details = '\n'.join('%s: %s.' % (key, reason) for key, reason in compiler.get('errors', {}).items())
+        raise Refused("Couldn't check the compiler; it may be busy. The build has not started.\n"
+                      'Required: %s. Click Try again, or Check again on the compiler page.\n%s%s' %
+                      (required, details, '\nTo check by hand, run:\n' + commands if commands else ''))
+    if (compiler.get('vendor') == 'devkitARM' and compiler.get('target') == tested['target'] and
+            tuple(map(int, re.split(r'[.-]', compiler['package']))) <
+            tuple(map(int, re.split(r'[.-]', package)))):
+        raise Refused('This UNDERTALE builder needs %s.\n%s\nThe build has not started. '
+                      'Your compiler is older than the tested version. Click Update devkitPro on the '
+                      'compiler page, then try the build again.' % (required, compiler_status(compiler, tested)))
+    raise Refused('This UNDERTALE builder needs %s.\n%s\nThe build has not started. '
+                  'The tested compiler is needed to keep the game correct.\n'
+                  'Check the release page for a builder that supports your compiler:\n'
+                  "%s\nDo not update devkitPro to fix this version mismatch." %
+                  (required, compiler_status(compiler, tested), releases_url))
+
+
+def repository_package(url, opener=urllib.request.urlopen):
+    """Read pacman's live sync database in memory, including before pacman exists.
+
+    No extraction or sync-database writes. The caller runs this in a child with a
+    five-second wall-clock timeout, which also bounds decoding and slow replies.
+    """
+    request = urllib.request.Request(url, headers={'User-Agent': 'ctrport-builder', 'Cache-Control': 'no-cache'})
+    with opener(request, timeout=5) as response:
+        data = response.read(4 * 1024 * 1024 + 1)
+    if len(data) > 4 * 1024 * 1024:
+        raise ValueError('Repository database is too large')
+    values = []
+    with tarfile.open(fileobj=io.BytesIO(data), mode='r|*') as archive:
+        for member in archive:
+            if member.name.endswith('/desc') and member.isfile():
+                if member.size > 65536:
+                    raise ValueError('Repository entry is too large')
+                with archive.extractfile(member) as entry:
+                    text = entry.read().decode('utf-8')
+                fields = text.splitlines()
+                names = [fields[i + 1] for i, line in enumerate(fields[:-1]) if line == '%NAME%']
+                versions = [fields[i + 1] for i, line in enumerate(fields[:-1]) if line == '%VERSION%']
+                if names == ['devkitarm-gcc'] and len(versions) == 1:
+                    values.append('devkitarm-gcc ' + versions[0])
+    return '\n'.join(values)
+
+
+def repository_command(platform, arch=None):
+    host = {'win32': 'windows', 'linux': 'linux', 'darwin': 'osx'}[platform]
+    cpu = assets.machine(arch)
+    if platform != 'darwin' and cpu != 'x86_64':
+        raise Refused('This setup supports Windows and Linux x86_64, and macOS Intel or Apple Silicon.')
+    url = 'https://pkg.devkitpro.org/packages/%s/%s/dkp-%s.db' % (host, cpu, host)
+    code = 'import sys; sys.path.insert(0, sys.argv[1]); import toolchain; print(toolchain.repository_package(sys.argv[2]))'
+    return [sys.executable, '-X', 'utf8', '-I', '-B', '-c', code, os.path.dirname(os.path.abspath(__file__)), url]
+
+
+def sync_package_version(text):
+    name, values = None, []
+    for line in text.splitlines():
+        match = re.fullmatch(r'Name\s*:\s*(\S+)', line.strip())
+        if match:
+            name = match.group(1)
+        match = re.fullmatch(r'Version\s*:\s*([0-9.]+-[0-9]+)', line.strip())
+        if match and name == 'devkitarm-gcc':
+            values.append('devkitarm-gcc ' + match.group(1))
+    return single(r'devkitarm-gcc ([0-9.]+-[0-9]+)', '\n'.join(values))
+
+
+def require_safe_setup(step, game, tested, releases_url, run=run_capture, root=None, log=lambda text: None):
+    """Query before downloads, writes or elevation; a qualified fresh install is allowed."""
+    if game != 'undertale' or step.key not in ('devkitpro', 'packages', 'update'):
+        return False
+    command = repository_command(step.platform)
+    parse = lambda out: single(r'devkitarm-gcc ([0-9.]+-[0-9]+)', out)
+    offered, reason = bounded_query(command, parse, run)
+    # Windows Install packages uses -S (not -Syu), hence its local sync database
+    # must agree too. Update and Unix setup refresh the database themselves.
+    if offered == tested['package_version'] and step.platform == 'win32' and step.key == 'packages':
+        bash = os.path.join(root or 'C:/devkitPro', 'msys2', 'usr', 'bin', 'bash.exe')
+        command = [bash, '--login', '-c', 'pacman -Si devkitarm-gcc']
+        local, reason = bounded_query(command, sync_package_version, run)
+        if local is not None and local != offered:
+            raise Refused('Your devkitPro package list is out of date. Click Update devkitPro to refresh it, '
+                          'then use Install beside the 3DS tools on the compiler page. Nothing has been installed or updated.\n'
+                          'Local list: devkitarm-gcc %s. Current repository: devkitarm-gcc %s.' % (local, offered))
+        offered = local
+    if offered is None:
+        query = command[-1] if command[-1].startswith('https://') else subprocess.list2cmdline(command)
+        log("Couldn't check the compiler version offered by devkitPro: %s.\n"
+            'Continuing setup; the installed compiler will be checked afterwards.\nRead-only check: %s' %
+            (reason, query))
+        return True
+    if offered != tested['package_version']:
+        newer = tuple(map(int, re.split(r'[.-]', offered))) > tuple(map(int, re.split(r'[.-]', tested['package_version'])))
+        raise Refused('This UNDERTALE builder supports GCC %s (devkitarm-gcc %s).\n'
+                      'devkitPro now offers %s compiler: devkitarm-gcc %s. '
+                      'Nothing has been installed or updated.\n'
+                      'Get a builder that supports it from the project\'s releases page:\n%s' %
+                      (tested['version'], tested['package_version'], 'a newer' if newer else 'a different',
+                       offered, releases_url))
+    return True
 
 
 def complete_windows_exe(path):
@@ -213,14 +404,15 @@ def detect(tools_dir, env=None, platform=sys.platform, run=run_capture, isfile=o
             checks.append(Check("wget", bool(shutil.which("wget")), "Debian download prerequisite", "setup"))
             checks.append(Check("ca-certificates", isfile("/etc/ssl/certs/ca-certificates.crt"),
                                 "Debian HTTPS certificates", "setup"))
+    roots = roots if roots is not None else candidate_roots(env, platform)
     root = None
-    for r in roots if roots is not None else candidate_roots(env, platform):
+    for r in roots:
         if isfile(os.path.join(r, "msys2", "usr", "bin", "bash.exe")) if platform == "win32" else os.path.isdir(r):
             root = r
             break
     if root is None:
         checks.append(Check("devkitPro", False, "not found (looked in %s)" % ", ".join(
-            roots if roots is not None else candidate_roots(env, platform)), "build"))
+            roots), "build"))
         return Toolchain(None, None, checks, list(required), list(RECOMMENDED_PACKAGES),
                          _find_tool("makerom", [tools_dir], exe), _find_tool("bannertool", [tools_dir], exe), None,
                          platform)
@@ -350,9 +542,9 @@ def full_plan(tools_dir, downloads_dir, root=None, want_cia=True, packages=None,
              [dict(DEVKITPRO_INSTALLER, dest=inst)], [[inst]], admin=True,
              note="the installer itself downloads MSYS2 and packages from downloads.devkitpro.org; it has no silent "
                   "mode, so the user clicks through it"),
-        Step("packages", "Install the 3DS packages with devkitPro's pacman",
-             "devkitPro's package manager will download and install: %s (about 460 MB installed) from "
-             "downloads.devkitpro.org. No administrator permission is needed." % ", ".join(packages),
+        Step("packages", "Install devkitPro's 3DS tools",
+             "Downloads and installs the 3DS compiler, sound libraries and build tools from downloads.devkitpro.org "
+             "(about 460 MB installed). No administrator permission is needed.",
              [], [[bash, "--login", "-c", "pacman -S --needed --noconfirm " + " ".join(packages)]]),
     ]
     if want_cia:
@@ -429,7 +621,7 @@ def update_step(root, platform=sys.platform):
                     [privileged([pacman_exe(root or "/opt/devkitpro"), "-Syu", "--noconfirm"], platform)],
                     admin=True, platform=platform)
     bash = os.path.normpath(os.path.join(root or "C:/devkitPro", "msys2", "usr", "bin", "bash.exe"))
-    return Step("update", "Update devkitPro (pacman -Syu)",
+    return Step("update", "Update devkitPro",
                 "Updates every devkitPro package from downloads.devkitpro.org. If MSYS2 itself updates, close the "
                 "builder, then run the update again.", [], [[bash, "--login", "-c", "pacman -Syu --noconfirm"]],
                 platform=platform)
@@ -454,15 +646,15 @@ def unix_plan(tools_dir, downloads_dir, root, want_cia, platform, arch):
     inst = os.path.abspath(os.path.join(downloads_dir, os.path.basename(pin["url"])))
     if platform == "linux":
         conf = os.path.abspath(os.path.join(downloads_dir, "apt-builder.conf"))
-        steps = [Step("host", "Install Debian build prerequisites",
-                      "Installs python3, python3-tk, bash, cmake, make, g++, wget and CA certificates from your "
-                      "system's apt repositories. The desktop asks for administrator permission (PolicyKit).", [],
+        steps = [Step("host", "Install the tools needed on this computer",
+                      "Installs the build tools and security certificates from your "
+                      "system's software sources. Your system asks for administrator permission.", [],
                       [privileged(["/usr/bin/apt-get", "update"], platform),
                        privileged(["/usr/bin/apt-get", "install", "-y", "python3", "python3-tk", "bash", "cmake",
                                    "make", "g++", "wget", "ca-certificates"], platform)], admin=True),
-                 Step("devkitpro", "Install devkitPro's Debian package manager",
-                      "Downloads devkitPro's official 800-byte apt setup script, checks its pinned SHA-256, then "
-                      "adds the official apt repository and installs devkitpro-pacman with administrator permission.",
+                 Step("devkitpro", "Install devkitPro's software manager",
+                      "Downloads and checks devkitPro's official setup file (800 bytes), then "
+                      "adds its software source and installs its software manager with administrator permission.",
                       [dict(pin, dest=inst)], [["apt-config", conf],
                       privileged(["/usr/bin/env", "APT_CONFIG=" + conf, "DEBIAN_FRONTEND=noninteractive",
                                   "/bin/bash", inst], platform)], admin=True,
@@ -474,17 +666,17 @@ def unix_plan(tools_dir, downloads_dir, root, want_cia, platform, arch):
                       "Opens Apple's installer for make and the C++ compiler. Finish its window, then click Check again.",
                       [], [["/usr/bin/xcode-select", "--install"]]),
                  Step("cmake", "Download CMake 3.31.8 (Apple Silicon and Intel)",
-                      "Downloads 78.4 MB from Kitware's official GitHub release, checks SHA-256, and unpacks "
+                      "Downloads and checks 78.4 MB from Kitware's official GitHub release, then unpacks "
                       "CMake into the builder's tools folder. No administrator permission is needed.",
                       [dict(assets.MAC_CMAKE, dest=cmake_archive)],
                       [["untar-cmake", cmake_archive, os.path.join(tools_dir, "cmake")]]),
-                 Step("devkitpro", "Install devkitPro pacman 6.0.2",
-                      "Downloads devkitPro's official 65.4 MB .pkg, checks SHA-256, then asks macOS for "
-                      "administrator permission. The .pkg selects Apple Silicon or Intel automatically.",
+                 Step("devkitpro", "Install devkitPro's software manager",
+                      "Downloads and checks devkitPro's official installer (65.4 MB), then asks macOS for "
+                      "administrator permission. The installer selects Apple Silicon or Intel automatically.",
                       [dict(pin, dest=inst)],
                       [privileged(["/usr/sbin/installer", "-pkg", inst, "-target", "/"], platform)], admin=True)]
-    steps.append(Step("packages", "Install devkitPro's 3DS packages",
-                      "Downloads and installs 3ds-dev, 3ds-libvorbisidec and 3ds-libogg from devkitPro's official "
+    steps.append(Step("packages", "Install devkitPro's 3DS tools",
+                      "Downloads and installs the 3DS compiler and sound libraries from devkitPro's official "
                       "repositories (several hundred MB). Your system asks for administrator permission.", [],
                       [privileged([pacman_exe(root), "-Syu", "--needed", "--noconfirm"] +
                                   list(UNIX_INSTALL_PACKAGES), platform)], admin=True))
@@ -495,14 +687,14 @@ def unix_plan(tools_dir, downloads_dir, root, want_cia, platform, arch):
             raise Refused(str(e)) from e
         archive = os.path.abspath(os.path.join(downloads_dir, os.path.basename(makerom["url"])))
         steps.append(Step("makerom", "Download makerom v0.18.4",
-                          "Downloads the native makerom binary from Project_CTR's GitHub release with a pinned "
-                          "SHA-256 into the builder's tools folder (under 0.3 MB).", [dict(makerom, dest=archive)],
+                          "Downloads and checks makerom (under 0.3 MB) from Project_CTR's GitHub release, then "
+                          "saves it in the builder's tools folder. This tool makes HOME Menu install files.", [dict(makerom, dest=archive)],
                           [["extract", archive, "makerom", tools_dir]]))
         archive = os.path.abspath(os.path.join(downloads_dir, os.path.basename(assets.BANNERTOOL_SOURCE["url"])))
         source = os.path.abspath(os.path.join(downloads_dir, "bannertool-source"))
         steps.append(Step("bannertool", "Build bannertool 1.2.3 for this computer",
-                          "Downloads 211 KB of MIT-licensed source from bannertool's GitHub release, checks "
-                          "SHA-256, and compiles it with the system C++ compiler into the builder's tools folder. "
+                          "Downloads and checks 211 KB of MIT-licensed source from bannertool's GitHub release, "
+                          "then builds the HOME Menu packaging tool in the builder's tools folder. "
                           "No administrator permission is needed.", [dict(assets.BANNERTOOL_SOURCE, dest=archive)],
                           [["untar", archive, source], ["build-bannertool", source, tools_dir]],
                           note="No macOS binary is published for 1.2.3. Its Linux binary needs glibc 2.39; "
@@ -639,10 +831,32 @@ def _save_download(action, *args, **kwargs):
         raise Refused(message + "\n" + str(exc)) from None
 
 
-def download(url, dest, sha256, opener=urllib.request.urlopen, progress=None, size=None):
+def https_context():
+    """A private verified context, including the kit's pinned Mozilla CA snapshot."""
+    path = Path(__file__).with_name('certs') / 'cacert.pem'
+    data = path.read_bytes()
+    if hashlib.sha256(data).hexdigest() != '50f79f98dac192b20dbf73f35c56f0b0c557ab267ff5199d1117cc1180b70785':
+        raise Refused('The builder certificate file is damaged. Download the complete builder again.')
+    context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+    context.load_default_certs()
+    context.load_verify_locations(cadata=data.decode('ascii'))
+    return context
+
+
+def https_open(request, timeout=60):
+    return urllib.request.urlopen(request, timeout=timeout, context=https_context())
+
+
+def certificate_failure(error):
+    return isinstance(error, ssl.SSLCertVerificationError) or isinstance(
+        getattr(error, 'reason', None), ssl.SSLCertVerificationError)
+
+
+def download(url, dest, sha256, opener=None, progress=None, size=None):
     """Downloads to dest only if the bytes match the pinned SHA-256 (and the pinned size, when there is one)."""
     if not sha256:
-        raise Refused("No pinned SHA-256 for %s; the builder will not download it." % url)
+        raise Refused("This builder cannot check the setup download. Download and unpack the complete builder again.")
+    opener = opener or https_open
     _save_download(os.makedirs, os.path.dirname(dest) or ".", exist_ok=True)
     tmp = dest + ".part"
     h = hashlib.sha256()
@@ -680,13 +894,16 @@ def download(url, dest, sha256, opener=urllib.request.urlopen, progress=None, si
             raise Refused("%s is %s bytes, not the pinned %d; deleted it." % (
                 url, "more than %d" % size if done > size else done, size))
         if h.hexdigest() != sha256.lower():
-            raise Refused("%s has SHA-256 %s, not the pinned %s; deleted it." % (url, h.hexdigest(), sha256))
+            raise Refused("The download did not match the expected file and was deleted. Try the download again.")
         _save_download(os.replace, tmp, dest)
     except (Refused, OSError, ValueError) as exc:
         if os.path.exists(tmp):
             _save_download(os.remove, tmp)
         if isinstance(exc, Refused):
             raise
+        if certificate_failure(exc):
+            raise Refused('Could not verify the download server certificate. Check your computer date and time, '
+                          'then try again. If it still fails, check the release page for an updated builder.') from None
         if isinstance(exc, urllib.error.HTTPError):
             code = exc.code
             exc.close()
@@ -754,17 +971,22 @@ class Actions:
     extract: object = extract_exe
     elevated: object = run_elevated
     run: object = None           # callable(argv, log) -> exit code
+    query: object = run_capture  # read-only queries; five-second timeout, tests inject this too
 
 
-def run_step(step: Step, log, dry_run, actions: Actions | None = None, stage=None, work=None, root=None):
+def run_step(step: Step, log, dry_run, actions: Actions | None = None, stage=None, work=None, root=None,
+             game=None, tested=None, releases_url=''):
     """Runs one consented step. In a dry run it only logs what it would do. Returns True on success.
 
-    stage(kind, text), when given, hears each phase ("download" or "run") so a window can show progress."""
+    stage(kind, text), when given, hears progress ("download" or "run") and a final "notice" to keep visible."""
     actions = actions or Actions()
     stage = stage or (lambda kind, text: None)
     if dry_run:
         log("[dry run] would do: " + step.describe())
         return True
+    if game == 'undertale' and step.key in ('devkitpro', 'packages', 'update'):
+        stage('run', 'Checking the compiler offered by devkitPro...')
+    protected = require_safe_setup(step, game, tested, releases_url, run=actions.query, root=root, log=log)
     if work is not None:
         import cleanup
         paths = installed_paths(step, work, root)
@@ -801,11 +1023,48 @@ def run_step(step: Step, log, dry_run, actions: Actions | None = None, stage=Non
             code = actions.run(argv, log)
         if code != 0:
             if step.key in ("packages", "update"):
-                raise Refused("devkitPro's package manager couldn't install %s. Check your internet connection and "
-                              "try again." % " ".join(INSTALL_PACKAGES if step.platform == "win32" else UNIX_INSTALL_PACKAGES))
+                raise Refused("The 3DS tools could not be installed. Check the error details, "
+                              "then try this step again.")
             raise Refused("%s exited with code %s." % (os.path.basename(argv[0]), code))
     if work is not None:
         cleanup.record_after(work, paths)
+    if protected:
+        stage('run', 'Checking the installed compiler...')
+        installed_root = root or ('C:/devkitPro' if step.platform == 'win32' else '/opt/devkitpro')
+        if step.key == 'devkitpro' and step.platform == 'win32':
+            roots = [root] if root else candidate_roots(platform='win32')
+            installed_root = next((r for r in roots if os.path.isfile(
+                os.path.join(r, 'msys2', 'usr', 'bin', 'bash.exe'))), None)
+            if installed_root is None:
+                raise Refused("The devkitPro installer finished, but its MSYS2 tools couldn't be found. "
+                              "Looked in: %s. Click Check again. If devkitPro is still missing, click Try again "
+                              "and select Minimal System and 3DS Development in the installer." % ', '.join(roots))
+        bash = os.path.join(installed_root, 'msys2', 'usr', 'bin', 'bash.exe')
+        tc = Toolchain(installed_root, bash, [], [], [], None, None, None, step.platform)
+        if (step.key == 'devkitpro' and step.platform == 'win32' and
+                not os.path.isfile(os.path.join(installed_root, 'devkitARM', 'bin', 'arm-none-eabi-gcc.exe'))):
+            raise Refused("The 3DS compiler wasn't found in %s. "
+                          "Use Install beside the 3DS tools on the compiler page. "
+                          "Or click Try again and tick 3DS Development in the installer." % installed_root)
+        # The Unix bootstrap installs pacman only. Its next Install packages
+        # action performs the full compiler preflight, as do Windows setup and Update.
+        if (step.key == 'devkitpro' and step.platform != 'win32'
+                and not os.path.isfile(os.path.join(installed_root, 'devkitARM', 'bin', 'arm-none-eabi-gcc'))):
+            try:
+                require_safe_setup(step, game, tested, releases_url, run=actions.query, root=root, log=log)
+            except Refused as exc:
+                raise Refused(str(exc).replace('Nothing has been installed or updated.',
+                              'The package manager was installed; compiler packages have not been changed.')) from None
+            log('devkitPro package manager installed; use Install beside the 3DS tools on the compiler page.')
+        else:
+            compiler = compiler_details(tc, run=actions.query)
+            if step.key == 'update' and compiler['installed'] is False:
+                notice = ("Update finished. The 3DS compiler isn't installed yet; "
+                          "use Install beside the 3DS tools on the compiler page.")
+                log(notice)
+                stage('notice', notice)
+            else:
+                require_release_compiler(compiler, tested, step.platform, releases_url)
     return True
 
 

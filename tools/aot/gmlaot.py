@@ -2208,6 +2208,10 @@ UTF_NATIVE = [
 # UTF_NATIVE items bound for one --target only (any other target, or none given, keeps the generated function): the
 # ring boss's Create is an Old 3DS cut (the New 3DS has the time, and its late-text reserve not the room).
 UTF_NATIVE_TARGET = {"UtRing_bossCreate": "o3ds"}
+# A native body's way in for the call that finds its variables missing, for one --target: (function, its section,
+# the target). The body gets this in place of the generated function, and this calls the body with the generated one
+# (engine/src/z_sansspawn.c).
+UTF_NATIVE_FIRST = {"UtFlames_borderDraw": ("SansSpawn_borderFirst", ".text_sansspawn", "o3ds")}
 
 
 def utf_object_create(dw, obj, want):
@@ -2469,6 +2473,21 @@ def utflames_native(dw, blob, entry, k):
             text += ["AOT_UTF_LATE RValue aotu_%d(VMContext* ctx) {" % k]
         text += ["    int32_t a[%d];" % len(args)]
         text += ["    a[%d] = %s;" % (i, v) for i, v in enumerate(args)]
+        first = UTF_NATIVE_FIRST.get(fn_name)
+        if first is not None and first[2] == BOARD_TARGET:
+            # What the body calls when it can't run gets a function of its own (first time on an instance): the same
+            # wrapper, one word different, and nothing added to the path every later call takes.
+            front = ["RValue %s(VMContext* ctx, uint32_t k, AotFn generated, const int32_t* a);" % first[0],
+                     "RValue aotuf_%d(VMContext* ctx);" % k,
+                     "#if defined(__arm__) && defined(__3DS__)",
+                     "__attribute__((section(\"%s\")))" % first[1],
+                     "#endif",
+                     "RValue aotuf_%d(VMContext* ctx) {" % k,
+                     "    int32_t a[%d];" % len(args)]
+            front += ["    a[%d] = %s;" % (i, v) for i, v in enumerate(args)]
+            front += ["    return %s(ctx, %d, aotf_%d, a);" % (first[0], k, k), "}"]
+            text += ["    return %s(ctx, %d, aotuf_%d, a);" % (fn_name, k, k), "}"]
+            return front + text, fn_name
         text += ["    return %s(ctx, %d, aotf_%d, a);" % (fn_name, k, k), "}"]
         return text, fn_name
     return None

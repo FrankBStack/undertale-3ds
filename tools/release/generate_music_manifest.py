@@ -35,9 +35,13 @@ def generate(folder, *, store='steam', platform='windows'):
     if len(paths) != MUSIC_COUNT or len({p.name.casefold() for p in paths}) != MUSIC_COUNT:
         raise ValueError('Expected exactly %d music files' % MUSIC_COUNT)
     files = [dict(name=path.name, size=path.stat().st_size, sha256=digest(path)) for path in paths]
+    credits = folder / 'credits.txt'
+    if not credits.is_file() or not credits.stat().st_size:
+        raise ValueError('Expected the original credits.txt')
+    credits_record = dict(size=credits.stat().st_size, sha256=digest(credits))
     return dict(schema=2, notice='names only: file names, sizes in bytes and SHA-256 digests; no game content',
                 game='undertale', releases={store: {platform: {version: dict(store=store, depot=platform,
-                    data_sha256=sha256, count=len(files), files=files)}}})
+                    data_sha256=sha256, count=len(files), credits=credits_record, files=files)}}})
 
 
 def merge(existing, generated):

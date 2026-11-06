@@ -620,6 +620,23 @@ void Runner_executeEventForAll(Runner* runner, int32_t eventType, int32_t eventS
     }
 }
 
+#if !defined(PLATFORM_3DS) || defined(ENABLE_WAD16)
+static void auditfixgIsolatedEvent(Runner* runner, int32_t eventType, int32_t eventSubtype);
+#line 618
+void Runner_setLives(Runner* runner, GMLReal value) {
+    GMLReal old = runner->lives;
+    runner->lives = value;
+    if (old > 0.0 && 0.0 >= value) auditfixgIsolatedEvent(runner, EVENT_OTHER, OTHER_NO_MORE_LIVES);
+}
+
+void Runner_setHealth(Runner* runner, GMLReal value) {
+    GMLReal old = runner->health;
+    runner->health = value;
+    if (old > 0.0 && 0.0 >= value) auditfixgIsolatedEvent(runner, EVENT_OTHER, OTHER_NO_MORE_HEALTH);
+}
+
+#else
+#line 618
 void Runner_setLives(Runner* runner, GMLReal value) {
     GMLReal old = runner->lives;
     runner->lives = value;
@@ -632,6 +649,8 @@ void Runner_setHealth(Runner* runner, GMLReal value) {
     if (old > 0.0 && 0.0 >= value) Runner_executeEventForAll(runner, EVENT_OTHER, OTHER_NO_MORE_HEALTH);
 }
 
+#endif
+#line 630
 // ===[ Background Scrolling & Drawing ]===
 
 void Runner_scrollBackgrounds(Runner* runner) {
@@ -7640,4 +7659,18 @@ old:
 #endif
 __asm__(".pushsection .text.late.utkill,\"ax\",%progbits\n.subsection 1\n.space " PCORDER_PAD "\n.popsection\n");
 #endif
+#endif
+
+#if !defined(PLATFORM_3DS) || defined(ENABLE_WAD16)
+
+#if defined(PLATFORM_3DS) && defined(__GNUC__)
+__attribute__((noipa, section(".text.late.auditfixg")))
+#endif
+static NOINLINE void auditfixgIsolatedEvent(Runner* runner, int32_t eventType, int32_t eventSubtype) {
+    Instance** saved = runner->eventDispatchInstances;
+    runner->eventDispatchInstances = nullptr;
+    Runner_executeEventForAll(runner, eventType, eventSubtype);
+    arrfree(runner->eventDispatchInstances);
+    runner->eventDispatchInstances = saved;
+}
 #endif

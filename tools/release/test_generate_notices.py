@@ -60,9 +60,25 @@ class NoticeTests(unittest.TestCase):
 
     def test_checked_in_bundle_is_current(self):
         for game in ('ut', 'dr'):
-            self.assertEqual((notices.ROOT / 'THIRD_PARTY_NOTICES').read_text(encoding='utf-8'),
-                             notices.generate(notices.ROOT, notices.ROOT / ('tools/release/manifest-' + game + '.txt'),
-                                              notices.ROOT / 'tools/release/notices.json'))
+            with self.subTest(game=game):
+                manifest = notices.ROOT / ('tools/release/manifest-' + game + '.txt')
+                if not manifest.is_file():
+                    self.skipTest('This source export does not include the ' + game + ' manifest')
+                self.assertEqual((notices.ROOT / 'THIRD_PARTY_NOTICES').read_text(encoding='utf-8'),
+                                 notices.generate(notices.ROOT, manifest,
+                                                  notices.ROOT / 'tools/release/notices.json'))
+
+    def test_builder_ca_bundle_is_named_in_both_export_notices(self):
+        for game in ('ut','dr'):
+            with self.subTest(game=game):
+                manifest=notices.ROOT/('tools/release/manifest-'+game+'.txt')
+                if not manifest.is_file():
+                    self.skipTest('This source export does not include the '+game+' manifest')
+                text=notices.generate(notices.ROOT,manifest,
+                    notices.ROOT/'tools/release/notices.json')
+                self.assertIn('Mozilla CA certificates from certifi (builder HTTPS)',text)
+                self.assertIn('Source: tools/release/builder/certs/LICENSE.certifi',text)
+                self.assertIn('Licence: MPL-2.0',text)
 
     def test_empty_notice_and_empty_source_fail(self):
         self.license.write_text(' \n', encoding='utf-8')

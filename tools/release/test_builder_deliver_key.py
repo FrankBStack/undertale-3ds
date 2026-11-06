@@ -113,13 +113,19 @@ class ReceiptIdentityTests(DeliveryKeyTests):
         self.game = Path(tmp.name) / 'game'
         (self.game / 'lang').mkdir(parents=True)
         (self.game / 'data.win').write_bytes(b'original game')
+        (self.game / 'credits.txt').write_bytes(b'original credits')
         (self.game / 'song_fixture.ogg').write_bytes(b'original music')
         (self.game / 'lang' / 'lang_en.json').write_bytes(b'{}')
         self.state.folder = str(self.game)
+        manifest = {'releases': {'steam': {'windows': {'fixture': {
+            'files': [{'name': 'song_fixture.ogg'}]}}}}}
+        music = mock.patch.object(gui.products, 'read_music_manifest', return_value=manifest)
+        music.start()
+        self.addCleanup(music.stop)
 
     def test_game_files_changed_at_the_same_path_must_be_copied_again(self):
         for name, data in (('data.win', b'changed bytes'), ('song_fixture.ogg', b'changed music'),
-                           ('lang/lang_en.json', b'{"x": 1}'), ('song_new.ogg', b'added music')):
+                           ('credits.txt', b'changed credits')):
             with self.subTest(changed=name):
                 self.copy_sd()
                 self.back_and_return()
@@ -131,11 +137,18 @@ class ReceiptIdentityTests(DeliveryKeyTests):
                 os.utime(path, ns=(before + 10**9, before + 10**9))
                 self.back_and_return()
                 self.assertFalse(self.page.can_next())
-        (self.game / 'song_new.ogg').unlink()
         self.copy_sd()
         self.assertTrue(self.page.can_next())
         (self.game / 'song_fixture.ogg').unlink()
         self.assertFalse(self.page.can_next())
+
+    def test_ignored_files_changed_at_the_same_path_do_not_require_another_copy(self):
+        self.copy_sd()
+        for name, data in (('lang/lang_en.json', b'{"x": 1}'), ('song_new.ogg', b'added music')):
+            with self.subTest(changed=name):
+                (self.game / name).write_bytes(data)
+                self.back_and_return()
+                self.assertTrue(self.page.can_next())
 
     def test_a_rebuild_with_the_same_outputs_must_be_copied_or_sent_again(self):
         build = gui.BuildPage.__new__(gui.BuildPage)
@@ -159,7 +172,8 @@ class ReceiptIdentityTests(DeliveryKeyTests):
         self.copy_sd()
         verify = gui.VerifyPage.__new__(gui.VerifyPage)
         verify.app, verify.bar, verify.render = self.page.app, mock.Mock(), mock.Mock()
-        verify.done(SimpleNamespace(accepted=True, parts=['root']))  # Back to Check, same folder, checked again.
+        verdict = SimpleNamespace(accepted=True, parts=['root'], result=SimpleNamespace(folder=str(self.game)))
+        verify.done(verdict)  # Back to Check, same folder, checked again.
         self.assertIsNone(self.state.parts)
         self.back_and_return()
         self.assertFalse(self.page.can_next())
@@ -188,7 +202,7 @@ class ReceiptIdentityTests(DeliveryKeyTests):
         self.page.copying = False  # The search is still running; its result doesn't matter here.
         self.assertFalse(self.page.can_next())
 
-    def test_an_unreadable_subfolder_does_not_block_next_until_it_changes(self):
+    def test_an_ignored_subfolder_is_never_read_or_part_of_the_receipt(self):
         real = gui.os.scandir
 
         def scandir(path):
@@ -196,12 +210,13 @@ class ReceiptIdentityTests(DeliveryKeyTests):
                 raise PermissionError(13, 'fixture: no access')
             return real(path)
         locked = True
-        with mock.patch.object(gui.os, 'scandir', side_effect=scandir):
+        with mock.patch.object(gui.os, 'scandir', side_effect=scandir) as scan:
             self.copy_sd()
             self.back_and_return()
             self.assertTrue(self.page.can_next())
-            locked = False  # Readable again: what is inside may have changed, so copy again.
-            self.assertFalse(self.page.can_next())
+            locked = False  # Ignored contents do not affect what was copied, even when readable again.
+            self.assertTrue(self.page.can_next())
+            scan.assert_not_called()
 
     def test_a_copy_finishing_after_a_refresh_does_not_count(self):
         # R175b F4, the reviewer's order: card A's copy finishes on the worker, card B replaces A at E:/ and Refresh
@@ -313,7 +328,11 @@ class ReceiptIdentityTests(DeliveryKeyTests):
         with mock.patch.object(deliver, 'save_files', return_value=result):
             self.page.save_files()
         self.assertTrue(self.page.can_next())
-        (self.game / 'data.win').write_bytes(b'changed bytes')
+        path = self.game / 'data.win'
+        before = path.stat().st_mtime_ns if path.exists() else 0
+        path.write_bytes(b'changed bytes')
+        # As above: a replacement comes seconds after the save; Windows' file clock can lag 16 ms behind.
+        os.utime(path, ns=(before + 10**9, before + 10**9))
         self.page.mode()
         self.assertFalse(self.page.can_next())
 

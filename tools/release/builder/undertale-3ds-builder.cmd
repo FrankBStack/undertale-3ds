@@ -8,13 +8,13 @@ set "ERRORLEVEL="
 set "HERE=%~dp0"
 if not "%~1"=="" goto console
 if exist "%HERE%runtime\pythonw.exe" (
-    start "" "%HERE%runtime\pythonw.exe" "%HERE%builder.py" --game undertale
+    start "" "%HERE%runtime\pythonw.exe" -X utf8 "%HERE%builder.py" --game undertale
 ) else (
-    start "" pyw -3 "%HERE%builder.py" --game undertale
+    start "" pyw -3 -X utf8 "%HERE%builder.py" --game undertale
 )
 exit /b
 :console
 set PYTHON=py -3
 if exist "%HERE%runtime\python.exe" set PYTHON="%HERE%runtime\python.exe"
-%PYTHON% "%HERE%builder.py" --game undertale %*
+%PYTHON% -X utf8 "%HERE%builder.py" --game undertale %*
 exit /b %errorlevel%

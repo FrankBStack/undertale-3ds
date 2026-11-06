@@ -628,6 +628,13 @@ void* CtrMemory_overflowLinear(size_t size);
 #else
 #define overflowLinearAlloc linearAlloc
 #endif
+#ifdef CTRPORT_PACER_ARENA
+// pacer A (UNDERTALE Old): an audio-arena block's usable size comes from the arena's own header (ctr_audio_system.c's
+// end), the rest from newlib's. Not a link wrap: wrapping newlib's would link its member earlier and move every
+// newlib function after it. Only the call's target changes; the #line below puts every later __LINE__ back.
+size_t CtrArena_usableSize(void* ptr);
+#define malloc_usable_size CtrArena_usableSize
+#endif
 #line 616
 static void* overflowAlloc(size_t size) {
     if (noRelief) return nullptr;
@@ -704,6 +711,12 @@ void CtrMemory_free(void* ptr) {
 // the free wrapper: fclose frees setvbuf's buffer (128 KB for a data.win)
 // that way. One from linear memory or the node pool would have gone to the
 // heap's free lists. free() reaches here too, through newlib's own free().
+#ifdef CTRPORT_PACER_ARENA
+// pacer A (UNDERTALE Old): every free ends in the audio arena's (ctr_audio_system.c's end), which frees its own
+// blocks and hands the rest to newlib. Only the call's target changes; the #line below keeps every later __LINE__.
+#define __real__free_r CtrArena_freeR
+#endif
+#line 691
 void __real__free_r(struct _reent* reent, void* ptr);
 
 #ifdef CTRPORT_AUDIO_METRICS

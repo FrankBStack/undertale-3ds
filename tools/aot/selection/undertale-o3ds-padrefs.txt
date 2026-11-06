@@ -4,3 +4,5 @@
 gml_Object_obj_creditbullet_Create_0
 gml_Object_obj_creditboss_Other_10
 gml_Object_obj_creditbullet_Alarm_0
+gml_Object_obj_mhd_Draw_0
+gml_Script_scr_saveprocess

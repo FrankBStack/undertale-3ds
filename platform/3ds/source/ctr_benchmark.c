@@ -1299,7 +1299,7 @@ static void beginMeasuring(void) {
     bench.measureStartFrame = runner->frameCount;
     bench.shotTaken = false;
     // The bottom screen goes back to the player's setting, so the numbers are for the way they play.
-    CtrLog_beginConsole();
+    BENCH_PACE_OPEN();
     consoleSelect(bench.console);
     consoleClear();
     CtrLog_endConsole();
@@ -1852,7 +1852,7 @@ static void sweepFinishBattle(const char* why) {
     r->worstMs = sweep.worstMs;
     r->seconds = secondsSince(sweep.battleStart);
     if (!r->measured) copyText(r->status, sizeof(r->status), why);
-    logInfo("Sweep: %s (%s) done (%s) after %ld turn(s), %.0f s, %ld rows: worst segment %s at %.1f ms; lowest fps %.1f, lowest 1%% low %.1f\n",
+    BENCH_PACE_SWEEP_END("Sweep: %s (%s) done (%s) after %ld turn(s), %.0f s, %ld rows: worst segment %s at %.1f ms; lowest fps %.1f, lowest 1%% low %.1f\n",
             r->id, r->title, why, (long) sweep.turn, r->seconds, (long) sweep.rows, sweep.worstSegment[0] != '\0' ? sweep.worstSegment : "-",
             sweep.worstMs, sweep.minFps, sweep.minLow);
     sweepSavePosition("done", 0);
@@ -2393,7 +2393,7 @@ CtrBenchFrame CtrBench_beginFrame(u32 down, double frameMs) {
         }
         if (window > 0 ? measured >= window : secondsSince(bench.phaseStart) >= measureSeconds()) {
             // Which game frames the numbers cover, so two runs can be compared over the same ones.
-            logInfo("Bench: %s measured frames %d-%d\n", currentResult()->id, bench.measureStartFrame, runner->frameCount - 1);
+            BENCH_PACE_WINDOW_END("Bench: %s measured frames %d-%d\n", currentResult()->id, bench.measureStartFrame, runner->frameCount - 1);
 #ifdef CTRPORT_RENDER_TIMING
             CtrRenderer_logPackedSet(bench.session.renderer, "end");
 #endif
@@ -3615,3 +3615,14 @@ __attribute__((noinline, optimize("Os"), section(".text.benchcut_late"))) void b
     memcpy(benchcut.parts, sweep.labelParts, sizeof(sweep.labelParts));
     memcpy(benchcut.label, sweep.label, sizeof(sweep.label));
 }
+
+#ifdef CTRPORT_PACEALIGN
+// pacealign (change auditfixe, Option A; UNDERTALE only): for z_pacealign.c's window-edge lines, the game's frame count
+// now and the measured window's first frame. Late code after everything else, called from nothing in this file;
+// `bench` by its assembler name, so no function above changes.
+__attribute__((noinline, noclone, noipa, section(".text_pacealign"))) void CtrBench_paceFrames(int32_t* now, int32_t* first) {
+    extern __typeof__(bench) paceBench __asm__("bench");
+    *now = paceBench.session.runner->frameCount;
+    *first = paceBench.measureStartFrame;
+}
+#endif

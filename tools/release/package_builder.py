@@ -111,22 +111,34 @@ def opening_instructions(game, platform=None):
     if platform in (None, "macos"):
         lines.append('Mac: Unpack the download, then open %s-3ds-builder.command. '
                      'If macOS blocks it, open System Settings > Privacy & Security, '
-                     'choose "Open Anyway", then "Open".' % game)
+                     'choose "Open Anyway", then "Open". '
+                     'On macOS 11 or 12, use System Preferences > Security & Privacy > General, '
+                     'then Open Anyway > Open.' % game)
     if platform in (None, "linux"):
-        lines.append('Linux: Install Python 3 with Tk, unpack the download, then run '
+        lines.append('Linux: Install Python 3.9 or newer with Tk, unpack the download, then run '
                      '`sh ./%s-3ds-builder.sh` in its folder.' % game)
         lines.append('On Debian or Ubuntu, install Python and Tk with '
                      '`sudo apt-get update && sudo apt-get install python3 python3-tk`.')
+        lines.append('Use a distribution release that supplies Python 3.9 or newer.')
         lines.append("The builder's 3DS compiler page installs the remaining tools.")
     return "\n\n".join(lines) + "\n"
 
 
 def launcher(game, platform):
     if platform == "windows":
-        return ("@echo off\r\nsetlocal\r\nset \"HERE=%~dp0tools\\release\\builder\"\r\n"
-                'if "%~1"=="" (\r\n  start "" "%HERE%\\runtime\\pythonw.exe" -I -B "%HERE%\\builder.py" --game ' + game +
+        return ("@echo off\r\nsetlocal\r\nset \"ERRORLEVEL=\"\r\nset \"HERE=%~dp0tools\\release\\builder\"\r\n"
+                'if not exist "%HERE%\\builder.py" goto unpack\r\n'
+                'if not exist "%HERE%\\runtime\\pythonw.exe" goto unpack\r\n'
+                'if not exist "%HERE%\\runtime\\python.exe" goto unpack\r\n'
+                'if "%~1"=="" (\r\n  start "" "%HERE%\\runtime\\pythonw.exe" -X utf8 -I -B "%HERE%\\builder.py" --game ' + game +
                 '\r\n  exit /b\r\n)\r\n' +
-                '"%HERE%\\runtime\\python.exe" -I -B "%HERE%\\builder.py" --game ' + game + ' %*\r\n')
+                '"%HERE%\\runtime\\python.exe" -X utf8 -I -B "%HERE%\\builder.py" --game ' + game + ' %*\r\n'
+                'exit /b %errorlevel%\r\n:unpack\r\n'
+                'echo Extract the whole builder ZIP first.\r\n'
+                'echo Right-click the downloaded ZIP and choose Extract All.\r\n'
+                'echo Then open ' + game + '-3ds-builder.cmd from the extracted folder.\r\n'
+                'echo Keep all the extracted files together.\r\n'
+                'if "%~1"=="" pause\r\nexit /b 2\r\n')
     python = 'python3'
     if platform == "macos":
         python = '"${BUILDER_PYTHON:-/Library/Frameworks/Python.framework/Versions/Current/bin/python3}"'
@@ -135,8 +147,21 @@ def launcher(game, platform):
         check = ('if [ ! -x ' + python + ' ]; then\n'
                  '  echo "Install Python from python.org (macOS universal2, with Tk), then try again."\n'
                  '  exit 2\nfi\n')
-    return ('#!/bin/sh\nset -eu\nHERE=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)\n' + check + 'exec ' + python +
-            ' -I -B "$HERE/tools/release/builder/builder.py" --game ' + game + ' "$@"\n')
+    before = ''
+    if platform == 'linux':
+        before = ('if ! command -v python3 >/dev/null 2>&1; then\n'
+                  '  printf "%s\\n" "The builder needs Python 3.9 or newer with Tk." '
+                  '"On Debian or Ubuntu, install them with:" '
+                  '"sudo apt-get update && sudo apt-get install python3 python3-tk" '
+                  '"Use a distribution release that supplies Python 3.9 or newer, then open the builder again."\n'
+                  '  exit 127\nfi\n')
+    unpack = ('if [ ! -f "$HERE/tools/release/builder/builder.py" ]; then\n'
+              '  printf "%s\\n" "Extract the whole builder download first." '
+              '"Keep all the extracted files together, then open ' + game + '-3ds-builder' +
+              ('.command' if platform == 'macos' else '.sh') + ' from the extracted folder." >&2\n'
+              '  exit 2\nfi\n')
+    return ('#!/bin/sh\nset -eu\n' + before + 'HERE=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)\n' + unpack + check + 'exec ' + python +
+            ' -X utf8 -I -B "$HERE/tools/release/builder/builder.py" --game ' + game + ' "$@"\n')
 
 
 def inputs(root, game, runtime=None):
@@ -167,10 +192,11 @@ def inputs(root, game, runtime=None):
     if changed != 1:
         raise ValueError("Builder game selection marker is missing or ambiguous")
     result[key] = text.encode("utf-8")
+    import export_scrub
+    result = export_scrub.scrub_files(result)
     for rel, data in runtime_files.items():
         result["tools/release/builder/runtime/" + rel] = data
-    import export_scrub
-    return export_scrub.scrub_files(result)
+    return result
 
 
 TEXPREP_KEYS = {"windows": ("win32", "x86_64"), "linux": ("linux", "x86_64"), "macos": ("darwin", "arm64")}
@@ -199,14 +225,18 @@ def package(root, output, game, platform, runtime=None, texprep=None, release_de
     # Only this platform's pinned texprep goes in; a stray or stale binary from the export never does.
     for rel in [r for r in files if r.startswith(BIN)]:
         del files[rel]
+    if platform == 'windows' and 'tools/release/builder/certs/LICENSE.certifi' in files:
+        files[BIN+'certs/THIRD_PARTY_NOTICES.txt'] = (
+            b'Mozilla CA certificates from certifi, MPL-2.0.\n'
+            b'See tools/release/licenses/MPL-2.0 for the full licence.\n\n' +
+            files['tools/release/builder/certs/LICENSE.certifi'])
     if texprep is not None:
         rel, data = texprep_entry(platform, texprep.read_bytes())
         files[rel] = data
     if dsp_library is not None:
         if game != 'undertale' or platform != 'windows':
             raise ValueError('The prebuilt sound encoder is for the UNDERTALE Windows kit only')
-        library = sfx_encoder.validate(dsp_library, root)
-        files[sfx_encoder.RELATIVE] = library.read_bytes()
+        files[sfx_encoder.RELATIVE] = sfx_encoder.validate(dsp_library, root)
     contract = pipeline.products.release_contract
     digest = contract.payload_digest({rel: files[rel] for rel in pipeline.source_payload(root, game)})
     descriptor = contract.source_descriptor(game, version, digest)
@@ -227,6 +257,16 @@ def package(root, output, game, platform, runtime=None, texprep=None, release_de
     start = game + "-3ds-builder" + suffix
     files[start] = launcher(game, platform).encode("utf-8")
     files["README.md"] = opening_instructions(game, platform).encode("utf-8")
+    if platform == 'linux':
+        files['README.txt'] = (game.upper() + ' 3DS Builder\n\n'
+            'Before opening the builder, install Python 3.9 or newer with Tk.\n'
+            'The builder window needs a graphical desktop.\n'
+            'On Debian or Ubuntu, use:\n'
+            'sudo apt-get update && sudo apt-get install python3 python3-tk\n\n'
+            'Use a distribution release that supplies Python 3.9 or newer.\n\n'
+            'Open a terminal in this folder and run:\n'
+            'sh ./' + start + '\n\n'
+            'The builder can guide you through setting up the remaining 3DS tools.\n').encode('utf-8')
     validate_package_files(files)
     stem = "%s-3ds-builder-%s-%s" % (game, version, platform)
     output.mkdir(parents=True, exist_ok=True)

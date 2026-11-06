@@ -1,27 +1,12 @@
 #!/usr/bin/env python3
-"""Checks that a game folder is an official, purchased copy before the builder uses it (docs/release/builder.md).
-Allow-list entries are names only, sizes and digests; no game content is bundled.
+"""Check game files against known official copies, offline, by size and SHA-256.
+No account, purchase, or store installation record is consulted. Folder discovery
+is only a convenience: a manually selected copy is checked in exactly the same way.
+Windows data.win and supported macOS game.ios files have separate allow-lists.
+Unknown, modified, mixed-edition and unsupported demo files are refused.
 
 usage: verify_game.py undertale|deltarune [--game-dir DIR] [--steam-root DIR ...] [--gog-dir DIR ...] [--json]
-
-Two checks, both offline, with no Valve or GOG SDK and no network:
-
-1. Version: data.win (and each DELTARUNE chapter's data.win) must match an official release in ALLOW_LIST by size
-   and SHA-256. UNDERTALE's macOS depot keeps its data file as UNDERTALE.app/Contents/Resources/game.ios; that file is
-   checked against MACOS_ALLOW_LIST only, and a Windows data.win against ALLOW_LIST only.
-2. Install record: the folder must be where a store installed it.
-   - Steam: a library listed in <Steam>/steamapps/libraryfolders.vdf holds appmanifest_<appid>.acf, which says the
-     game is fully installed in steamapps/common/<installdir> (this folder), and its LastOwner is an account in
-     <Steam>/config/loginusers.vdf, an account that has signed in to Steam on this computer.
-   - GOG (UNDERTALE only): the measured installer .info/.hashdb pair, or a GOG registry/Galaxy record of this folder.
-     A product ID, rootGameId, or parent gameinfo file alone is not install evidence.
-
-DELTARUNE Chapters 1 and 2 are free (the DELTARUNE demo), so they need only the version check; Chapters 3 to 5 need
-both checks. This is a deterrent, not a lock: the engine is AGPL-3.0, and a modified copy can leave the check out.
-
-Nothing is written, uploaded or printed that identifies the Steam account; result messages say only whether the
-install record names an account that has signed in here. Exit status: 0 when the copy is accepted (for DELTARUNE:
-at least the free chapters), 1 when it is refused, 2 on a usage error.
+Exit status: 0 accepted, 1 refused, 2 usage error. No game content is bundled.
 """
 from __future__ import annotations
 
@@ -30,19 +15,17 @@ import hashlib
 import json
 import os
 import re
-import sqlite3
 import sys
-from pathlib import Path
-from typing import Callable, Iterable
+from typing import Iterable
 
 # ---------------------------------------------------------------------------------------------------------------------
 # names only: official releases. Each row: game, part (the data.win's folder, "root" for the game folder itself), size in bytes,
 # SHA-256, store, version label. Only identifiers, sizes and digests; no game bytes. Measured from
 # purchased Steam copies on 2026-10-16 (the same digests as platform/3ds/data_versions.inc, revision 1).
 # GOG UNDERTALE 1.08 measured from the owner's read-only Windows install on 2026-10-22. The container is shared with
-# other storefronts, but only Steam/GOG install evidence is accepted (ruling 2026-10-22).
+# other storefronts. Edition recognition depends only on the measured game files.
 # DELTARUNE Chapter 6 (planned for 2027) is expected to re-patch older chapters: add the new rows, keep the old ones.
-# One owner-overridable policy switch. Hash recognition itself always remains exact.
+# Chapter audio validation also uses this fixed policy; unknown data is never accepted.
 ALLOW_UNKNOWN_DELTARUNE = False
 DELTARUNE_DEMO_APPID = "1690940"
 # Measured Windows demo (1690940), combined Chapters 1+2, not the retail per-chapter product.
@@ -124,28 +107,21 @@ ALLOW_LISTS = {"windows": ALLOW_LIST, "macos": MACOS_ALLOW_LIST}
 class Game:
     key: str
     title: str
-    steam_apps: tuple          # (appid, purchased?) pairs; the demo app is not a purchase
-    install_dirs: tuple        # steamapps/common/<name> spellings, for the "found but no record" message
+    install_dirs: tuple        # steamapps/common/<name> spellings, for folder discovery
     gog_product: str | None
     store_links: tuple
     parts: tuple               # data.win folders, "root" first
-    free_parts: frozenset      # parts that need no purchase
     layouts: tuple = (WINDOWS,)  # depots recognised, in the order tried
 
 
 GAMES = {
-    "undertale": Game("undertale", "UNDERTALE", (("391540", True),), ("Undertale", "UNDERTALE"), "1456487183",
+    "undertale": Game("undertale", "UNDERTALE", ("Undertale", "UNDERTALE"), "1456487183",
                       ("https://store.steampowered.com/app/391540/Undertale/", "https://www.gog.com/game/undertale"),
-                      ("root",), frozenset(), (WINDOWS, MACOS_UNDERTALE)),
-    "deltarune": Game("deltarune", "DELTARUNE", (("1671210", True), ("1690940", False)), ("DELTARUNE", "Deltarune"),
+                      ("root",), (WINDOWS, MACOS_UNDERTALE)),
+    "deltarune": Game("deltarune", "DELTARUNE", ("DELTARUNE", "Deltarune", "DELTARUNEdemo", "DELTARUNE Demo"),
                       None, ("https://store.steampowered.com/app/1671210/DELTARUNE/",),
-                      ("root",) + tuple("chapter%d_windows" % i for i in range(1, 6)),
-                      frozenset({"root", "chapter1_windows", "chapter2_windows"})),
+                      ("root",) + tuple("chapter%d_windows" % i for i in range(1, 6))),
 }
-
-# Steam's StateFlags: 4 = fully installed. Other bits (update required, updating, ...) mean the files may be in flux.
-STATE_FULLY_INSTALLED = 4
-
 
 # ---------------------------------------------------------------------------------------------------------------------
 # Valve KeyValues text (.vdf / .acf)
@@ -279,7 +255,7 @@ def default_steam_roots(registry=_winreg_value, home=None, platform=sys.platform
                   os.path.join(home, "snap", "steam", "common", ".local", "share", "Steam")]
     out, seen = [], set()
     for r in roots:
-        if os.path.isdir(os.path.join(r, "steamapps")) or os.path.isfile(os.path.join(r, "config", "loginusers.vdf")):
+        if os.path.isdir(os.path.join(r, "steamapps")):
             key = _norm(os.path.realpath(r))
             if key not in seen:
                 seen.add(key)
@@ -287,48 +263,20 @@ def default_steam_roots(registry=_winreg_value, home=None, platform=sys.platform
     return out
 
 
-def default_gog_records(product, registry=_winreg_value, galaxy_db=None, platform=sys.platform):
-    """Folders GOG says it installed `product` into: the GOG registry key (offline installer and Galaxy) and GOG
-    Galaxy 2's database. Windows only; elsewhere the goggame/gameinfo file in the folder is the only record."""
-    paths = []
-    if platform == "win32":
-        v = registry("HKEY_LOCAL_MACHINE", r"SOFTWARE\GOG.com\Games\%s" % product, "path")
-        if v:
-            paths.append(v)
-        db = galaxy_db or os.path.join(os.environ.get("PROGRAMDATA", "C:/ProgramData"), "GOG.com", "Galaxy",
-                                       "storage", "galaxy-2.0.db")
-        paths += galaxy_install_paths(db, product)
-    elif galaxy_db:
-        paths += galaxy_install_paths(galaxy_db, product)
-    return paths
-
-
-def galaxy_install_paths(db, product):
-    if not os.path.isfile(db):
-        return []
-    try:
-        uri = Path(db).resolve().as_uri() + "?mode=ro"
-        con = sqlite3.connect(uri, uri=True, timeout=2)
-        try:
-            rows = con.execute("SELECT installationPath FROM InstalledBaseProducts WHERE productId = ?",
-                               (int(product),)).fetchall()
-        finally:
-            con.close()
-        return [r[0] for r in rows if r and r[0]]
-    except (sqlite3.Error, ValueError):
-        return []
-
-
 def default_gog_dirs(game: Game, registry=_winreg_value, platform=sys.platform, home=None):
     """Candidate GOG folders to look at when the user did not pick one."""
     if not game.gog_product:
         return []
-    out = list(default_gog_records(game.gog_product, registry=registry, platform=platform))
+    out = []
+    if platform == "win32":
+        path = registry("HKEY_LOCAL_MACHINE", r"SOFTWARE\GOG.com\Games\%s" % game.gog_product, "path")
+        if path:
+            out.append(path)
     home = home or os.path.expanduser("~")
     if platform == "win32":
         out += ["C:/GOG Games/Undertale", "C:/Program Files (x86)/GOG Galaxy/Games/Undertale"]
     elif platform == "darwin":
-        out += ["/Applications/Undertale.app/Contents/Resources"]
+        out += ["/Applications"]
     else:
         out += [os.path.join(home, "GOG Games", "Undertale", "game"), os.path.join(home, "Games", "undertale")]
     return [d for d in dict.fromkeys(out) if os.path.isdir(d)]
@@ -337,9 +285,8 @@ def default_gog_dirs(game: Game, registry=_winreg_value, platform=sys.platform, 
 # ---------------------------------------------------------------------------------------------------------------------
 # Results
 
-OK, OK_FREE, NOT_FOUND, NO_RECORD, NOT_INSTALLED, ACCOUNT, UNKNOWN_VERSION, MISSING_FILES, UNREADABLE = (
-    "ok", "ok_free_only", "not_found", "no_install_record", "not_fully_installed", "account_not_on_this_pc",
-    "unknown_version", "missing_files", "unreadable")
+OK, NOT_FOUND, UNKNOWN_VERSION, MISSING_FILES, UNREADABLE = (
+    "ok", "not_found", "unknown_version", "missing_files", "unreadable")
 
 
 @dataclasses.dataclass
@@ -358,11 +305,7 @@ class Result:
 
     @property
     def accepted(self):
-        return self.status in (OK, OK_FREE)
-
-
-def _buy(game: Game):
-    return "Get it here: " + " or ".join(game.store_links)
+        return self.status == OK
 
 
 def _chapter_name(part):
@@ -429,19 +372,7 @@ def check_versions(game: Game, folder: str, allow_list: Iterable = ALLOW_LIST, l
 
 
 # ---------------------------------------------------------------------------------------------------------------------
-# Steam install record
-
-@dataclasses.dataclass
-class SteamRecord:
-    root: str
-    library: str
-    appid: str
-    purchased: bool
-    folder: str
-    state_flags: int
-    owner_known: bool
-    buildid: str | None
-
+# Folder discovery (never installation proof)
 
 def steam_libraries(root):
     """Libraries the Steam client at `root` knows: the root itself plus each path in libraryfolders.vdf (both the
@@ -454,12 +385,14 @@ def steam_libraries(root):
             data = read_vdf(vdf)
         except (OSError, ValueError):
             continue
-        top = vget(data, "libraryfolders") or {}
+        top = vget(data, "libraryfolders")
+        if not isinstance(top, dict):
+            continue
         for k, v in top.items():
             if not k.isdigit():
                 continue
             path = vget(v, "path") if isinstance(v, dict) else v
-            if path:
+            if isinstance(path, str) and path:
                 libs.append(path)
     out, seen = [], set()
     for lib in libs:
@@ -470,90 +403,27 @@ def steam_libraries(root):
     return out
 
 
-def signed_in_accounts(root):
-    """SteamID64s in <root>/config/loginusers.vdf. Never printed."""
-    path = os.path.join(root, "config", "loginusers.vdf")
-    try:
-        users = vget(read_vdf(path), "users") or {}
-    except (OSError, ValueError):
-        return set()
-    return {k for k, v in users.items() if k.isdigit() and isinstance(v, dict)}
-
-
-def steam_records(game: Game, roots):
+def steam_folders(game: Game, roots):
+    """Existing default game folders, using only Steam's library folder list."""
     out = []
-    for root in roots:
-        accounts = None
-        for lib in steam_libraries(root):
-            for appid, purchased in game.steam_apps:
-                acf = os.path.join(lib, "steamapps", "appmanifest_%s.acf" % appid)
-                if not os.path.isfile(acf):
-                    continue
-                try:
-                    st = vget(read_vdf(acf), "AppState") or {}
-                except (OSError, ValueError):
-                    continue
-                if vget(st, "appid") != appid or not vget(st, "installdir"):
-                    continue
-                if accounts is None:
-                    accounts = signed_in_accounts(root)
-                try:
-                    flags = int(vget(st, "StateFlags") or 0)
-                except ValueError:
-                    flags = 0
-                owner = vget(st, "LastOwner") or ""
-                out.append(SteamRecord(root, lib, appid, purchased,
-                                       os.path.join(lib, "steamapps", "common", vget(st, "installdir")), flags,
-                                       owner.isdigit() and owner != "0" and owner in accounts, vget(st, "buildid")))
+    candidates = (os.path.join(lib, "steamapps", "common", name)
+                  for root in roots for lib in steam_libraries(root) for name in game.install_dirs)
+    for folder in candidates:
+        if not os.path.isdir(folder):
+            continue
+        for previous in out:
+            try:
+                if os.path.samefile(folder, previous):
+                    break
+            except OSError:
+                continue  # A removed or inaccessible search candidate cannot block the search.
+        else:
+            out.append(folder)
     return out
 
 
-# ---------------------------------------------------------------------------------------------------------------------
-# GOG install record
-
-# Measured installer records beside Windows GOG 1.08. Names and SHA-256 only; no store files are bundled.
-# A product ID or a hand-written JSON object is not an installer record. Registry/Galaxy installs may use newer
-# metadata. Windows portable/offline installs need this measured pair. On Linux/macOS the release permits the
-# known Windows GOG data hash without installer metadata; native game.unx/game.ios still need their own allowlist.
-GOG_INSTALL_RECORDS = {"1456487183": (
-    "adb26c3daa0b8511e8219b7ee950c8cdc527795f7e3b2a6a42355f27fcdc1b29",
-    "07f899a497faa6d3befbead9cc86f8ca24fcad719426f106a1eb2c28217743bc")}
-
-
-def gog_record(game: Game, folder, records: Callable | None = None, platform=sys.platform):
-    """(info_present, recorded_by_gog): measured installer pair or exact registry/Galaxy folder record.
-    Parent gameinfo, rootGameId, and unverified product JSON never establish install provenance."""
-    if not game.gog_product:
-        return False, False
-    p = os.path.join(folder, "goggame-%s.info" % game.gog_product)
-    info = os.path.isfile(p)
-    if info:
-        try:
-            with open(p, encoding="utf-8-sig") as f:
-                j = json.load(f)
-            valid = (str(j.get("gameId")) == game.gog_product
-                     and str(j.get("name", "")).casefold() == game.title.casefold()
-                     and str(j.get("rootGameId", game.gog_product)) == game.gog_product)
-            pair = GOG_INSTALL_RECORDS.get(game.gog_product)
-            hashdb = os.path.join(folder, "goggame-%s.hashdb" % game.gog_product)
-            if valid and pair and sha256_file(p) == pair[0] and sha256_file(hashdb) == pair[1]:
-                return True, True
-        except (OSError, ValueError, AttributeError):
-            pass
-    recs = (records or (lambda prod: default_gog_records(prod, platform=platform)))(game.gog_product)
-    return info, any(_norm(r) == _norm(folder) for r in recs)
-
-
-# ---------------------------------------------------------------------------------------------------------------------
-# The whole check
-
-def _looks_like_game(game, folder):
-    return layout_for(game, folder) is not None
-
-
 def install_folder(game: Game, folder: str):
-    """The install folder for a pick inside a Mac bundle (UNDERTALE.app, or its Contents or Resources folder): Steam's
-    install record names the folder that holds the bundle. Any other folder comes back as it is."""
+    """Normalize a selection of the Mac bundle, Contents or Resources to its containing folder."""
     if os.path.isfile(os.path.join(folder, 'data.win')):
         return folder
     parts = os.path.normpath(folder).split(os.sep)
@@ -561,206 +431,85 @@ def install_folder(game: Game, folder: str):
         for depth in range(len(layout.resources), 0, -1):
             want = [n.casefold() for n in layout.resources[:depth]]
             if len(parts) > depth and [n.casefold() for n in parts[-depth:]] == want:
-                up = os.sep.join(parts[:-depth]) or os.sep
+                up = os.path.normpath(folder)
+                for _ in range(depth):
+                    up = os.path.dirname(up)
                 if layout_for(game, up) is layout:
                     return up
     return folder
 
 
-def verify(game_key, game_dir=None, steam_roots=None, gog_dirs=None, gog_records=None, allow_list=ALLOW_LIST,
+def verify(game_key, game_dir=None, steam_roots=None, gog_dirs=None, allow_list=ALLOW_LIST,
            platform=sys.platform, macos_allow_list=MACOS_ALLOW_LIST):
     game = GAMES[game_key]
-    lists = {"windows": list(allow_list) + DELTARUNE_DEMO_ALLOW_LIST, "macos": macos_allow_list}
+    lists = {"windows": list(allow_list), "macos": list(macos_allow_list)}
     if game_dir:
-        game_dir = install_folder(game, game_dir)
-    roots = default_steam_roots(platform=platform) if steam_roots is None else steam_roots
-    records = steam_records(game, roots)
-    # Purchased apps first, then the demo; within each, installed folders that exist.
-    records.sort(key=lambda r: (not r.purchased, not os.path.isdir(r.folder)))
-
-    candidates = []          # (folder, store, steam record or None)
-    if game_dir:
-        want = _norm(game_dir)
-        rec = next((r for r in records if _norm(r.folder) == want), None)
-        candidates.append((game_dir, "steam" if rec else None, rec))
+        # A hand-picked folder never needs any store probe.
+        candidates = [install_folder(game, os.fspath(game_dir))]
     else:
-        for r in records:
-            if os.path.isdir(r.folder):
-                candidates.append((r.folder, "steam", r))
-        for d in (default_gog_dirs(game, platform=platform) if gog_dirs is None else gog_dirs):
-            candidates.append((d, None, None))
-
+        roots = default_steam_roots(platform=platform) if steam_roots is None else steam_roots
+        candidates = steam_folders(game, roots)
+        candidates += default_gog_dirs(game, platform=platform) if gog_dirs is None else gog_dirs
     if not candidates:
-        stray = [os.path.join(lib, "steamapps", "common", n) for root in roots for lib in steam_libraries(root)
-                 for n in game.install_dirs]
-        stray = [d for d in stray if _looks_like_game(game, d)]
-        if stray:
-            return Result(NO_RECORD, game.key, stray[0], message=(
-                "%s is in %s, but Steam has no install record for it there. Install %s through Steam (or let Steam "
-                "finish installing it), then try again. %s" % (game.title, stray[0], game.title, _buy(game))))
         return Result(NOT_FOUND, game.key, message=(
-            "%s was not found in your Steam libraries%s. Install it with Steam%s, then try again. %s" % (
-                game.title, " or GOG installs" if game.gog_product else "",
-                " or GOG" if game.gog_product else "", _buy(game))))
-
-    results = [_verify_folder(game, folder, store, rec, records, gog_records, lists, platform)
-               for folder, store, rec in candidates]
-    rank = {OK: 0, OK_FREE: 1, NOT_INSTALLED: 2, ACCOUNT: 3, UNKNOWN_VERSION: 4, MISSING_FILES: 5, UNREADABLE: 6,
-            NO_RECORD: 7, NOT_FOUND: 8}
+            "%s wasn't found in the usual folders. Choose your game folder to check its files." % game.title))
+    results = [_verify_folder(game, folder, lists) for folder in dict.fromkeys(candidates)]
+    rank = {OK: 0, UNKNOWN_VERSION: 1, UNREADABLE: 2, MISSING_FILES: 3, NOT_FOUND: 4}
     return min(results, key=lambda r: rank[r.status])
 
 
-def _verify_folder(game, folder, store, rec, records, gog_records, lists, platform):
-    res = Result(NOT_FOUND, game.key, folder)
+def _verify_folder(game, folder, lists):
+    res = Result(MISSING_FILES, game.key, folder)
     layout = layout_for(game, folder) if os.path.isdir(folder) else None
     if layout is None:
         if any(os.path.isfile(os.path.join(folder, *relative))
                for relative in (('game.unx',), ('assets', 'game.unx'))):
-            res.status = MISSING_FILES
             res.message = ("%s's native Linux files are not supported. Use its Windows version from Steam or GOG. "
                            "For Steam, choose Proton in Properties > Compatibility, let the download finish, "
                            "then select the game folder again." % game.title)
-            return res
-        bundles = [lay.resources[0] for lay in game.layouts if lay.resources]
-        res.status = MISSING_FILES
-        res.message = ("%s has no data.win%s, so it is not a %s game folder. Pick the folder that holds %s's data.win%s, "
-                       "or reinstall the game with %s." % (
-                           folder, "".join(" or %s" % b for b in bundles), game.title, game.title,
-                           "".join(" (on a Mac: the folder that holds %s)" % b for b in bundles),
-                           "Steam or GOG" if game.gog_product else "Steam"))
+        else:
+            res.message = ("This folder has no data.win%s. Choose the folder with %s's game files." % (
+                " or UNDERTALE.app" if game.key == "undertale" else "", game.title))
         return res
     res.layout, res.data_dir = layout.key, layout.data_dir(folder)
-    if layout is not WINDOWS:
-        res.details.append("%s files in %s" % (layout.name, res.data_dir))
-
-    # Install record.
-    owner_ok = False
-    if rec is not None:
-        res.store = "steam"
-        if rec.state_flags != STATE_FULLY_INSTALLED:
-            res.status = NOT_INSTALLED
-            res.message = ("Steam is still installing or updating %s (or an update is waiting). Let Steam finish, "
-                           "then try again." % game.title)
-            return res
-        owner_ok = rec.owner_known and rec.purchased
-        res.details.append("Steam app %s in library %s, buildid %s" % (rec.appid, rec.library, rec.buildid))
-        res.details.append("install record names an account that has signed in on this PC: %s"
-                           % ("yes" if rec.owner_known else "no"))
-    else:
-        has_info, recorded = gog_record(game, folder, gog_records, platform)
-        if recorded:
-            res.store = "gog"
-            owner_ok = True
-            res.details.append("GOG install record for product %s" % game.gog_product)
-        elif has_info:
-            res.details.append("goggame info present, but GOG has no record of this folder")
-        else:
-            res.details.append("no Steam or GOG install record for this folder")
-
     versions = check_versions(game, folder, lists.get(layout.key, ()), layout)
-    unreadable = [p for p, (s, _) in versions.items() if s == "unreadable"]
+    unreadable = [p for p, (state, _) in versions.items() if state == "unreadable"]
     if unreadable:
         res.status = UNREADABLE
-        res.message = ("Could not read %s's data.win in %s (%s). Close anything using the game files and try again."
-                       % (game.title, folder, versions[unreadable[0]][1]))
+        res.message = "Could not read %s's game files. Check folder access and try again." % game.title
+        res.details = ["%s: %s" % (layout.data_path(folder, p), versions[p][1]) for p in unreadable]
         return res
     present = [p for p in game.parts if versions[p][0] != "missing"]
-    if "root" not in present:
-        res.status = MISSING_FILES
-        res.message = "%s's data.win is missing in %s. Reinstall or repair the game, then try again." % (game.title, folder)
+    unknown = [p for p in present if versions[p][0] == "unknown"]
+    if unknown:
+        res.status = UNKNOWN_VERSION
+        res.refused_parts = unknown
+        res.message = ("These game files don't match an official release supported by this builder. "
+                       "Restore the original game files or try a newer builder.")
+        if game.key == 'deltarune':
+            res.message += ' Files to check: ' + ', '.join(_chapter_name(p) for p in unknown) + '.'
+        if (game.key == "deltarune" and "root" in unknown and layout is WINDOWS
+                and check_versions(dataclasses.replace(game, key="deltarune-demo"), folder,
+                                   DELTARUNE_DEMO_ALLOW_LIST, layout)["root"][0] == "ok"):
+            res.message = ("The DELTARUNE demo isn't supported by this builder. "
+                           "Choose the full game's folder instead.")
         return res
-    labels = {versions[p][1][1] for p in present if versions[p][0] == "ok"}
-    res.version = ", ".join(sorted(labels)) or None
-    hash_only_gog = (rec is None and not owner_ok and platform in ('linux', 'darwin') and game.gog_product
-                     and all(versions[p][0] == 'ok' and versions[p][1][0] == 'gog' for p in present))
-    if hash_only_gog:
-        res.store = 'gog'
-        owner_ok = True
-        res.details.append('Known Windows GOG-compatible data hash; installer metadata is optional on this OS')
-    mixed = [p for p in present if versions[p][0] == "ok" and p not in game.free_parts
-             and res.store and versions[p][1][0] != res.store]
-    if mixed:
+    if game.key == "deltarune" and not any(p != "root" for p in present):
+        res.message = "No chapter files were found. Restore the original game files, then try again."
+        return res
+    if "root" not in present:
+        res.message = "Some game files are missing. Restore the original game files, then try again."
+        return res
+    editions = {versions[p][1] for p in present}
+    if len(editions) != 1:
         res.status = UNKNOWN_VERSION
         res.refused_parts = present
-        res.message = ("These files came from a different store. Restore %s in %s, then choose its installed folder."
-                       % (game.title, "GOG Galaxy" if res.store == "gog" else "Steam"))
+        res.message = "These game files come from different editions. Choose one complete copy of the game."
         return res
-    for part in present:
-        good = versions[part][0] == "ok" or (game.key == "deltarune" and ALLOW_UNKNOWN_DELTARUNE
-                                               and versions[part][0] == "unknown")
-        free = part in game.free_parts
-        if good and (owner_ok or free):
-            res.accepted_parts.append(part)
-        else:
-            res.refused_parts.append(part)
-    unknown = [p for p in present if versions[p][0] == "unknown"]
-    paid_present = [p for p in present if p not in game.free_parts]
-    repair = "use Steam's \"Verify integrity of game files\"" if res.store == "steam" else "reinstall it"
-
-    if game.key == 'deltarune' and versions['root'][0] == 'unknown':
-        path = layout.data_path(folder, 'root')
-        if any(g == 'deltarune-demo' and part == 'root' and os.path.getsize(path) == size
-               and data_digest(path) == digest
-               for g, part, size, digest, _store, _label in DELTARUNE_DEMO_ALLOW_LIST):
-            res.status = UNKNOWN_VERSION
-            res.message = "The DELTARUNE demo isn't supported. Choose the full game."
-            return res
-
-    if unknown and (not game.free_parts or "root" in unknown) and not (game.key == "deltarune" and ALLOW_UNKNOWN_DELTARUNE):
-        res.status = UNKNOWN_VERSION
-        res.message = ("These %s files don't match an official release this builder knows. If you changed or "
-                       "modded the game, %s to restore the original files. If the game was updated recently, a newer "
-                       "builder may support it. %s" % (game.title, repair, _buy(game)))
-        if game.key == "deltarune":
-            res.message = "This version hasn't been checked yet. Update the builder."
-        return res
-    if not owner_ok and (not game.free_parts or not res.accepted_parts):
-        if rec is not None and not rec.owner_known:
-            res.status = ACCOUNT
-            res.message = ("Steam's install record for %s names an account that has not signed in to Steam on this "
-                           "computer. Sign in to Steam with the account that owns %s, then try again. %s"
-                           % (game.title, game.title, _buy(game)))
-        else:
-            res.status = NO_RECORD
-            res.message = ("%s isn't a Steam%s installation of %s. Install the game with Steam%s and pick the folder "
-                           "the store installed. %s" % (folder, " or GOG" if game.gog_product else "", game.title,
-                                                        " or GOG" if game.gog_product else "", _buy(game)))
-        return res
-    if game.key == "deltarune" and not any(p != "root" for p in res.accepted_parts):
-        if unknown:
-            res.status = UNKNOWN_VERSION
-            res.message = ("Unchecked chapter files: %s. Verify the game files in Steam. "
-                           "If they are unchanged, update the builder." %
-                           ", ".join(_chapter_name(p) for p in unknown))
-        else:
-            res.status = MISSING_FILES
-            res.message = "No chapter files were found. Verify the game files in Steam, then try again."
-        return res
-    if res.refused_parts:
-        res.status = OK_FREE
-        why = []
-        if unknown:
-            why.append("%s %s not match an official release (%s to restore them)" % (
-                ", ".join(_chapter_name(p) for p in unknown), "does" if len(unknown) == 1 else "do", repair))
-        locked = [p for p in res.refused_parts if p not in unknown]
-        if locked:
-            why.append("%s need%s a purchased copy (%s)" % (
-                ", ".join(_chapter_name(p) for p in locked), "s" if len(locked) == 1 else "",
-                "sign in to Steam with the account that owns DELTARUNE" if rec is not None and rec.purchased
-                else "the free DELTARUNE demo includes only Chapters 1 and 2"))
-        res.message = ("The free chapters can be built (%s). %s. %s" % (
-            ", ".join(_chapter_name(p) for p in res.accepted_parts if p != "root") or "the launcher",
-            "; ".join(why)[0].upper() + "; ".join(why)[1:], _buy(game)))
-        return res
+    res.store, res.version = editions.pop()
+    res.accepted_parts = present
     res.status = OK
-    res.message = "%s is an official %s copy, version %s." % (
-        game.title, "Steam" if res.store == "steam" else "GOG" if res.store == "gog" else "free", res.version)
-    if hash_only_gog:
-        res.message = "%s matches the supported GOG-compatible release, version %s." % (game.title, res.version)
-    if game.key == "deltarune" and not paid_present:
-        res.message += " Only the free chapters are installed."
-    if game.key == "deltarune" and unknown and ALLOW_UNKNOWN_DELTARUNE:
-        res.message += " This version hasn't been checked yet."
+    res.message = "%s's game files match a supported official copy." % game.title
     return res
 
 
@@ -798,7 +547,7 @@ def main(argv):
     if as_json:
         print(json.dumps(dataclasses.asdict(r) | {"accepted": r.accepted}, indent=2))
     else:
-        print(("OK: " if r.status == OK else "PARTLY OK: " if r.status == OK_FREE else "REFUSED: ") + r.message)
+        print(("OK: " if r.status == OK else "REFUSED: ") + r.message)
         if r.folder:
             print("  folder: %s" % r.folder)
         for d in r.details:

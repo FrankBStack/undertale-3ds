@@ -1,7 +1,8 @@
 """SMDH identities are packaging metadata; incremental builds must refresh them.
 
 HOME Menu text (maintainer, 2026-11-04): the long description is the game's name, and the publisher line carries the rest:
-"Unofficial port - v<version> - <model>" from a release source tree, "Unofficial port - <label> <commit> - <model>"
+"3lit3hax - Unofficial port" for UNDERTALE releases; DELTARUNE releases keep
+"Unofficial port - v<version> - <model>". "Unofficial port - <label> <commit> - <model>"
 from a Git checkout (label: a stage/candidate tag, else "source build").
 """
 from pathlib import Path
@@ -75,7 +76,8 @@ class SmdhMetadata(unittest.TestCase):
             for model, label in (('o3ds', 'Old 3DS'), ('n3ds', 'New 3DS')):
                 with self.subTest(game=game, model=model):
                     self.assertEqual(self.query(game, model, archive),
-                                     (game.upper(), 'Unofficial port - v' + version + ' - ' + label))
+                                     (game.upper(), '3lit3hax - Unofficial port' if game == 'undertale'
+                                      else 'Unofficial port - v' + version + ' - ' + label))
 
     def test_builder_source_identity_names_the_commit_in_a_tree_without_git(self):
         # R204 F1: the builder mirrors a checkout without .git and passes the commit it read as CTRPORT_SMDH_SOURCE.
@@ -194,13 +196,14 @@ import json,subprocess,sys
 archive,work=map(Path,sys.argv[1:3])
 sys.path.insert(0,str(archive/'tools/release/builder'))
 import pipeline,products
+pipeline.library_pins.select = lambda *a, **kw: {'packages': [], 'shims': None}
 assert Path(pipeline.__file__).resolve().is_relative_to(archive.resolve())
 contract=products.release_contract
 descriptor=contract.source_descriptor('undertale',pipeline.release_version(archive),
     contract.payload_digest(pipeline.source_payload(archive,'undertale')))
 descriptor['public_commit']='a'*40
 (archive/contract.DESCRIPTOR).write_text(json.dumps(descriptor))
-job=pipeline.Build(products.PRODUCTS['undertale'],SimpleNamespace(),str(work),'o3ds',str(work/'unused-game'),
+job=pipeline.Build(products.PRODUCTS['undertale'],SimpleNamespace(root=None),str(work),'o3ds',str(work/'unused-game'),
                    source_root=str(archive))
 job.prepare()
 source=work/'src'
@@ -230,7 +233,8 @@ for game in ('undertale','deltarune'):
                     line
                     for game in ('undertale', 'deltarune')
                     for label in ('Old 3DS', 'New 3DS')
-                    for line in (game.upper(), 'Unofficial port - v' + version + ' - ' + label)])
+                    for line in (game.upper(), '3lit3hax - Unofficial port' if game == 'undertale'
+                                 else 'Unofficial port - v' + version + ' - ' + label)])
 
     def test_exported_builder_from_a_source_checkout_names_its_commit(self):
         # R204 F1, end to end: the exported builder run from a Git checkout (no release descriptor) mirrors it
@@ -254,9 +258,10 @@ import subprocess,sys
 archive,work=map(Path,sys.argv[1:3])
 sys.path.insert(0,str(archive/'tools/release/builder'))
 import pipeline,products
+pipeline.library_pins.select = lambda *a, **kw: {'packages': [], 'shims': None}
 assert Path(pipeline.__file__).resolve().is_relative_to(archive.resolve())
 assert not (archive/products.release_contract.DESCRIPTOR).exists()
-job=pipeline.Build(products.PRODUCTS['undertale'],SimpleNamespace(),str(work),'o3ds',str(work/'unused-game'),
+job=pipeline.Build(products.PRODUCTS['undertale'],SimpleNamespace(root=None),str(work),'o3ds',str(work/'unused-game'),
                    source_root=str(archive))
 job.prepare()
 assert job.release_source['kind']=='source'
@@ -346,7 +351,7 @@ for model in ('o3ds','n3ds'):
         text = (ROOT / 'platform/3ds/CMakeLists.txt').read_text()
         self.assertIn('set(APP_NAME "UNDERTALE")', text)
         self.assertIn('set(APP_NAME "deltarune-3ds (unofficial)")', text)
-        # The publisher line is smdh.cmake's own (unofficial port, version or source, model).
+        # The publisher line is smdh.cmake's own (release handle or source identity).
         self.assertNotIn('APP_AUTHOR', text)
         self.assertNotIn('Community contributors', text)
         self.assertIn('assets/icon-${GAME_DIR_NAME}-${CTRPORT_TARGET}.png', text)
@@ -384,6 +389,28 @@ for model in ('o3ds','n3ds'):
         out.write_bytes(b'broken')
         self.command(args)
         self.assertEqual(out.read_bytes(), changed)
+
+    @unittest.skipUnless(shutil.which('smdhtool') and shutil.which('bannertool'),
+                         'Native tools for both SMDH formats')
+    def test_real_release_smdh_english_publisher_in_both_formats(self):
+        for game in ('undertale', 'deltarune'):
+            for model, label in (('o3ds', 'Old 3DS'), ('n3ds', 'New 3DS')):
+                for mode, tool in (('3dsx', 'smdhtool'), ('cia', 'bannertool')):
+                    with self.subTest(game=game, model=model, mode=mode):
+                        out = Path(self.temp.name) / (game + model + mode + '.smdh')
+                        self.command(['cmake', '-DROOT=' + str(self.root), '-DGAME=' + game,
+                            '-DMODEL=' + model, '-DMODE=' + mode, '-DTOOL=' + shutil.which(tool),
+                            '-DNAME=' + game.upper(), '-DICON=' + str(ROOT /
+                                ('platform/3ds/assets/icon-' + game + '-' + model + '.png')),
+                            '-DFLAGS=visible,allow3d,recordusage', '-DOUT=' + str(out), '-P', SCRIPT])
+                        raw = out.read_bytes()
+                        self.assertEqual(raw[:4], b'SMDH')
+                        english = raw[8 + 512:8 + 1024]
+                        fields = [english[start:end].decode('utf-16le').split('\0')[0]
+                                  for start, end in ((0, 128), (128, 384), (384, 512))]
+                        publisher = ('3lit3hax - Unofficial port' if game == 'undertale' else
+                            'Unofficial port - v' + (self.root/'VERSION').read_text().strip() + ' - ' + label)
+                        self.assertEqual(fields, [game.upper(), game.upper(), publisher])
 
 
 if __name__ == '__main__':

@@ -658,7 +658,11 @@ def build_tables(game, data, romfs, target=None):
     import corpus
     import itemverdict
     import prepare
+    import inkart
     found = prepare.find_data(game, data)
+    # This runs even when ordinary verdict tables are cached or no data is found.
+    # The private atlas is full-hash checked and any stale output is removed first.
+    inkart.build(game, found, romfs)
     if not found:
         print(f"fonts: no {game.upper()} game data found; the renderer analyses its fonts at their first draw")
         return 0

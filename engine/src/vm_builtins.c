@@ -41,6 +41,9 @@
 #include "alarm_gm14.h" // colflip (alarm14): UNDERTALE's alarm setter
 static double gameFpsTarget(Runner* runner);
 static double gameFpsRealTarget(Runner* runner);
+#ifdef ENABLE_WAD16
+const char* auditfixgR2RoomName(const DataWin* dw, int32_t id);
+#endif
 #line 41
 
 #if defined(__GNUC__) || defined(__clang__)
@@ -3572,6 +3575,8 @@ static RValue builtin_random_set_seed(MAYBE_UNUSED VMContext* ctx, RValue* args,
     return RValue_makeUndefined();
 }
 
+#if !defined(ENABLE_WAD16) || (defined(__3DS__) && defined(CTRPORT_LAYERFIX_RELEASE_LAYOUT))
+#line 3571
 static RValue builtin_random(MAYBE_UNUSED VMContext* ctx, RValue* args, int32_t argCount) {
     REQUIRE_ARGC_AT_LEAST("random", 1, RValue_makeReal(0.0));
     GMLReal n = RValue_toReal(args[0]);
@@ -3602,6 +3607,10 @@ static RValue builtin_irandom_range(MAYBE_UNUSED VMContext* ctx, RValue* args, i
     return RValue_makeReal((GMLReal) (lo + (int32_t)(Random_nextUInt32(&ctx->runner->random) % range)));
 }
 
+#else
+#include "rngexact_entries.inc"
+#endif
+#line 3601
 static RValue builtin_choose(MAYBE_UNUSED VMContext* ctx, RValue* args, int32_t argCount) {
     REQUIRE_ARGC_AT_LEAST("choose", 1, RValue_makeUndefined());
     uint32_t idx = Random_nextUInt32(&ctx->runner->random) % argCount;
@@ -3660,8 +3669,16 @@ static RValue builtin_room_exists(VMContext* ctx, MAYBE_UNUSED RValue* args, MAY
 
 static RValue builtin_room_get_name(VMContext* ctx, MAYBE_UNUSED RValue* args, MAYBE_UNUSED int32_t argCount) {
     REQUIRE_ARGC_AT_LEAST("room_get_name", 1, RValue_makeUndefined());
+#ifdef ENABLE_WAD16
+#line 3659
+    const char* name = auditfixgR2RoomName(ctx->dataWin, RValue_toInt32(args[0]));
+    return RValue_makeOwnedString(safeStrdup(name));
+#else
+#line 3659
     Room* room = &ctx->dataWin->room.rooms[RValue_toInt32(args[0])];
     return RValue_makeOwnedString(safeStrdup(room->name));
+#endif
+#line 3661
 }
 
 static RValue builtin_room_get_info(VMContext* ctx, RValue* args, int32_t argCount) {
@@ -8714,7 +8731,14 @@ static RValue builtin_file_text_open_read(VMContext* ctx, RValue* args, int32_t 
     int32_t slot = findFreeTextFileSlot(runner);
     if (0 > slot) {
         logError("Too many open text files!\n");
+#if !defined(PLATFORM_3DS) || defined(ENABLE_WAD16)
+#line 8713
+        return RValue_makeReal(-1.0);
+#else
+#line 8713
         abort();
+#endif
+#line 8714
     }
 
     char* content = fs->vtable->readFileText(fs, path);
@@ -8744,7 +8768,14 @@ static RValue builtin_file_text_open_write(VMContext* ctx, RValue* args, int32_t
     int32_t slot = findFreeTextFileSlot(runner);
     if (0 > slot) {
         logError("Too many open text files!\n");
+#if !defined(PLATFORM_3DS) || defined(ENABLE_WAD16)
+#line 8743
+        return RValue_makeReal(-1.0);
+#else
+#line 8743
         abort();
+#endif
+#line 8744
     }
 
     OpenTextFile file = {0};
@@ -25495,4 +25526,10 @@ RValue Knight_scalarSurfacePartExt(VMContext* ctx, uint32_t* session, GMLReal su
     }
     return (RValue) {.type = RVALUE_UNDEFINED, .gmlStackType = GML_TYPE_VARIABLE}; // RValue_makeUndefined()
 }
+#endif
+// The bounds-helper caller is smaller than each game's original 252 B slot.
+// A separate assembler subsection fills only the tail, after the function and
+// its literal pool; it also makes unexpected growth a hard assembly failure.
+#if defined(ENABLE_WAD16) && defined(__3DS__) && defined(CTRPORT_LAYERFIX_RELEASE_LAYOUT)
+__asm__(".pushsection .text.builtin_room_get_name,\"ax\",%progbits\n.subsection 1\n.org 252, 0\n.popsection\n");
 #endif

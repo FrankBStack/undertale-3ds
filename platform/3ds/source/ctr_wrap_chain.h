@@ -118,6 +118,7 @@ CtrDataVersionResult CTR_DATAVERSION_UTSFX(CTR_DATAVERSION_CHAIN_PARAMS);
 //   itemfront (z_itemfront.c; writerfront builds only): binds the item-name scripts' fronts (the DREAM press).
 //   writerfirst (z_writerfirst.c; writerfront builds only): wraps writerfront's Draw front so a writer's first Draw
 //   takes it too.
+//   bulletsplit (z_bulletsplit.c; writerfront builds only): the credits bullets' text drawn after their run.
 //   textcase (z_textcase.c): binds the dialogue script's case-table front (its switch jumps straight to the case).
 //   dodgefront (z_dodgefront.c): binds the centred text line's hand front after each room change (where textfront
 //   hasn't).
@@ -134,12 +135,15 @@ CtrDataVersionResult CTR_DATAVERSION_UTSFX(CTR_DATAVERSION_CHAIN_PARAMS);
 #define CTR_PREFETCHROOM_AFTER_TRAILFRONT CTR_PREFETCHROOM_ITEMFRONT
 #define CTR_PREFETCHROOM_WRITERFIRST CtrRenderer_chainWriterfirst
 #define CTR_PREFETCHROOM_AFTER_ITEMFRONT CTR_PREFETCHROOM_WRITERFIRST
-#define CTR_PREFETCHROOM_AFTER_WRITERFIRST CTR_PREFETCHROOM_TEXTCASE
+#define CTR_PREFETCHROOM_BULLETSPLIT CtrRenderer_chainBulletsplit
+#define CTR_PREFETCHROOM_AFTER_WRITERFIRST CTR_PREFETCHROOM_BULLETSPLIT
+#define CTR_PREFETCHROOM_AFTER_BULLETSPLIT CTR_PREFETCHROOM_TEXTCASE
 struct Renderer;
 void CTR_PREFETCHROOM_WRITERFRONT(struct Renderer* renderer);
 void CTR_PREFETCHROOM_TRAILFRONT(struct Renderer* renderer);
 void CTR_PREFETCHROOM_ITEMFRONT(struct Renderer* renderer);
 void CTR_PREFETCHROOM_WRITERFIRST(struct Renderer* renderer);
+void CTR_PREFETCHROOM_BULLETSPLIT(struct Renderer* renderer);
 #else
 #define CTR_PREFETCHROOM_AFTER_TEXTFRONT CTR_PREFETCHROOM_TEXTCASE
 #endif
@@ -401,6 +405,32 @@ CtrDataVersionResult CtrDataVersion_chainAdpcmPack(CTR_DATAVERSION_CHAIN_PARAMS)
 #define CTR_VRAMALLOCATONCE_TOUCH __wrap_CtrMemory_vramAllocAtOnce
 #define CTR_VRAMMEMALIGNONCE_TOUCH __wrap_CtrMemory_vramMemAlignOnce
 #define CTR_VRAMMEMALIGNATONCE_TOUCH __wrap_CtrMemory_vramMemAlignAtOnce
+#endif
+
+// thinart: private LA4 atlas at hidden EX entry; existing chains keep their bodies.
+// File-scope tag, so the prototypes below never declare a prototype-scope struct Renderer (R249).
+struct Renderer;
+#if defined(ENABLE_WAD16)
+#undef CTR_DATAVERSION_AFTER_UTSFX
+#define CTR_DATAVERSION_AFTER_UTSFX Thinart_check
+CtrDataVersionResult Thinart_check(CTR_DATAVERSION_CHAIN_PARAMS);
+// DODGEFRONT is a per-source definition, not a target-wide one. The new unit
+// must retain Old's chain even though it is not one of the original readers.
+#if defined(CTRPORT_TARGET_O3DS)
+#define CTR_PREFETCHROOM_AFTER_THINART CtrRenderer_chainTextfront
+#else
+#define CTR_PREFETCHROOM_AFTER_THINART __real_CtrRenderer_prefetchRoom
+#endif
+#undef CTR_PREFETCHROOM_AFTER_FLOWHITCH
+#define CTR_PREFETCHROOM_AFTER_FLOWHITCH Thinart_prefetchRoom
+void Thinart_prefetchRoom(struct Renderer* renderer);
+void CTR_PREFETCHROOM_AFTER_THINART(struct Renderer* renderer);
+#undef CTR_DISPLAYCAPS_AFTER_SOULSHAKE
+#define CTR_DISPLAYCAPS_AFTER_SOULSHAKE Thinart_caps
+uint32_t Thinart_caps(struct Renderer* renderer);
+#undef CTR_ENDFRAME_AFTER_INPUTLATE
+#define CTR_ENDFRAME_AFTER_INPUTLATE Thinart_endFrame
+void Thinart_endFrame(struct Renderer* renderer);
 #endif
 
 #endif

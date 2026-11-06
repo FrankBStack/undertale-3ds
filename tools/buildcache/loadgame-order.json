@@ -431,7 +431,34 @@
           "size": 56
         }
       ]
-    }
+    },
+    ".text_lshalt": [
+      {
+        "name": "lsSwapTop",
+        "offset": 0,
+        "size": 28
+      },
+      {
+        "name": "lsDraw",
+        "offset": 28,
+        "size": 80
+      },
+      {
+        "name": "psDraw",
+        "offset": 108,
+        "size": 80
+      },
+      {
+        "name": "CtrLoadscreen_halt",
+        "offset": 188,
+        "size": 152
+      },
+      {
+        "name": "CtrLoadscreen_drawing",
+        "offset": 340,
+        "size": 32
+      }
+    ]
   },
   "undertale-n3ds": {
     ".text.late.loadscreen": [
@@ -843,7 +870,34 @@
           "size": 56
         }
       ]
-    }
+    },
+    ".text_lshalt": [
+      {
+        "name": "lsSwapTop",
+        "offset": 0,
+        "size": 28
+      },
+      {
+        "name": "lsDraw",
+        "offset": 28,
+        "size": 80
+      },
+      {
+        "name": "psDraw",
+        "offset": 108,
+        "size": 80
+      },
+      {
+        "name": "CtrLoadscreen_halt",
+        "offset": 188,
+        "size": 152
+      },
+      {
+        "name": "CtrLoadscreen_drawing",
+        "offset": 340,
+        "size": 32
+      }
+    ]
   },
   "deltarune-o3ds": {
     ".text.late.loadscreen": [

@@ -127,6 +127,13 @@ class RegistryExportTest(unittest.TestCase):
             self.assertEqual(reg("HKEY_LOCAL_MACHINE", r"SOFTWARE\Valve\Steam", "InstallPath"), "D:\\Steam")
 
 
+def fixture_music_manifest():
+    entries = [dict(name='mus_%d.ogg' % i, size=3 * (i + 1),
+                    sha256=hashlib.sha256(b'ogg' * (i + 1)).hexdigest()) for i in range(3)]
+    return {'schema': 2, 'game': 'undertale', 'releases': {'steam': {'windows': {
+        'test 1.0': {'files': entries}}}, 'gog': {'windows': {'test GOG 1.0': {'files': entries}}}}}
+
+
 class MusicFixtures(unittest.TestCase):
     def setUp(self):
         entries = [dict(name='mus_%d.ogg' % i, size=3 * (i + 1),
@@ -134,6 +141,13 @@ class MusicFixtures(unittest.TestCase):
         patch = mock.patch.object(products, 'load_music_manifest', return_value=entries)
         patch.start()
         self.addCleanup(patch.stop)
+        patch = mock.patch.object(products, 'load_credits_manifest', return_value=dict(
+            name='credits.txt', size=len(b'names\n'), sha256=hashlib.sha256(b'names\n').hexdigest()))
+        patch.start()
+        self.addCleanup(patch.stop)
+        manifest = mock.patch.object(products, 'read_music_manifest', return_value=fixture_music_manifest())
+        manifest.start()
+        self.addCleanup(manifest.stop)
 
 
 class DiscoveryTest(MusicFixtures):
@@ -144,7 +158,7 @@ class DiscoveryTest(MusicFixtures):
             self.assertEqual(len(copies), 1)
             c = copies[0]
             self.assertEqual((c.store, os.path.normcase(c.folder)), ("Steam", os.path.normcase(t.folder)))
-            self.assertEqual(c.version, "1.08 (Steam build 4279148)")     # the allow-list label for that buildid
+            self.assertEqual(c.version, "Not checked yet")
             self.assertEqual(c.note, "")
 
     def test_steam_root_from_registry_export(self):
@@ -163,69 +177,55 @@ class DiscoveryTest(MusicFixtures):
         with tempfile.TemporaryDirectory() as tmp:
             t = SteamTree(tmp, state="6")
             c = discover.find_copies("undertale", t.probes())[0]
-            self.assertIn("still installing", c.note)
+            self.assertEqual(c.note, "")
 
     def test_nothing_found(self):
         with tempfile.TemporaryDirectory() as tmp:
             t = SteamTree(tmp, install=False)
             self.assertEqual(discover.find_copies("undertale", t.probes()), [])
 
-    def test_demo_app_is_labelled(self):
+    def test_empty_demo_folder_is_not_offered(self):
         with tempfile.TemporaryDirectory() as tmp:
             t = SteamTree(tmp)
             write(os.path.join(t.lib, "steamapps", "appmanifest_1690940.acf"),
                   fixture("appmanifest_1690940.acf", OWNER=OWNER))
             os.makedirs(os.path.join(t.lib, "steamapps", "common", "DELTARUNEdemo"))
             copies = discover.find_copies("deltarune", t.probes())
-            self.assertEqual([c.store for c in copies], ["Steam (demo)"])
+            self.assertEqual(copies, [])
 
     def test_gog_from_registry_export_and_verify(self):
         with tempfile.TemporaryDirectory() as tmp:
             gog = game_folder(os.path.join(tmp, "GOG Games", "Undertale"))
             write(os.path.join(gog, "goggame-1456487183.info"), '{"gameId": "1456487183", "name": "Undertale"}')
             reg = discover.registry_from_export(fixture("gog.reg", GOG_REG=vdf_path(gog)))
-            probes = discover.Probes(steam_roots=[], registry=reg, galaxy_db=os.path.join(tmp, "none.db"),
-                                     platform="win32")
+            probes = discover.Probes(steam_roots=[], registry=reg, platform="win32")
             copies = discover.find_copies("undertale", probes)
             self.assertEqual([(c.store, os.path.normcase(c.folder)) for c in copies], [("GOG", os.path.normcase(gog))])
             v = discover.verify_copy("undertale", gog, probes, allow_list=GOG_ALLOW)
             self.assertTrue(v.accepted, v.message)
             self.assertEqual(v.result.store, "gog")
 
-    def test_gog_galaxy_database(self):
+    def test_gog_copy_needs_no_galaxy_database(self):
         with tempfile.TemporaryDirectory() as tmp:
             gog = game_folder(os.path.join(tmp, "Galaxy", "Undertale"))
-            write(os.path.join(gog, "goggame-1456487183.info"), '{"gameId": "1456487183"}')
-            db = os.path.join(tmp, "galaxy-2.0.db")
-            con = sqlite3.connect(db)
-            con.execute("CREATE TABLE InstalledBaseProducts (productId INTEGER, installationPath TEXT)")
-            con.execute("INSERT INTO InstalledBaseProducts VALUES (1456487183, ?)", (gog,))
-            con.commit()
-            con.close()
-            probes = discover.Probes(steam_roots=[], registry=lambda *a: None, galaxy_db=db, platform="win32")
-            self.assertEqual(len(discover.find_copies("undertale", probes)), 1)
-            self.assertTrue(discover.verify_copy("undertale", gog, probes, allow_list=GOG_ALLOW).accepted)
+            probes = discover.Probes(steam_roots=[], gog_dirs=[], registry=lambda *a: None, platform="win32")
+            with mock.patch.object(sqlite3, 'connect', side_effect=AssertionError('store database read')):
+                self.assertEqual(discover.find_copies("undertale", probes), [])
+                self.assertTrue(discover.verify_copy("undertale", gog, probes, allow_list=GOG_ALLOW).accepted)
 
-    def test_manual_gog_folder_needs_product_info_or_registry(self):
+    def test_manual_gog_folder_needs_only_known_files(self):
         with tempfile.TemporaryDirectory() as tmp:
             gog = game_folder(os.path.join(tmp, "manual"))
-            probes = discover.Probes(steam_roots=[], gog_dirs=[], registry=lambda *a: None,
-                                     galaxy_db=os.path.join(tmp, "absent.db"), platform="win32")
+            probes = discover.Probes(steam_roots=[], gog_dirs=[], registry=lambda *a: None, platform="win32")
             allow = [ALLOW[0][:-2] + ('gog', 'GOG fixture')]
-            self.assertFalse(discover.verify_copy("undertale", gog, probes, allow_list=allow).accepted)
-            write(os.path.join(gog, "goggame-1456487183.info"), '{"gameId": "wrong product"}')
-            self.assertFalse(discover.verify_copy("undertale", gog, probes, allow_list=allow).accepted)
-            write(os.path.join(gog, "goggame-1456487183.info"), '{"gameId": "1456487183"}')
-            self.assertFalse(discover.verify_copy("undertale", gog, probes, allow_list=allow).accepted)
-            write(os.path.join(gog, "goggame-1456487183.info"), '{"gameId": "1456487183", "name": "Undertale"}')
-            write(os.path.join(gog, "goggame-1456487183.hashdb"), b'fixture installer record')
-            pair = tuple(vg.sha256_file(os.path.join(gog,'goggame-1456487183.'+suffix)) for suffix in ('info','hashdb'))
-            with mock.patch.dict(vg.GOG_INSTALL_RECORDS, {'1456487183': pair}):
+            for metadata in (None, '{"gameId": "wrong product"}', 'malformed'):
+                if metadata is not None:
+                    write(os.path.join(gog, 'goggame-1456487183.info'), metadata)
                 verdict = discover.verify_copy("undertale", gog, probes, allow_list=allow)
-            self.assertTrue(verdict.accepted, verdict.message)
-            self.assertEqual(verdict.result.store, "gog")
-            self.assertEqual(verdict.platform, "Windows")
-            self.assertEqual(products.load_music_manifest.call_args.kwargs, {'store': 'gog', 'platform': 'windows'})
+                self.assertTrue(verdict.accepted, verdict.message)
+                self.assertEqual(verdict.result.store, "gog")
+                self.assertEqual(verdict.platform, "Windows")
+                self.assertEqual(products.load_music_manifest.call_args.kwargs, {'store': 'gog', 'platform': 'windows'})
 
 
 class VerifyTest(MusicFixtures):
@@ -235,8 +235,8 @@ class VerifyTest(MusicFixtures):
             write(os.path.join(t.folder, 'mus_1.ogg'), b'badbad')
             verdict = discover.verify_copy('undertale', t.folder, t.probes(), allow_list=ALLOW)
             self.assertFalse(verdict.accepted)
-            self.assertIn('mus_1.ogg has the wrong SHA-256', verdict.message)
-            self.assertIn('Verify integrity of game files', verdict.message)
+            self.assertIn('mus_1.ogg does not match the supported original', verdict.message)
+            self.assertIn('Restore the original music files', verdict.message)
 
     def test_music_wrong_size_names_the_file(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -244,7 +244,7 @@ class VerifyTest(MusicFixtures):
             write(os.path.join(t.folder, 'mus_1.ogg'), b'bad')
             verdict = discover.verify_copy('undertale', t.folder, t.probes(), allow_list=ALLOW)
             self.assertFalse(verdict.accepted)
-            self.assertIn('mus_1.ogg has the wrong size', verdict.message)
+            self.assertIn('mus_1.ogg does not match the supported original', verdict.message)
 
     def test_missing_music_names_the_file(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -259,8 +259,8 @@ class VerifyTest(MusicFixtures):
             t = SteamTree(tmp)
             write(os.path.join(t.folder, 'custom.ogg'), b'custom')
             verdict = discover.verify_copy('undertale', t.folder, t.probes(), allow_list=ALLOW)
-            self.assertFalse(verdict.accepted)
-            self.assertIn('Unexpected music file custom.ogg', verdict.message)
+            self.assertTrue(verdict.accepted, verdict.message)
+            self.assertNotIn('custom.ogg', [name for _, name, _ in products.sd_files(products.PRODUCTS['undertale'], t.folder)])
 
     def test_official_steam_copy(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -283,16 +283,14 @@ class VerifyTest(MusicFixtures):
         with tempfile.TemporaryDirectory() as tmp:
             t = SteamTree(tmp, owner="76561190000000099")
             v = discover.verify_copy("undertale", t.folder, t.probes(), allow_list=ALLOW)
-            self.assertFalse(v.accepted)
-            self.assertIn("has not signed in to Steam on this computer", v.message)
+            self.assertTrue(v.accepted, v.message)
 
     def test_hand_picked_folder_without_record(self):
         with tempfile.TemporaryDirectory() as tmp:
             t = SteamTree(tmp)
             loose = game_folder(os.path.join(tmp, "copy"))
             v = discover.verify_copy("undertale", loose, t.probes(), allow_list=ALLOW)
-            self.assertFalse(v.accepted)
-            self.assertIn("isn't a Steam or GOG installation", v.message)
+            self.assertTrue(v.accepted, v.message)
 
     def test_missing_credits(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -305,7 +303,9 @@ class VerifyTest(MusicFixtures):
     def test_music_count_for_a_known_version(self):
         with tempfile.TemporaryDirectory() as tmp:
             f = game_folder(os.path.join(tmp, "g"), oggs=3)
-            ok, msg = products.music_check(products.PRODUCTS["undertale"], f, "1.08 (Steam build 4279148)")
+            entries = [dict(name='mus_%d.ogg' % i, size=3, sha256='0' * 64) for i in range(212)]
+            with mock.patch.object(products, 'load_music_manifest', return_value=entries):
+                ok, msg = products.music_check(products.PRODUCTS["undertale"], f, "1.08 (Steam build 4279148)")
             self.assertFalse(ok)
             self.assertIn("only 3 of the 212 music files", msg)
 
@@ -379,9 +379,10 @@ class ToolchainTest(unittest.TestCase):
             self.assertTrue(tc.can_cia)
 
     def test_installer_env_value_is_not_a_windows_path(self):
-        self.assertEqual(toolchain.candidate_roots({"DEVKITPRO": "/opt/devkitpro"}, "win32"),
-                         [os.path.normpath("C:/devkitPro")])
-        self.assertEqual(toolchain.candidate_roots({"DEVKITPRO": "D:/dkp"}, "win32")[0], os.path.normpath("D:/dkp"))
+        with mock.patch.object(toolchain, 'windows_install_roots', return_value=[]):
+            self.assertEqual(toolchain.candidate_roots({"DEVKITPRO": "/opt/devkitpro"}, "win32"),
+                             [os.path.normpath("C:/devkitPro")])
+            self.assertEqual(toolchain.candidate_roots({"DEVKITPRO": "D:/dkp"}, "win32")[0], os.path.normpath("D:/dkp"))
 
     def test_dry_run_runs_nothing(self):
         logged = []
@@ -450,7 +451,7 @@ class ToolchainTest(unittest.TestCase):
         right_size = b"\0" * pin["size"]                 # the right size, the wrong bytes
         with tempfile.TemporaryDirectory() as tmp:
             for body, why in ((b"\0" * (pin["size"] - 1), "196303 bytes"), (b"\0" * (pin["size"] + 5), "bytes"),
-                              (right_size, "SHA-256")):
+                              (right_size, "expected file")):
                 dest = os.path.join(tmp, "dl", "devkitProUpdater-3.0.3.exe")
                 with self.assertRaises(toolchain.Refused) as e:
                     toolchain.download(pin["url"], dest, pin["sha256"], opener=lambda u, timeout: Resp(body),
@@ -483,7 +484,7 @@ class ToolchainTest(unittest.TestCase):
         steps = {s.key: s for s in toolchain.full_plan("t", "d", platform="win32")}
         with self.assertRaises(toolchain.Refused) as e:
             toolchain.run_step(steps["packages"], lambda s: None, False, toolchain.Actions(run=lambda argv, log: 1))
-        self.assertIn("couldn't install", str(e.exception))
+        self.assertIn("The 3DS tools could not be installed", str(e.exception))
         elevated = []
         acts = toolchain.Actions(download=lambda *a, **kw: None, elevated=lambda p: elevated.append(p) or 0, run=Boom())
         toolchain.run_step(steps["devkitpro"], lambda s: None, False, acts)
@@ -622,6 +623,180 @@ class FakeProc:
 
 
 class BuildTest(unittest.TestCase):
+    def test_build_time_game_file_refusals_are_visible_and_return_to_selection_on_each_host(self):
+        import gui
+        paths = {'win32': r'C:\Games\UNDERTALE\data.win',
+                 'linux': '/opt/steam/steamapps/common/UNDERTALE/data.win',
+                 'darwin': '/Applications/UNDERTALE.app/Contents/Resources/data.win'}
+        for platform, path in paths.items():
+            diagnostics = (
+                ("Refusing to build: %s is not an unmodified Steam or GOG copy of UNDERTALE "
+                 "(SHA-256 %s)." % (path, 'f' * 64),
+                 "These UNDERTALE files don't match an official release this builder knows."),
+                ('Refusing to build: could not read %s (Permission denied).' % path,
+                 'Could not read the UNDERTALE game files.'),
+                ('Refusing to build: could not read %s (file changed while checking).' % path,
+                 'The UNDERTALE game files changed while they were being checked.'),
+                ('Could not find the game files.',
+                 'Could not find the UNDERTALE game files.'),
+            )
+            for diagnostic, expected in diagnostics:
+                with self.subTest(platform=platform, diagnostic=diagnostic):
+                    self.tc.platform = platform
+                    b, seen = self.make([diagnostic + '\n'], rc=2)
+                    with self.assertRaises(pipeline.GameFilesRefused) as caught:
+                        b.run()
+                    self.assertIn('argv', list(seen))  # Refusal happens in the child after wizard verification.
+                    self.assertIn(diagnostic, Path(b.log_path).read_text(encoding='utf-8'))
+                    page = gui.BuildPage.__new__(gui.BuildPage)
+                    page.app = mock.Mock(state=gui.State('undertale'), PAGES=gui.App.PAGES)
+                    for attr in ('packaging', 'details', 'intro', 'status', 'cancel_btn', 'retry_btn', 'copy_btn'):
+                        setattr(page, attr, mock.Mock())
+                    page.finished(caught.exception)
+                    text = page.status.config.call_args.kwargs['text']
+                    self.assertIn(expected, text)
+                    self.assertIn('Go back to choose the game files.', text)
+                    self.assertNotIn('Try again', text)
+                    self.assertNotIn('build.sh exit', text)
+                    self.assertFalse(page.can_next())
+                    page.retry_btn.config.assert_called_with(text='Choose game files', command=page.choose_game_files)
+                    page.retry_btn.state.assert_called_with(['!disabled'])
+                    page.app.state.verdict = mock.Mock(accepted=True)
+                    page.app.state.folder = path
+                    page.app.state.artifacts, page.app.state.records = ['old'], ['old']
+                    before = page.st.inputs
+                    page.retry_btn.config.call_args.kwargs['command']()
+                    page.app.show.assert_called_once_with(gui.App.PAGES.index(gui.FindPage))
+                    self.assertIsNone(page.st.verdict)
+                    self.assertEqual(page.st.folder, path)
+                    self.assertEqual((page.st.artifacts, page.st.records), ([], []))
+                    self.assertEqual(page.st.inputs, before + 1)
+                    self.assertFalse(page.st.build_ok)
+
+    def test_other_exit_two_failures_keep_the_build_retry(self):
+        import gui
+        b, _ = self.make(['fixture.c:1: error: ordinary failure\n'], rc=2)
+        with self.assertRaises(pipeline.BuildFailed) as caught:
+            b.run()
+        self.assertNotIsInstance(caught.exception, pipeline.GameFilesRefused)
+        self.assertIn('Try again', str(caught.exception))
+        page = gui.BuildPage.__new__(gui.BuildPage)
+        page.failed, page.running, page.log_path = caught.exception, False, b.log_path
+        page.cancel_btn, page.retry_btn, page.copy_btn = mock.Mock(), mock.Mock(), mock.Mock()
+        page.buttons()
+        page.retry_btn.config.assert_called_with(text='Try again', command=page.start)
+
+    def test_choose_game_files_does_nothing_while_a_build_is_running(self):
+        import gui
+        page = gui.BuildPage.__new__(gui.BuildPage)
+        page.app = mock.Mock(state=gui.State('undertale'))
+        page.running = True
+        state = page.app.state
+        state.verdict, state.build_ok = object(), True
+        state.artifacts, state.records = ['kept'], ['kept']
+        before = vars(state).copy()
+        page.choose_game_files()
+        page.app.show.assert_not_called()
+        self.assertEqual(vars(state), before)
+
+    @unittest.skipIf(app.FIXED_GAME != "deltarune" and not Path(HERE, "builder", "chapters.py").is_file(),
+                     "DELTARUNE-only chapters.py is not included in this UNDERTALE source tree")
+    def test_deltarune_staging_errors_keep_the_exact_cause_on_each_host(self):
+        import chapters
+        import errno
+        game = Path(self.tmp) / 'game'
+        source_file = str(game / 'chapter3_windows/data.win')
+        work_file = str(Path(self.work) / 'data/deltarune/chapter3_windows/data.win')
+        action = ' Go back to choose the game files.'
+        space = 'Not enough space for the selected chapters. Free up space and try again.'
+        work = ('Could not prepare the selected chapters in the work folder. '
+                'Check free space and folder permissions. '
+                'Click Try again, or click Copy log to report the error.')
+        cases = [
+            (chapters.UnknownVersion(chapters.UNKNOWN_MESSAGE),
+             "These DELTARUNE files don't match an official release this builder knows. "
+             'Restore the complete original game folder, or try a newer builder.' + action, True),
+            (OSError(errno.ENOSPC, 'raw disk full', work_file), space, False),
+            # Disk full must win over both ambiguous-copy error shapes.
+            (OSError(errno.ENOSPC, 'raw fast-copy disk full', source_file, None, work_file), space, False),
+            (chapters.StageCopyError(errno.ENOSPC, 'raw wrapped disk full'), space, False),
+            (PermissionError(errno.EACCES, 'raw source denied', source_file),
+             'Could not read the DELTARUNE game files. Check that the game folder is readable '
+             'and close anything that is using the files.' + action, True),
+            (PermissionError(errno.EACCES, 'raw destination denied', work_file), work, False),
+            (OSError('raw error without a filename'), work, False),
+        ]
+        copy = ('Could not copy the selected chapters. Check that the game folder is readable '
+                'and that the work folder has free space and allows these files. '
+                'Click Try again, or click Copy log to report the error.')
+        for code in (errno.EDQUOT, errno.EFBIG, errno.EIO, errno.EACCES):
+            # CPython fast-copy: filename points to source even for a destination error.
+            cases.append((OSError(code, 'raw fast-copy failure', source_file, None, work_file), copy, False))
+            # Windows copy: no filenames. The operation wrapper retains both sides.
+            cases.append((chapters.StageCopyError(code, 'raw copy failure'), copy, False))
+        for message in (space, 'Choose a work folder outside the game folder.',
+                        'The staged files are shared and read-only. Choose another work folder.'):
+            cases.append((ValueError(message), message, False))
+        for message in ('Choose at least one installed chapter.', 'The launcher is missing.',
+                        'Chapter 3 is missing or unreadable.',
+                        'These chapters are from different versions. Restore the complete original game folder, then try again.',
+                        'Missing or unreadable audio: fixture.ogg. Restore the complete original game folder, then try again.'):
+            cases.append((chapters.GameFilesError(message), message + action, True))
+        for host in ('win32', 'linux', 'darwin'):
+            for phase in ('selection', 'staging'):
+                for error, expected, select_again in cases:
+                    with self.subTest(host=host, phase=phase, error=str(error)):
+                        self.tc.platform = host
+                        b, seen = self.make([])
+                        b.product, b.data_dir = products.PRODUCTS['deltarune'], str(game)
+                        if phase == 'staging':
+                            prepare = mock.patch.object(b, 'prepare', return_value=('0.1.0', 0, 0))
+                            failure = mock.patch.object(chapters, 'stage', side_effect=error)
+                        else:
+                            prepare = mock.patch.object(chapters, 'stage')
+                            failure = mock.patch.object(chapters, 'runtime_selection', side_effect=error)
+                        with prepare, failure, self.assertRaises(pipeline.BuildFailed) as caught:
+                            b.run()
+                        self.assertEqual(str(caught.exception), expected)
+                        self.assertEqual(isinstance(caught.exception, pipeline.GameFilesRefused), select_again)
+                        self.assertNotIn('GOG', str(caught.exception))
+                        self.assertIn(str(error), Path(b.log_path).read_text(encoding='utf-8'))
+                        self.assertNotIn('argv', seen)
+
+    @unittest.skipIf(app.FIXED_GAME != "deltarune" and not Path(HERE, "builder", "chapters.py").is_file(),
+                     "DELTARUNE-only chapters.py is not included in this UNDERTALE source tree")
+    def test_unwritable_work_folder_does_not_hide_the_original_staging_cause(self):
+        import chapters
+        b, seen = self.make([])
+        b.product = products.PRODUCTS['deltarune']
+        b.log_path = str(Path(self.tmp) / 'blocked/log.txt')
+        (Path(self.tmp) / 'blocked').write_text('fixture', encoding='ascii')
+        message = 'Choose a work folder outside the game folder.'
+        with mock.patch.object(chapters, 'runtime_selection', side_effect=ValueError(message)), \
+                self.assertRaises(pipeline.BuildFailed) as caught:
+            b.run()
+        self.assertEqual(str(caught.exception), message)
+        self.assertNotIsInstance(caught.exception, pipeline.GameFilesRefused)
+        self.assertIsNone(caught.exception.log_path)
+        self.assertNotIn('argv', seen)
+
+    def test_art_failures_keep_details_in_the_log_and_offer_file_selection(self):
+        for host in ('win32', 'linux', 'darwin'):
+            with self.subTest(host=host):
+                self.tc.platform = host
+                b, seen = self.make([])
+                b.art_generator = mock.Mock(side_effect=pipeline.home_art.ArtError('Missing player asset: fixture'))
+                with self.assertRaises(pipeline.GameFilesRefused) as caught:
+                    b.run()
+                text = str(caught.exception)
+                self.assertEqual(text, 'Could not prepare HOME Menu art for UNDERTALE. ''Click Copy log to report the error. Go back to choose the game files.')
+                self.assertNotIn('may have changed', text)
+                self.assertIn('Go back to choose the game files.', text)
+                self.assertNotIn('Missing player asset', text)
+                self.assertNotIn('Try again', text)
+                self.assertIn('Missing player asset: fixture', Path(b.log_path).read_text(encoding='utf-8'))
+                self.assertNotIn('argv', seen)
+
     def test_missing_optional_cia_tools_delivers_fresh_3dsx_on_each_host(self):
         for platform in ('win32', 'linux', 'darwin'):
             for requested in (('3dsx', 'cia'), ('cia',)):
@@ -640,7 +815,7 @@ class BuildTest(unittest.TestCase):
 
     def test_missing_3dsx_still_fails_without_cia_tools(self):
         b, _ = self.make(['[100%] y\n'], kinds=(), outputs=('3dsx', 'cia'))
-        with self.assertRaisesRegex(pipeline.BuildFailed, 'Missing output'):
+        with self.assertRaisesRegex(pipeline.BuildFailed, 'finished game file is missing'):
             b.run()
 
     def test_no_cia_was_built_but_the_3dsx_is_still_usable(self):
@@ -658,7 +833,8 @@ class BuildTest(unittest.TestCase):
 
     def setUp(self):
         compiler = mock.patch.object(toolchain, 'compiler_details', return_value={
-            'path': '/fixture/gcc', 'version': '16.1.0', 'target': 'arm-none-eabi'})
+            'path': '/fixture/gcc', 'version': '16.1.0', 'target': 'arm-none-eabi',
+            'vendor': 'devkitARM', 'package': '16.1.0-1'})
         compiler.start()
         self.addCleanup(compiler.stop)
         self.tmp = tempfile.mkdtemp()
@@ -666,6 +842,9 @@ class BuildTest(unittest.TestCase):
         self.work = os.path.join(self.tmp, "work")
         self.tc = toolchain.Toolchain("C:/devkitPro", "C:/devkitPro/msys2/usr/bin/bash.exe", [], [], [], None, None,
                                       None, "win32")
+        selected = mock.patch.object(pipeline.library_pins, 'select', return_value={'packages': [], 'shims': None})
+        selected.start()
+        self.addCleanup(selected.stop)
         self.build_id = "archive-0.1.0+aot12"       # what relprep's build_id.cmake writes for this source
 
     def tearDown(self):
@@ -744,26 +923,88 @@ class BuildTest(unittest.TestCase):
                 self.assertFalse(os.path.isdir(os.path.join(self.work, 'src')))
                 write(os.path.join(self.src, 'engine/src/vm.c'), 'int x;\n')
 
-    def test_other_compilers_warn_and_still_build_on_each_host(self):
+    def test_qualified_compiler_builds_without_exposing_captured_environment(self):
         for platform in ('win32', 'linux', 'darwin'):
-            for version in ('17.1.0', 'unknown'):
-                with self.subTest(platform=platform, version=version):
-                    self.tc.platform = platform
-                    b, seen = self.make(['[100%] y\n'])
-                    with mock.patch.object(toolchain, 'compiler_details', return_value={
-                            'path': '/fixture/gcc', 'version': version, 'target': 'arm-none-eabi'}):
-                        _, record = b.run()
+            with self.subTest(platform=platform):
+                self.tc.platform = platform
+                b, seen = self.make(['[100%] y\n'])
+                with mock.patch.object(toolchain, 'compiler_details', return_value={
+                        'path': '/fixture/gcc', 'version': '16.1.0', 'target': 'arm-none-eabi',
+                        'vendor': 'devkitARM', 'package': '16.1.0-1'}):
+                    arts, record = b.run()
                     self.assertIn('argv', list(seen))
-                    self.assertFalse(record['compiler']['layout_pins'])
-                    self.assertIn('16.1.0', record['compiler']['warning'])
-                    self.assertIn('performance may differ slightly.', record['compiler']['warning'])
+                    self.assertTrue(record['compiler']['layout_pins'])
+                    self.assertEqual([a.kind for a in arts], ['3dsx'])
+
+    def test_other_compilers_stop_before_any_build_work_on_each_host(self):
+        for platform in ('win32', 'linux', 'darwin'):
+            for field, value in (('version', '17.1.0'), ('version', 'unknown'), ('target', 'other'),
+                                 ('vendor', 'unknown'), ('package', '16.1.0-2'), ('package', 'unknown')):
+                with self.subTest(platform=platform, field=field, value=value):
+                    self.tc.platform = platform
+                    compiler = dict(path='/fixture/gcc', version='16.1.0', target='arm-none-eabi',
+                                    vendor='devkitARM', package='16.1.0-1')
+                    compiler[field] = value
+                    b, seen = self.make([])
+                    with mock.patch.object(toolchain, 'compiler_details', return_value=compiler), \
+                            mock.patch.object(b, 'prepare') as prepare, \
+                            mock.patch.object(products, 'aot_data_dir') as stage, \
+                            self.assertRaises(pipeline.BuildFailed) as caught:
+                        b.run()
+                    prepare.assert_not_called()
+                    stage.assert_not_called()
+                    self.assertNotIn('argv', list(seen))
+                    self.assertFalse(os.path.exists(os.path.join(self.work, 'src')))
+                    self.assertIsNone(caught.exception.log_path)
+                    for text in ('r68', '16.1.0-1', 'build has not started'):
+                        self.assertIn(text, str(caught.exception))
+                    self.assertNotIn('unknown', str(caught.exception))
+                    self.assertNotIn('pacman -Syu', str(caught.exception))
+                    if value != 'unknown':
+                        self.assertIn('https://github.com/ethancawse/undertale-3ds/releases', str(caught.exception))
+                    else:
+                        self.assertIn("Couldn't check", str(caught.exception))
 
     def test_no_aot_is_refused(self):
         b, _ = self.make(["WARNING: building WITHOUT AOT: no UNDERTALE game data found\n", "[100%] y\n"])
         with self.assertRaises(pipeline.BuildFailed) as e:
             b.run()
         self.assertIn("The game code could not be prepared.", str(e.exception))
+        self.assertNotIsInstance(e.exception, pipeline.GameFilesRefused)
+        self.assertEqual(str(e.exception), 'The game code could not be prepared.\n'
+                         'Click Try again, or click Copy log to report the error.')
         self.assertTrue(b.cancelled)
+
+    def test_missing_input_message_precedes_the_no_aot_fallback(self):
+        b, _ = self.make(['Could not find the game files.\n',
+                          'WARNING: building WITHOUT AOT: no UNDERTALE game data found\n'], rc=3)
+        with self.assertRaises(pipeline.GameFilesRefused) as caught:
+            b.run()
+        text = str(caught.exception)
+        self.assertIn('Could not find the UNDERTALE game files.', text)
+        self.assertIn('Go back to choose the game files.', text)
+        self.assertNotIn('code could not be prepared', text)
+        self.assertNotIn('repaired builder', text)
+
+    def test_prepare_failure_reports_a_builder_step_failure_and_keeps_retry(self):
+        import gui
+        diagnostic = 'AOT: tools/aot/prepare.py failed (exit 1); aot=off builds without AOT'
+        for host in ('win32', 'linux', 'darwin'):
+            with self.subTest(host=host):
+                self.tc.platform = host
+                b, _ = self.make([diagnostic + '\n'], rc=1)
+                with self.assertRaises(pipeline.BuildFailed) as caught:
+                    b.run()
+                self.assertNotIsInstance(caught.exception, pipeline.GameFilesRefused)
+                self.assertEqual(str(caught.exception), 'The game code could not be prepared.\n'
+                                 'Click Try again, or click Copy log to report the error.')
+                self.assertIn(diagnostic, Path(b.log_path).read_text(encoding='utf-8'))
+                page = gui.BuildPage.__new__(gui.BuildPage)
+                page.failed, page.running, page.log_path = caught.exception, False, b.log_path
+                page.cancel_btn, page.retry_btn, page.copy_btn = mock.Mock(), mock.Mock(), mock.Mock()
+                page.buttons()
+                page.retry_btn.config.assert_called_with(text='Try again', command=page.start)
+                self.assertIn('report the error with the log named below', app.cli_text(str(caught.exception)))
 
     def test_aot_function_skip_is_not_refused(self):
         # DELTARUNE chapter 5: gmlaot interprets two functions it cannot analyse; the build has AOT (integrate21 stage73).
@@ -780,7 +1021,7 @@ class BuildTest(unittest.TestCase):
         b, _ = self.make(["[100%] y\n"], aot=False)
         with self.assertRaises(pipeline.BuildFailed) as e:
             b.run()
-        self.assertIn("without AOT", str(e.exception))
+        self.assertIn("missing prepared game code", str(e.exception))
 
     def test_failed_build(self):
         b, _ = self.make(["error: something\n"], rc=2)
@@ -803,6 +1044,183 @@ class BuildTest(unittest.TestCase):
         with self.assertRaises(pipeline.BuildFailed) as e:
             b.run()
         self.assertIn("cancelled", str(e.exception))
+
+    def test_undertale_space_gate_matches_options_allowance_before_mirroring_on_each_model(self):
+        import gui
+        for model in ('o3ds', 'n3ds'):
+            # A second calibration proves both consumers read the shared setting.
+            for allowance in (1000, 1234):
+                for free in (350000000, 640000000, allowance * 10**6 - 1, allowance * 10**6):
+                    with self.subTest(model=model, allowance=allowance, free=free):
+                        b, seen = self.make([])
+                        b.target = model
+                        page = gui.OptionsPage.__new__(gui.OptionsPage)
+                        page.app = mock.Mock(state=gui.State('undertale'))
+                        page.app.opts.work = self.work
+                        page.target = mock.Mock(get=lambda: model)
+                        page.v3dsx = mock.Mock(get=lambda: True)
+                        page.vcia = mock.Mock(get=lambda: False)
+                        page.part_vars = {}
+                        page.estimate = mock.Mock()
+                        with mock.patch.object(products, 'UNDERTALE_WORK_MB', allowance), \
+                                mock.patch.object(pipeline.shutil, 'disk_usage', return_value=mock.Mock(free=free)), \
+                                mock.patch.object(pipeline, 'mirror_source', return_value=(0, 0)) as mirror, \
+                                mock.patch.object(pipeline, 'write_python_shims') as shims:
+                            page.changed()
+                            self.assertIn('Allow about %d MB' % allowance, page.estimate.config.call_args.kwargs['text'])
+                            self.assertIn('Delivery copies need extra space', page.estimate.config.call_args.kwargs['text'])
+                            if free < allowance * 10**6:
+                                with self.assertRaises(pipeline.BuildFailed) as caught:
+                                    b.prepare()
+                                self.assertEqual(str(caught.exception),
+                                    '%s has %d MB free; %d MB needed.\nFree up disk space and try again.' %
+                                    (self.work, free // 10**6, allowance))
+                                mirror.assert_not_called()
+                                shims.assert_not_called()
+                            else:
+                                b.prepare()
+                                mirror.assert_called_once()
+                                shims.assert_called_once()
+                        self.assertNotIn('argv', seen)
+
+    def test_undertale_allowance_stays_above_measured_work(self):
+        self.assertGreaterEqual(products.UNDERTALE_WORK_MB * 10**6, 637_000_000)
+
+    def test_two_prepares_credit_the_first_models_existing_work(self):
+        # Real reusable files, two distinct Build objects, shrinking free space.
+        allowance = products.UNDERTALE_WORK_MB * 10**6
+        for first, second in (('o3ds', 'n3ds'), ('n3ds', 'o3ds')):
+            with self.subTest(first=first):
+                work = Path(self.work) / first
+                a, seen_a = self.make([])
+                a.work, a.target = str(work), first
+                with mock.patch.object(pipeline.shutil, 'disk_usage', return_value=mock.Mock(free=allowance)):
+                    a.prepare()
+                write(str(work / 'src/build/first-model.bin'), 'x' * (2 * 1024**2))
+                write(str(work / 'out' / first / 'artifact.3dsx'), 'y' * (2 * 1024**2))
+                credit = pipeline.existing_work_bytes(work)
+                self.assertGreaterEqual(credit, 4 * 1024**2)
+                self.assertLess(credit, allowance - 30 * 10**6)
+                b, seen_b = self.make([])
+                b.work, b.target = str(work), second
+                with mock.patch.object(pipeline.shutil, 'disk_usage', return_value=mock.Mock(free=allowance-credit)):
+                    b.prepare()
+                self.assertNotIn('argv', seen_a)
+                self.assertNotIn('argv', seen_b)
+
+    def test_rerun_credits_reusable_work_but_still_refuses_a_remaining_shortfall(self):
+        allowance = products.UNDERTALE_WORK_MB * 10**6
+        write(os.path.join(self.work, 'src/build/retained.bin'), 'x' * 1024**2)
+        write(os.path.join(self.work, 'ccache/retained.bin'), 'y' * 1024**2)
+        credit = pipeline.existing_work_bytes(self.work)
+        self.assertEqual(credit, 2 * 1024**2)
+        for model in ('o3ds', 'n3ds'):
+            for short in (True, False):
+                with self.subTest(model=model, short=short):
+                    b, seen = self.make([])
+                    b.target = model
+                    free = allowance - credit - int(short)
+                    with mock.patch.object(pipeline.shutil, 'disk_usage', return_value=mock.Mock(free=free)), \
+                            mock.patch.object(pipeline, 'mirror_source', return_value=(0, 0)) as mirror:
+                        if short:
+                            with self.assertRaises(pipeline.BuildFailed) as caught:
+                                b.prepare()
+                            self.assertIn('%d MB needed' % (-(-(allowance-credit) // 10**6)), str(caught.exception))
+                            mirror.assert_not_called()
+                        else:
+                            b.prepare()
+                            mirror.assert_called_once()
+                    self.assertNotIn('argv', seen)
+
+    def test_work_credit_excludes_delivery_unrelated_files_and_links_and_keeps_headroom(self):
+        write(os.path.join(self.work, 'src/build/kept.bin'), 'a' * 4096)
+        write(os.path.join(self.work, 'out/files/not-work.bin'), 'b' * 8192)
+        write(os.path.join(self.work, 'unrelated.bin'), 'c' * 8192)
+        self.assertEqual(pipeline.existing_work_bytes(self.work), 4096)
+        try:
+            os.symlink(self.src, os.path.join(self.work, 'ccache'), target_is_directory=True)
+        except OSError:
+            pass  # Windows may disallow fixture symlinks; Debian exercises this branch.
+        else:
+            self.assertEqual(pipeline.existing_work_bytes(self.work), 4096)
+        b, _ = self.make([])
+        with mock.patch.object(pipeline, 'existing_work_bytes', return_value=2 * 10**9), \
+                mock.patch.object(pipeline.shutil, 'disk_usage', return_value=mock.Mock(free=30 * 10**6 - 1)), \
+                mock.patch.object(pipeline, 'mirror_source') as mirror:
+            with self.assertRaisesRegex(pipeline.BuildFailed, '30 MB needed'):
+                b.prepare()
+            mirror.assert_not_called()
+
+    def test_oversized_stale_cache_credit_is_capped_and_cannot_bypass_the_space_gate(self):
+        # Scale 1000 MB total / 100 MB cap to 100 MB total / 10 MB cap.
+        # Real cache bytes, with no source/build credit: 90 MB stale cache and 31 MB free
+        # used to pass at the 30 MB minimum. No compiler or network is involved.
+        self.assertEqual(pipeline.WORK_CACHE_CREDIT_MB, 100)
+        cache = Path(self.work) / 'ccache/stale-entry'
+        cache.parent.mkdir(parents=True)
+        with cache.open('wb') as stream:
+            for _ in range(90):
+                stream.write(b'x' * 10**6)
+        for model in ('o3ds', 'n3ds'):
+            for free in (31 * 10**6, 90 * 10**6 - 1, 90 * 10**6):
+                with self.subTest(model=model, free=free), \
+                        mock.patch.object(products, 'UNDERTALE_WORK_MB', 100), \
+                        mock.patch.object(pipeline, 'WORK_CACHE_CREDIT_MB', 10), \
+                        mock.patch.object(pipeline.shutil, 'disk_usage', return_value=mock.Mock(free=free)), \
+                        mock.patch.object(pipeline, 'mirror_source', return_value=(0, 0)) as mirror, \
+                        mock.patch.object(pipeline, 'write_python_shims') as shims:
+                    self.assertEqual(pipeline.existing_work_bytes(self.work), 10 * 10**6)
+                    b, seen = self.make([])
+                    b.target = model
+                    if free < 90 * 10**6:
+                        with self.assertRaises(pipeline.BuildFailed) as caught:
+                            b.prepare()
+                        self.assertEqual(str(caught.exception),
+                            '%s has %d MB free; 90 MB needed.\nFree up disk space and try again.' %
+                            (self.work, free // 10**6))
+                        mirror.assert_not_called()
+                        shims.assert_not_called()
+                    else:
+                        b.prepare()
+                        mirror.assert_called_once()
+                    self.assertNotIn('argv', seen)
+
+    def test_work_credit_deduplicates_real_hardlinks(self):
+        src = Path(self.work) / 'src/kept.bin'
+        write(str(src), 'x' * 4096)
+        os.link(src, src.with_name('same.bin'))
+        os.link(src, src.with_name('same-again.bin'))
+        self.assertEqual(pipeline.existing_work_bytes(self.work), 4096)
+
+    def test_work_credit_rejects_junction_sparse_compressed_and_excess_apparent_bytes(self):
+        from types import SimpleNamespace
+        work = Path(self.work)
+        folder = work / 'src/junction'
+        file = folder / 'kept.bin'
+        write(str(file), 'x' * 4096)
+        original_lstat = Path.lstat
+        cases = (
+            ('junction', folder, pipeline.stat.FILE_ATTRIBUTE_REPARSE_POINT, None, 0),
+            ('sparse', file, pipeline.stat.FILE_ATTRIBUTE_SPARSE_FILE, None, 0),
+            ('compressed', file, pipeline.stat.FILE_ATTRIBUTE_COMPRESSED, None, 0),
+            ('allocation', file, 0, 2, 1024),
+        )
+        for name, changed, attributes, blocks, expected in cases:
+            with self.subTest(case=name):
+                def lstat(path):
+                    info = original_lstat(path)
+                    if path != changed:
+                        return info
+                    fields = {key: getattr(info, key) for key in ('st_mode', 'st_dev', 'st_ino', 'st_size')}
+                    fields['st_file_attributes'] = attributes
+                    if blocks is not None:
+                        fields['st_blocks'] = blocks
+                    return SimpleNamespace(**fields)
+
+                # Synthetic Windows attributes are also exercised on Debian; real paths
+                # and a real directory walk ensure a removed guard changes the credit.
+                with mock.patch.object(Path, 'lstat', lstat):
+                    self.assertEqual(pipeline.existing_work_bytes(work), expected)
 
     def test_low_disk(self):
         b, _ = self.make([])
@@ -905,7 +1323,11 @@ class BuildTest(unittest.TestCase):
             # fontverdict.py imports both for DELTARUNE too (symverdict.py on its New 3DS build).
             self.assertTrue(pipeline.source_wanted("tools/aot/symverdict.py", game))
             self.assertTrue(pipeline.source_wanted("tools/aot/itemverdict.py", game))
-        manifest = Path(pipeline.SOURCE_ROOT, "tools/release/manifest-ut.txt").read_text(encoding="utf-8")
+            self.assertTrue(pipeline.source_wanted("tools/aot/inkart.py", game))
+        manifest = Path(pipeline.SOURCE_ROOT, "tools/release/manifest-ut.txt")
+        if not manifest.is_file():
+            self.skipTest("Curated release manifests are not included in this builder source kit")
+        manifest = manifest.read_text(encoding="utf-8")
         for name in ("tools/aot/pixgrid.py", "tools/aot/loadscreen_art.py", "tools/aot/btnprompt_build.py",
                      "tools/aot/dskip.py", "tools/aot/stglyphs.py", "tools/aot/stpack.py", "tools/aot/stmenu.py"):
             self.assertIn(name, manifest.splitlines())
@@ -959,10 +1381,14 @@ class DeliverTest(unittest.TestCase):
                                ('/media/card/', '/media/card/cia'), (None, 'sd:/cia')]:
             with self.subTest(root=root):
                 text = deliver.instructions(products.PRODUCTS['undertale'], ['n3ds'], ['3dsx', 'cia'], root)
-                self.assertIn('from ' + expected + ' with FBI', text)
+                self.assertIn('from ' + expected + ':', text)
+                self.assertIn('open FBI, the 3DS installer', text)
                 self.assertNotIn('\\', text)
 
     def setUp(self):
+        manifest = mock.patch.object(products, 'read_music_manifest', return_value=fixture_music_manifest())
+        manifest.start()
+        self.addCleanup(manifest.stop)
         self.tmp = tempfile.mkdtemp()
         self.game = game_folder(os.path.join(self.tmp, "game"))
         self.sd = os.path.join(self.tmp, "sd")
@@ -1034,7 +1460,7 @@ class DeliverTest(unittest.TestCase):
         ran = []
         with self.assertRaises(deliver.DeliverError) as caught:
             deliver.send_3dslink('3dslink', 'a.3dsx', run=lambda argv: ran.append(argv) or 0)
-        self.assertEqual(str(caught.exception), "Sending with the Homebrew Launcher's netloader is no longer supported. Use Install over Wi-Fi with ftpd.")
+        self.assertEqual(str(caught.exception), "Sending with the Homebrew Launcher's netloader is no longer supported. Use Send files over Wi-Fi with ftpd.")
         self.assertEqual(ran, [])
 
     def test_legacy_ftp_entry_uses_verified_transport(self):
@@ -1482,15 +1908,104 @@ class CliTest(MusicFixtures):
                                       original_verify(g, f, p, allow_list=ALLOW)), \
                     mock.patch.object(app.toolchain, 'detect', return_value=tc), \
                     mock.patch.object(app.pipeline, 'Build', FakeBuild):
-                rc = app.cli(app.parse(['--cli', '--target', 'n3ds', '--cia', '--no-texprep',
+                rc = app.cli(app.parse(['--cli', '--game', 'undertale', '--target', 'n3ds', '--cia', '--no-texprep',
                     '--work', os.path.join(tmp, 'work'), '--sd', sd]), out=out.append)
             self.assertEqual(rc, 0)
             self.assertTrue(Path(sd, '3ds/undertale-3ds/undertale-3ds-n3ds.3dsx').is_file())
             # The command line says it in its own words (B2): no window buttons, and only once.
             self.assertEqual(out.count(app.cli_text(pipeline.CIA_NOT_MADE)), 1)
             self.assertNotIn(pipeline.CIA_NOT_MADE, out)
+            self.assertIn('--dry-run', app.cli_text(pipeline.CIA_NOT_MADE))
+            self.assertNotIn('builder window', '\n'.join(out))
+            self.assertNotIn('Click', app.cli_text(pipeline.CIA_NOT_MADE))
             self.assertIn('Homebrew Launcher', '\n'.join(out))
             self.assertNotIn('with FBI', '\n'.join(out))
+
+    def test_cli_texture_fallback_keeps_diagnostics_in_log_and_delivers_3dsx(self):
+        import ftp_delivery
+        diagnostic = 'texprep: shipped texprep missing (texprep-windows-x64.exe)'
+        for delivery in ('sd', 'files', 'wifi'):
+            with self.subTest(delivery=delivery), tempfile.TemporaryDirectory() as tmp:
+                tree = SteamTree(tmp)
+                sd = os.path.join(tmp, 'sd')
+                os.makedirs(os.path.join(sd, '3ds'))
+                work = os.path.join(tmp, 'work')
+                artifact = os.path.join(tmp, 'undertale-3ds-n3ds.3dsx')
+                write(artifact, b'3dsx')
+                log_path = os.path.join(tmp, 'build.log')
+                tc = toolchain.Toolchain('/fixture', '/fixture/bash', [], [], [], None, None, None)
+                original_verify = discover.verify_copy
+
+                class FakeBuild:
+                    def __init__(self, *args, **kwargs):
+                        self.log_path = log_path
+                    def run(self):
+                        write(log_path, 'Build finished.\n')
+                        return [Art(artifact, '3dsx')], dict(target='n3ds', seconds=1, compiler_warnings=0)
+
+                # Exercise the real local layout preparation without opening an FTP connection.
+                def send(_address, product, arts, folder, work, parts, *, log):
+                    saved = deliver.save_files(product, arts, folder, work, parts, log=log)
+                    log('Files checked.')
+                    return saved
+
+                args = ['--cli', '--game', 'undertale', '--target', 'n3ds', '--work', work]
+                if delivery == 'sd':
+                    args += ['--sd', sd]
+                elif delivery == 'wifi':
+                    args += ['--ftp', '127.0.0.1:5000']
+                out = []
+                with mock.patch.object(app, 'probes_for', return_value=tree.probes()), \
+                        mock.patch.object(app.discover, 'verify_copy', side_effect=lambda g, f, p:
+                                          original_verify(g, f, p, allow_list=ALLOW)), \
+                        mock.patch.object(app.toolchain, 'detect', return_value=tc), \
+                        mock.patch.object(app.pipeline, 'Build', FakeBuild), \
+                        mock.patch.object(texcache, 'find_tool', return_value=texcache.Tool(
+                            None, '', diagnostic.removeprefix('texprep: '))), \
+                        mock.patch.object(ftp_delivery, 'send_product', side_effect=send), \
+                        mock.patch.object(ftp_delivery, 'connect', side_effect=AssertionError('No network')):
+                    self.assertEqual(app.cli(app.parse(args), out=out.append), 0)
+                text = '\n'.join(out)
+                self.assertNotIn('texprep', text)
+                self.assertIn('Build finished.\n', Path(log_path).read_text())
+                self.assertIn(diagnostic, Path(log_path).read_text())
+                self.assertIn(texcache.FIRST_START, text)
+                if delivery == 'wifi':
+                    self.assertIn('Files checked.', out)
+                destination = Path(sd if delivery == 'sd' else work)
+                self.assertTrue(list(destination.rglob('undertale-3ds-n3ds.3dsx')))
+
+    def test_cli_cia_setup_hint_is_a_real_flag_and_prints_headless_setup_steps(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tree = SteamTree(tmp)
+            work = os.path.join(tmp, 'work')
+            tc = toolchain.Toolchain('/opt/devkitpro', '/bin/bash', [], [], [], None, None, None, 'linux')
+            out = []
+            with mock.patch.object(app, 'probes_for', return_value=tree.probes()), \
+                    mock.patch.object(app.toolchain, 'detect', return_value=tc):
+                self.assertEqual(app.dry_run(app.parse(['--dry-run', '--work', work]), out=out.append), 0)
+            text = '\n'.join(out)
+            self.assertIn('makerom', text)
+            self.assertIn('build-bannertool', text)
+            self.assertIn('SHA-256', text)
+            self.assertIn('Dry run: nothing was downloaded, installed or changed.', text)
+            self.assertFalse(os.path.exists(work))
+
+    def test_cli_cia_advice_also_describes_unsupported_cpu_dry_run_truthfully(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tree = SteamTree(tmp)
+            work = os.path.join(tmp, 'work')
+            tc = toolchain.Toolchain('/opt/devkitpro', '/bin/bash', [], [], [], None, None, None, 'linux')
+            out = []
+            with mock.patch.object(app, 'probes_for', return_value=tree.probes()), \
+                    mock.patch.object(app.toolchain, 'detect', return_value=tc), \
+                    mock.patch.object(toolchain.assets, 'machine', return_value='aarch64'):
+                self.assertEqual(app.dry_run(app.parse(['--dry-run', '--work', work]), out=out.append), 0)
+            advice = app.cli_text(pipeline.CIA_NOT_MADE)
+            self.assertIn("builder's setup steps and .cia availability", advice)
+            self.assertNotIn('commands', advice)
+            self.assertIn('.cia download unavailable on this CPU', '\n'.join(out))
+            self.assertFalse(os.path.exists(work))
 
     def test_build_initialization_failure_is_a_plain_cli_refusal(self):
         verified = mock.Mock(accepted=True, message='fixture verified', result=mock.Mock(store='gog'))
@@ -1522,6 +2037,7 @@ class CliTest(MusicFixtures):
     def test_parse(self):
         # Default target is "both" (New 3DS and Old 3DS).
         d = app.parse([])
+        self.assertEqual(d["game"], app.FIXED_GAME)
         self.assertEqual((d["mode"], d["target"], d["cia"], d["import_saves"]), ("gui", "both", False, False))
         o = app.parse(["--cli", "--work", "rel/w", "--target", "o3ds", "--cia", "--save-dir", "rel/s",
                        "--import-saves", "--overwrite-saves"])
@@ -1546,7 +2062,7 @@ class CliTest(MusicFixtures):
             work = os.path.join(tmp, "w")
             with mock.patch.object(app, "probes_for", return_value=t.probes()), \
                     mock.patch.object(app.toolchain, "detect", return_value=tc):
-                app.dry_run(dict(app.parse(["--dry-run", "--work", work])), out=out.append)
+                app.dry_run(dict(app.parse(["--dry-run", "--game", "undertale", "--work", work])), out=out.append)
             text = "\n".join(out)
             self.assertIn("Copies found: 1", text)
             self.assertIn("PC saves (", text)
@@ -1594,7 +2110,7 @@ class CliTest(MusicFixtures):
                                       side_effect=lambda g, f, p: orig_verify(g, f, p, allow_list=ALLOW)), \
                     mock.patch.object(app.toolchain, "detect", return_value=tc), \
                     mock.patch.object(app.pipeline, "Build", FakeBuild):
-                rc1 = app.cli(dict(app.parse(["--cli", "--target", "n3ds", "--work", os.path.join(tmp, "w"),
+                rc1 = app.cli(dict(app.parse(["--cli", "--game", "undertale", "--target", "n3ds", "--work", os.path.join(tmp, "w"),
                                               "--sd", sd, "--import-saves"])), out=out1.append)
             self.assertEqual(rc1, 1)
             self.assertTrue(any("Existing 3DS saves were found" in line for line in out1))
@@ -1607,7 +2123,7 @@ class CliTest(MusicFixtures):
                                       side_effect=lambda g, f, p: orig_verify(g, f, p, allow_list=ALLOW)), \
                     mock.patch.object(app.toolchain, "detect", return_value=tc), \
                     mock.patch.object(app.pipeline, "Build", FakeBuild):
-                rc2 = app.cli(dict(app.parse(["--cli", "--target", "n3ds", "--work", os.path.join(tmp, "w"),
+                rc2 = app.cli(dict(app.parse(["--cli", "--game", "undertale", "--target", "n3ds", "--work", os.path.join(tmp, "w"),
                                               "--sd", sd, "--import-saves", "--overwrite-saves"])), out=out2.append)
             self.assertEqual(rc2, 0)
             joined = "\n".join(out2)
@@ -1617,6 +2133,40 @@ class CliTest(MusicFixtures):
 
 
 class GuiTest(unittest.TestCase):
+    def test_unexpected_build_failure_preserves_traceback_without_stderr(self):
+        tree = SteamTree(self.tmp)
+        wiz = self.gui.App(self.root, self.gui.Options(game='undertale', work=os.path.join(self.tmp, 'work'),
+                                                      probes=tree.probes(), boring=True))
+        wiz.call = lambda fn, *args: fn(*args)
+        wiz.state.targets = ['n3ds']
+        wiz.state.verdict = mock.Mock(result=mock.Mock(store='steam'))
+        page = wiz.pages[5]
+        for stage in ('run', 'constructor'):
+            with self.subTest(stage=stage):
+                page.log_path = None
+                page.log.delete('1.0', 'end')
+                log = Path(self.tmp) / 'work/logs/build-fixture.log'
+                write(str(log), 'Earlier build output\n')
+                build = mock.Mock(log_path=str(log))
+                build.run.side_effect = RuntimeError('synthetic build failure')
+                with mock.patch.object(sys, 'stderr', None), \
+                        mock.patch.object(pipeline, 'Build', return_value=build,
+                            side_effect=RuntimeError('synthetic build failure') if stage == 'constructor' else None):
+                    page.worker()
+                self.assertIn('The build stopped unexpectedly. Choose Try again.', page.status.cget('text'))
+                self.assertNotIn('RuntimeError', page.status.cget('text'))
+                self.assertNotIn('synthetic build failure', page.status.cget('text'))
+                self.assertTrue(page.copy_btn.instate(['!disabled']))
+                diagnostic = Path(page.log_path).read_text(encoding='utf-8')
+                self.assertIn('Traceback (most recent call last):', diagnostic)
+                self.assertIn('RuntimeError: synthetic build failure', diagnostic)
+                self.assertIn('RuntimeError: synthetic build failure', page.log.get('1.0', 'end'))
+                if stage == 'run':
+                    self.assertEqual(page.log_path, str(log))
+                    self.assertIn('Earlier build output', diagnostic)
+                else:
+                    self.assertEqual(Path(page.log_path).name, 'builder-error.log')
+
     def test_successful_3dsx_fallback_shows_notice_without_expanding_log(self):
         tree = SteamTree(self.tmp)
         app = self.gui.App(self.root, self.gui.Options(game='undertale',
@@ -1641,7 +2191,8 @@ class GuiTest(unittest.TestCase):
             self.root = gui.tk.Tk()
             self.root.withdraw()
         except gui.tk.TclError as e:
-            self.skipTest("Tk display unavailable: %s" % e)
+            from gui_test_support import tk_unavailable
+            tk_unavailable(e)
 
     def tearDown(self):
         import shutil
@@ -1667,6 +2218,12 @@ class GuiTest(unittest.TestCase):
             confirm_overwrite=lambda title, msg: (prompts.append((title, msg)) or False),
         )
         wiz = self.gui.App(self.root, opts)
+        def wait_for_saves():
+            deadline = time.monotonic() + 10
+            while wiz.pages[7].busy() and time.monotonic() < deadline:
+                self.root.update()
+                time.sleep(0.01)
+            self.assertFalse(wiz.pages[7].busy())
         # Sensible defaults: both New and Old 3DS, and .3dsx.
         self.assertEqual(len(wiz.pages), 9)
         self.assertEqual(wiz.state.targets, ["n3ds", "o3ds"])
@@ -1701,6 +2258,7 @@ class GuiTest(unittest.TestCase):
         self.assertEqual(rows[1][3], "Unreadable")
         wiz.page.choice.set("copy")
         wiz.next()
+        wait_for_saves()
         self.assertEqual(wiz.index, 7)
         self.assertIn("Can't read", wiz.page.status.cget("text"))
 
@@ -1730,12 +2288,17 @@ class GuiTest(unittest.TestCase):
         with mock.patch.object(deliver, "check_sd_writable",
                                side_effect=deliver.DeliverError(deliver.READ_ONLY_MESSAGE % sd)):
             wiz.next()
+            wait_for_saves()
         self.assertEqual(wiz.index, 7)
         self.assertIn("read-only", wiz.page.status.cget("text"))
         self.assertIn("Lock switch", wiz.page.status.cget("text"))
 
         # User confirms the overwrite prompt on writable SD card -> backs up 3DS save, copies PC save, and advances to
-        # DonePage (Step 9).
+        # a visible result, followed by DonePage (Step 9) on the next click.
+        wiz.next()
+        wait_for_saves()
+        self.assertEqual(wiz.index, 7)
+        self.assertIn('Copied 1 save to the SD card', wiz.page.status.cget('text'))
         wiz.next()
         self.assertEqual(wiz.index, 8)
         self.assertEqual(wiz.page.title, "What to do now")
@@ -1799,7 +2362,7 @@ class GuiTest(unittest.TestCase):
         opts = self.gui.Options(work=os.path.join(self.tmp, "work"), probes=t.probes(), wifi=True)
         wiz = self.gui.App(self.root, opts)
         self.assertFalse(wiz.boring.get())
-        self.assertTrue(wiz.theme.native)  # unreadable/missing assets
+        self.assertFalse(wiz.theme.native)  # public-domain font and original heart before game assets
         wiz.theme.runtime_loaded = True
         wiz.theme.apply()
         wiz.work = lambda *args, **kw: None
@@ -1888,7 +2451,7 @@ class GuiTest(unittest.TestCase):
         self.assertTrue(wiz.theme.native)
         wiz.boring_toggle.invoke()
         self.assertFalse(wiz.boring.get())
-        self.assertTrue(wiz.theme.native)
+        self.assertFalse(wiz.theme.native)
         with mock.patch.object(self.gui, "_extract_runtime_assets",
                                return_value=(self.gui._fallback_glyphs(), self.gui._fallback_soul())):
             wiz.theme.load_from_game_dir(t.folder + "/other")
@@ -2090,7 +2653,7 @@ class BuilderUiTest(unittest.TestCase):
             wiz.page.detect()                          # rebuild the steps with the fixture's pin
             box = self.box(page, "makerom")
             self.assertEqual(str(box.go.cget("text")), "Install")
-            self.assertEqual(box.show_btn.winfo_manager(), "")   # "Show command" only after a failure
+            self.assertEqual(box.show_btn.winfo_manager(), "")   # "Technical details" only after a failure
             self.assertTrue(page.run_step(box))
         self.assertEqual(fetched, [pin["url"]])
         self.assertEqual(len(asked), 1)
@@ -2111,8 +2674,8 @@ class BuilderUiTest(unittest.TestCase):
         with mock.patch.object(self.gui.webbrowser, "open") as browser:
             self.assertTrue(page.run_step(self.box(page, "makerom")))
             self.assertFalse(os.path.exists(os.path.join(wiz.opts.tools_dir, "makerom.exe")))
-            self.assertIn("SHA-256", page.failures["makerom"])
-            self.assertIn("Show command", page.result.cget("text"))
+            self.assertIn("did not match the expected file", page.failures["makerom"])
+            self.assertIn("Technical details", page.result.cget("text"))
             # The re-check rebuilt the boxes; the new one still shows the failure and the manual buttons.
             box = self.box(page, "makerom")
             self.assertTrue(box.status.cget("text").startswith("Failed: "))
@@ -2150,6 +2713,7 @@ class BuilderUiTest(unittest.TestCase):
     def test_update_asks_once_and_runs_the_official_updater(self):
         asked, ran = [], []
         wiz = self.wizard(confirm_install=lambda title, text: asked.append(title) or True)
+        wiz.state.game = 'deltarune'
         tc = self.toolchain_fixture()
         self.open_toolchain_page(wiz, tc)
         page = wiz.page
@@ -2163,7 +2727,7 @@ class BuilderUiTest(unittest.TestCase):
                 with mock.patch.object(self.gui.toolchain, "update_step", return_value=step), \
                         mock.patch.object(self.gui, "stream", side_effect=lambda argv, log: ran.append(argv) or 0):
                     page.update()
-                title = "Update devkitPro (pacman -Syu)" if platform == "win32" else "Update devkitPro"
+                title = "Update devkitPro"
                 self.assertEqual(asked, [title])
                 self.assertEqual(ran, step.commands)
                 self.assertEqual(len(ran), 1)
@@ -2233,7 +2797,7 @@ class BuilderUiTest(unittest.TestCase):
         page = wiz.page
         self.fake_network({})
         box = self.box(page, "makerom")
-        self.assertEqual(str(box.go.cget("text")), "Show command")
+        self.assertEqual(str(box.go.cget("text")), "Technical details")
         self.assertTrue(page.run_step(box))
         self.assertIn("[dry run] would do", page.log.get("1.0", "end"))
 
@@ -2325,6 +2889,8 @@ class BuilderUiTest(unittest.TestCase):
     def test_all_pages_fit_at_100_and_200_percent_in_both_looks(self):
         wiz = self.wizard()
         wiz.work = lambda *args, **kw: None  # no real detection, builds or installers
+        missing = toolchain.Toolchain(None, None, [], list(toolchain.REQUIRED_PACKAGES),
+                                      list(toolchain.RECOMMENDED_PACKAGES), None, None, None, 'win32')
         wiz.state.build_ok = wiz.state.delivered = True
         wiz.theme.runtime_loaded = True  # synthetic fallback bitmap font
         self.root.deiconify()
@@ -2342,6 +2908,17 @@ class BuilderUiTest(unittest.TestCase):
                     for index in range(len(wiz.pages)):
                         with self.subTest(scale=grow, boring=boring, page=index + 1):
                             wiz.show(index)
+                            if index == 3:
+                                # A new Windows player has neither devkitPro nor its packages. The real
+                                # dependency sentences used to consume most of this table's width.
+                                wiz.page.detected(missing)
+                            elif isinstance(wiz.page, self.gui.FindPage):
+                                wiz.page.tree.insert('', 'end', values=('folder', 'Fixture folder ' * 20,
+                                                                       'Not checked yet ' * 20))
+                            elif isinstance(wiz.page, self.gui.SavesPage):
+                                # Synthetic display cells only; never open a player's saves.
+                                wiz.page.tree.insert('', 'end', values=('file0', 'Fixture date',
+                                                                       'Fixture name ' * 20, 'Unreadable'))
                             for _ in range(3):
                                 self.root.update()
                                 wiz.page.fit()
@@ -2350,10 +2927,175 @@ class BuilderUiTest(unittest.TestCase):
                             self.assertLessEqual(page.frame.winfo_width(), page.canvas.winfo_width())
                             for widget in page.wrappers:
                                 self.assertLessEqual(widget._wrap, max(120, page.wrap_width(widget)))
+                            if hasattr(page, 'tree'):
+                                columns = page.tree.cget('columns')
+                                self.assertLessEqual(sum(page.tree.column(c, 'width') for c in columns),
+                                                     page.tree.winfo_width())
+                            if index == 3:
+                                font = self.gui.tkfont.Font(page.tree,
+                                    font=self.gui.ttk.Style(page.tree).lookup('Treeview', 'font') or
+                                    'TkDefaultFont')
+                                self.assertTrue(any('Waiting for ' in box.status.cget('text')
+                                                    for box in page.boxes))
+                                for row in page.tree.get_children():
+                                    for column, value in zip(columns, page.tree.item(row, 'values')):
+                                        self.assertLessEqual(font.measure(value) + 12,
+                                                             page.tree.column(column, 'width'),
+                                                             (column, value))
                             self.assertLessEqual(wiz.back_btn.winfo_rootx() + wiz.back_btn.winfo_width(),
                                                  wiz.next_btn.winfo_rootx())
                             self.assertLessEqual(wiz.next_btn.winfo_rootx() + wiz.next_btn.winfo_width(),
                                                  self.root.winfo_rootx() + self.root.winfo_width())
+
+
+class GameFileGateTests(unittest.TestCase):
+    """Real build-input emitter through the builder parser; synthetic bytes only."""
+
+    def setUp(self):
+        import importlib.util
+        spec = importlib.util.spec_from_file_location('builder_gate_versions',
+            Path(__file__).resolve().parents[1] / 'aot/data_versions.py')
+        self.versions = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(self.versions)
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.folder = Path(self.temp.name) / 'game'
+        self.folder.mkdir()
+        self.file = self.folder / 'data.win'
+        self.data = b'A' * 4096
+        self.file.write_bytes(self.data)
+        self.cache = Path(self.temp.name) / 'cache'
+        known = {('undertale', 'root', len(self.data), hashlib.sha256(self.data).hexdigest())}
+        patch = mock.patch.object(self.versions, 'load_table', return_value=(1, known))
+        patch.start()
+        self.addCleanup(patch.stop)
+
+    def emit(self, folder=True):
+        out, err = io.StringIO(), io.StringIO()
+        # Keep the real checker, but isolate its circular prepare import from other command modules.
+        with mock.patch.dict(sys.modules, {'prepare': mock.Mock(find_data=mock.Mock(
+                return_value=str(self.folder) if folder else None))}):
+            result = self.versions.build_input('undertale', str(self.folder), str(self.cache), out, err)
+        log = Path(self.temp.name) / 'build.log'
+        log.write_text(err.getvalue(), encoding='utf-8')
+        return result, err.getvalue(), pipeline.game_files_refusal(log, 'UNDERTALE')
+
+    def test_every_build_rehashes_even_with_identical_size_and_mtime(self):
+        result, diagnostic, notice = self.emit()
+        self.assertEqual(result, (0, len(self.data)))
+        self.assertIsNone(notice)
+        self.assertIn('hashed', diagnostic)
+        before = self.file.stat()
+        with mock.patch.object(self.versions.hashlib, 'sha256', wraps=hashlib.sha256) as hashed:
+            self.assertEqual(self.emit()[0], result)
+            hashed.assert_called_once()
+        self.file.write_bytes(b'B' * len(self.data))
+        os.utime(self.file, ns=(before.st_atime_ns, before.st_mtime_ns))
+        result, diagnostic, notice = self.emit()
+        self.assertEqual(result, (2, None))
+        self.assertIn("don't match an official release this builder knows", notice)
+        self.assertIn('SHA-256 ' + hashlib.sha256(self.file.read_bytes()).hexdigest(), diagnostic)
+        saved = json.loads((self.cache / 'data_versions.json').read_text(encoding='utf-8'))
+        self.assertEqual(saved[str(self.file.resolve())]['sha256'], hashlib.sha256(self.file.read_bytes()).hexdigest())
+
+    def test_read_and_changed_errors_reach_parser_without_raw_errno_or_wrong_advice(self):
+        for error, expected in ((PermissionError(13, 'Permission denied', str(self.file)),
+                                 'Check that the game folder is readable'),
+                                (OSError('file changed while checking'),
+                                 'Wait for any update or file copy to finish')):
+            with self.subTest(error=str(error)), \
+                    mock.patch.object(self.versions, 'check_file', side_effect=error):
+                result, diagnostic, notice = self.emit()
+                self.assertEqual(result, (2, None))
+                self.assertIn(str(error), diagnostic)
+                self.assertIn(expected, notice)
+                self.assertIn('Go back to choose the game files.', notice)
+                for raw in ('[Errno', str(self.file), 'Try again'):
+                    self.assertNotIn(raw, notice)
+                if 'changed' in str(error):
+                    self.assertNotIn('readable', notice)
+
+    def test_missing_input_has_a_real_diagnostic_and_cli_rerun_advice(self):
+        result, diagnostic, notice = self.emit(folder=False)
+        self.assertEqual(result, (3, None))
+        self.assertEqual(diagnostic, 'Could not find the game files.\n')
+        self.assertIn('Could not find the UNDERTALE game files.', notice)
+        text = app.cli_text(notice)
+        self.assertIn('Then run the same command again.', text)
+        self.assertNotIn('Go back', text)
+
+    def test_no_data_cli_exit_three_does_not_claim_the_build_was_refused(self):
+        import subprocess
+        empty = Path(self.temp.name) / 'empty'
+        empty.mkdir()
+        checker = Path(__file__).resolve().parents[1] / 'aot/data_versions.py'
+        result = subprocess.run([sys.executable, '-X', 'utf8', '-I', '-B', str(checker),
+            '--build-input', 'undertale', '--data', str(empty), '--cache', str(self.cache)],
+            stdin=subprocess.DEVNULL, capture_output=True, text=True, encoding='utf-8', timeout=15)
+        self.assertEqual(result.returncode, 3)
+        self.assertEqual(result.stdout, '')
+        self.assertEqual(result.stderr, 'Could not find the game files.\n')
+        self.assertFalse(self.cache.exists())
+
+    def test_check_again_clears_failures_only_for_steps_now_installed(self):
+        import gui
+        for needed in (False, True):
+            with self.subTest(needed=needed):
+                page = gui.ToolchainPage.__new__(gui.ToolchainPage)
+                page.app = mock.Mock(state=gui.State('undertale'))
+                page.app.opts.toolchain_dry_run = False
+                step = mock.Mock(key='packages')
+                box = mock.Mock(step=step)
+                page.boxes = [box]
+                why = "Couldn't check the compiler. Click Try again."
+                page.failures = {'packages': why}
+                for name in ('tree', 'result', 'compiler_status', 'fit_status', 'update_buttons', 'write'):
+                    setattr(page, name, mock.Mock())
+                page.tree.get_children.return_value = []
+                tc = mock.Mock(root=None, makerom=None, bannertool=None, platform='win32', compiler_info={})
+                with mock.patch.object(gui.cleanup, 'record_before'), \
+                        mock.patch.object(toolchain, 'compiler_status', return_value='fixture'), \
+                        mock.patch.object(toolchain, 'full_plan', return_value=[step]), \
+                        mock.patch.object(toolchain, 'setup_inventory', return_value=[(step, needed, None)]):
+                    page.detected(tc)
+                if needed:
+                    box.failed.assert_called_once_with(why)
+                    self.assertIn('packages', page.failures)
+                    box.show_btn.pack_forget.assert_not_called()
+                    box.page_btn.pack_forget.assert_not_called()
+                else:
+                    box.failed.assert_not_called()
+                    box._say.assert_called_with('Installed')
+                    box.go.config.assert_called_with(text='Install')
+                    self.assertFalse(page.failures)
+                    box.show_btn.pack_forget.assert_called_once()
+                    box.page_btn.pack_forget.assert_called_once()
+                    page.result.config.assert_called_with(text='Tools checked.')
+
+    def test_check_again_keeps_the_failure_of_another_step_visible(self):
+        import gui
+        page = gui.ToolchainPage.__new__(gui.ToolchainPage)
+        page.app = mock.Mock(state=gui.State('undertale'))
+        page.app.opts.toolchain_dry_run = False
+        first, second = mock.Mock(key='packages'), mock.Mock(key='makerom')
+        box = mock.Mock(step=first, page_btn=None)
+        other = mock.Mock(step=second)
+        page.boxes = [box, other]
+        page.failures = {'packages': 'old compiler failure', 'makerom': 'Download failed. Try again.'}
+        for name in ('tree', 'result', 'compiler_status', 'fit_status', 'update_buttons', 'write'):
+            setattr(page, name, mock.Mock())
+        page.tree.get_children.return_value = []
+        tc = mock.Mock(root=None, makerom=None, bannertool=None, platform='win32', compiler_info={})
+        with mock.patch.object(gui.cleanup, 'record_before'), \
+                mock.patch.object(toolchain, 'compiler_status', return_value='fixture'), \
+                mock.patch.object(toolchain, 'full_plan', return_value=[first, second]), \
+                mock.patch.object(toolchain, 'setup_inventory', return_value=[(first, False, None), (second, True, None)]):
+            page.detected(tc)
+        self.assertEqual(page.failures, {'makerom': 'Download failed. Try again.'})
+        page.result.config.assert_called_with(text='Download failed. Try again.')
+        box.show_btn.pack_forget.assert_called_once()
+        other.failed.assert_called_once_with('Download failed. Try again.')
+        other.show_btn.pack_forget.assert_not_called()
 
 
 if __name__ == "__main__":

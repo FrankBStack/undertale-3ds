@@ -1,5 +1,5 @@
 """Confirmed FTP save import; verified remote backups precede any replacement."""
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 import ftplib
 import hashlib
@@ -29,6 +29,10 @@ class BackupMismatch(network.TransferError):
         super().__init__(BACKUP_MISMATCH_MESSAGE)
 
 
+class SaveListingError(network.TransferError):
+    """An unreadable inventory, without claiming whether this attempt published saves."""
+
+
 class IncompleteImport(network.TransferError):
     """Replacing the live saves stopped partway. Says what each file holds now, where the backup is, how to finish
     and how to undo. The wizard hands it back to copy(resume=...) so its retry reuses the verified backup."""
@@ -51,8 +55,10 @@ class IncompleteImport(network.TransferError):
                 lines.append(text % names(state))
         if self.backup:
             lines.append('Your previous 3DS saves are backed up in %s.' % self.backup)
-        else:
+        elif self.original.proven and not self.original.files:
             lines.append('There were no 3DS saves before this import.')
+        else:
+            lines.append('No verified backup of earlier 3DS saves is available for this import.')
         # Saves this import brings that the card didn't have: an undo must delete them too (R171 F1).
         before = {name.casefold() for name in self.original.files}
         added = [n for n, s in self.states.items() if n.casefold() not in before and s in ('new', 'unsure')]
@@ -66,7 +72,7 @@ class IncompleteImport(network.TransferError):
                          'there.' % (self.backup, self.folder))
             if added:
                 lines.append('Then delete %s from %s.' % (', '.join(added), self.folder))
-        elif added:
+        elif self.original.proven and not self.original.files and added:
             lines.append('To go back to no saves instead, delete %s from %s.' % (', '.join(added), self.folder))
         return '\n'.join(lines)
 
@@ -84,6 +90,7 @@ def error_text(exc, *, connecting=False):
 class Snapshot:
     files: dict
     player_summary: str
+    proven: bool = False
 
 
 def read_folder(ftp, folder, *, cancelled=lambda: False):
@@ -93,7 +100,10 @@ def read_folder(ftp, folder, *, cancelled=lambda: False):
     except ftplib.error_perm as exc:
         if not str(exc).startswith('550'):
             raise
-        return {}
+        if (' '.join(str(exc).split()).casefold() == MISSING_PATH_REPLY
+                and folder_is_absent(ftp, folder, cancelled=cancelled)):
+            return {}
+        raise SaveListingError(SAVE_LIST_ERROR) from exc
     files = {}
     for name, facts in rows:
         # Match SD import: back up existing ordinary save-folder files, including unknown files.
@@ -121,12 +131,12 @@ def read_folder(ftp, folder, *, cancelled=lambda: False):
 def snapshot(ftp, product, *, cancelled=lambda: False):
     files = read_folder(ftp, network.remote_path(product.sd_save_dir()), cancelled=cancelled)
     if not files:
-        return Snapshot({}, '')
+        return Snapshot({}, '', proven=True)
     with tempfile.TemporaryDirectory(prefix='builder-saves-') as temporary:
         for name, data in files.items():
             (Path(temporary)/name).write_bytes(data)
         summary = saves.scan_saves(temporary, product.key).player_summary
-    return Snapshot(files, summary)
+    return Snapshot(files, summary, proven=True)
 
 
 def inspect(value, product, *, factory=network.ConsoleFTP, cancelled=lambda: False):
@@ -181,6 +191,7 @@ def check_backup(ftp, backup, original, *, cancelled=lambda: False):
 # (an unreadable card, for one) can come from a folder that exists, so they never count as absence (R190c).
 MISSING_PATH_REPLY = '550 no such file or directory'
 LISTED_TYPES = ('file', 'dir', 'cdir', 'pdir')
+SAVE_LIST_ERROR = saves.SAVE_LIST_ERROR
 
 
 def well_formed(entry, facts):
@@ -188,6 +199,25 @@ def well_formed(entry, facts):
     row into name '' with junk facts instead of raising, and a broken listing proves nothing."""
     kind = str(facts.get('type', '')).casefold()
     return bool(entry) and (kind in LISTED_TYPES or kind.startswith('os.'))
+
+
+def folder_is_absent(ftp, folder, *, cancelled=lambda: False):
+    def names(parent):
+        network.check_cancel(cancelled)
+        try:
+            rows = list(ftp.mlsd(parent, facts=['type']))
+        except ftplib.error_perm as exc:
+            if ' '.join(str(exc).split()).casefold() == MISSING_PATH_REPLY:
+                raise FileNotFoundError(parent) from exc
+            raise SaveListingError(SAVE_LIST_ERROR) from exc
+        result = []
+        for entry, facts in rows:
+            network.check_cancel(cancelled)
+            if not well_formed(entry, facts):
+                raise SaveListingError(SAVE_LIST_ERROR)
+            result.append(entry)
+        return result
+    return saves.prove_folder_absent(folder, names)
 
 
 def name_is_free(ftp, folder, path):
@@ -222,10 +252,32 @@ def resumable(ftp, resume, folder, current, payloads, *, cancelled=lambda: False
         if data != original.get(key) and data != incoming.get(key):
             return False
     if resume.original.files:
-        if not resume.backup or not same_files(read_folder(ftp, resume.backup, cancelled=cancelled),
-                                               resume.original.files):
+        if not resume.backup:
+            return False
+        try:
+            held = read_folder(ftp, resume.backup, cancelled=cancelled)
+        except SaveListingError as exc:
+            raise SaveListingError('The backup folder for the earlier save copy could not be checked. '
+                'Earlier copied saves and the backup are kept. Check that the SD card can be read, '
+                'then check the saves again.') from exc
+        if not same_files(held, resume.original.files):
             return False
     return True
+
+
+def clean_cancelled_copy(value, factory, paths, backup):
+    """Use a fresh command stream after cancelling a data transfer. Delete only this import's staging paths
+    and its newly created backup; a resumed import's existing backup is never passed here."""
+    if not paths and not backup:
+        return
+    ftp = network.connect(value, factory=factory)
+    try:
+        for path in sorted(paths):
+            network.delete_if_present(ftp, path)
+        if backup:
+            ftp.rmd(backup)
+    finally:
+        ftp.close()
 
 
 def copy(value, product, scan, expected, *, overwrite=False, factory=network.ConsoleFTP,
@@ -244,17 +296,24 @@ def copy(value, product, scan, expected, *, overwrite=False, factory=network.Con
         raise network.TransferError('Existing 3DS saves were found. Nothing was copied. Add --overwrite-saves to back them up and replace them.')
     ftp = network.connect(value, factory=factory)
     folder = network.remote_path(product.sd_save_dir())
-    transfer = network.Transfer(ftp, cancelled=cancelled, progress=progress, install=False)
+    # Count the backup and PC staging uploads plus their read-backs before the first transfer event.
+    # Transfer.send() alone only budgets the backup; later upload() calls must not restart the bar.
+    total = 2 * (sum(map(len, expected.files.values())) + sum(len(data) for _, data in payloads))
+    def report(event):
+        progress(replace(event, total=total, percent=min(99, 100 * event.done / max(1, total))))
+    transfer = network.Transfer(ftp, cancelled=cancelled, progress=report, install=False)
+    cleanup_paths, created_backup = set(), None
     try:
         current = snapshot(ftp, product, cancelled=cancelled)
         from deliver import CopyItem
         with tempfile.TemporaryDirectory(prefix='builder-save-copy-') as temporary:
             if resume is not None and resumable(ftp, resume, folder, current.files, payloads, cancelled=cancelled):
                 original, backup = resume.original, resume.backup  # Verified just now; no second backup.
+                total = 2 * sum(len(data) for _, data in payloads)
             else:
                 if current.files != expected.files:
                     raise SavesChanged()
-                original = expected
+                original = current  # This attempt proved the original state, including emptiness.
                 backup = folder + '/backup-' + time.strftime('%Y%m%d-%H%M%S') + '-' + uuid.uuid4().hex[:8]
                 if expected.files:
                     # The folder must be new: check_backup deletes from it on a mismatch, so it must never be an
@@ -268,12 +327,14 @@ def copy(value, product, scan, expected, *, overwrite=False, factory=network.Con
                         if not str(exc).startswith('550'):
                             raise
                         raise network.TransferError(BACKUP_FOLDER_MESSAGE) from None
+                    created_backup = backup
                     transfer.folders.add(backup)
                 items = []
                 for name, data in expected.files.items():
                     source = Path(temporary)/name
                     source.write_bytes(data)
                     items.append(CopyItem(str(source), backup+'/'+name, len(data)))
+                    cleanup_paths.update((backup+'/'+name, backup+'/'+name+'.builder-part'))
                 transfer.send(items)
                 if expected.files:
                     check_backup(ftp, backup, expected.files, cancelled=cancelled)
@@ -282,6 +343,9 @@ def copy(value, product, scan, expected, *, overwrite=False, factory=network.Con
             baseline = current.files  # What is being replaced, as checked above.
             staged = []
             outgoing = Path(tempfile.mkdtemp(prefix='pc-', dir=temporary))  # Never one of the card's names.
+            for source, _ in payloads:
+                part = folder+'/'+source.name+'.save-part'
+                cleanup_paths.update((part, part+'.builder-part'))
             for source, data in payloads:
                 network.check_cancel(cancelled)
                 path = folder+'/'+source.name
@@ -321,7 +385,11 @@ def copy(value, product, scan, expected, *, overwrite=False, factory=network.Con
                         states[name] = 'unsure'
                         ftp.delete(folder+'/'+name)
                         states[name] = 'removed'
-                wrong = check_published(ftp, product, payloads)  # Publishing is done: Cancel no longer applies.
+                try:
+                    wrong = check_published(ftp, product, payloads)  # Publication has already happened.
+                except SaveListingError as exc:
+                    states.update((source.name, 'unsure') for source, _ in payloads)
+                    raise network.TransferError('the saves on the 3DS could not be read back after copying') from exc
                 if wrong:
                     states.update((name, 'unsure') for name in wrong)
                     raise network.TransferError("the saves on the 3DS don't match the PC saves after copying")
@@ -335,6 +403,37 @@ def copy(value, product, scan, expected, *, overwrite=False, factory=network.Con
                 raise IncompleteImport(cause, folder, backup, original, payloads, states) from exc
             return saves.SaveCopyResult(len(staged), sum(len(data) for _, data in payloads), backup,
                                         [s.name for s in scan.valid_files], len(original.files))
+    except network.Cancelled:
+        # Publication deliberately ignores Cancel. Reaching this handler means this attempt has not changed
+        # live saves; keep any backup inherited from a previous, partially published attempt.
+        if not cleanup_paths and not created_backup:
+            raise
+        try:
+            # The data socket is closed, but ftpd may still be finishing STOR. Wait for its command stream
+            # before cleanup so the interrupted upload cannot recreate a deleted temporary file.
+            ftp.putcmd('NOOP')
+            for _ in range(4):
+                try:
+                    reply = ftp.getresp()
+                except ftplib.error_temp as exc:
+                    if str(exc).startswith('426'):
+                        continue
+                    raise
+                if reply.startswith('200'):
+                    break
+            else:
+                raise network.TransferError('The save transfer did not stop cleanly.')
+        except (OSError, EOFError, ftplib.Error) as exc:
+            raise network.Cancelled('Copy cancelled. The connection was lost before temporary save files '
+                                    'could be removed. Keep ftpd open and try again.') from exc
+        finally:
+            ftp.close()
+        try:
+            clean_cancelled_copy(value, factory, cleanup_paths, created_backup)
+        except (OSError, EOFError, ftplib.Error) as exc:
+            raise network.Cancelled('Copy cancelled. Some temporary save files could not be removed. '
+                                    'Keep ftpd open and try again.') from exc
+        raise
     except (OSError, EOFError, ftplib.Error) as exc:
         translated = network.delivery_error(exc)
         if translated is exc:

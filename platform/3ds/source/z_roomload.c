@@ -533,8 +533,9 @@ RL_CODE void RoomLoad_collect(CtrTextureCache* cache, bool drop) {
 // loads only: no game state changes.
 // A pass is best effort and touches nothing else (argcfreview F1-F4): the heap's reliever (packed copies) and its
 // overflow into linear memory are off for it (CtrMemory_allowRelief, as CtrMemory_allocWork), so its allocations
-// fail instead; rlArena's block list gets its room first, with both on, as any lazy load's would (an arrput that
-// grows it inside the pass would abort on failure); and a pass starts only when one heap block holds the most it can
+// fail instead; rlArena's block list gets its room in each pass, after the heap check and probe, from a realloc that
+// may fail (lcReserve, leftcode's; an arrput that grew it inside the pass would abort on failure, and so did the
+// first body's own arrsetcap, review R300b: ccRoomCode at this file's end); and a pass starts only when one heap block holds the most it can
 // take (CC_PASS_NEED, from the largest unread group: one larger than ROOMLOAD_SPAN_BYTES is a read of its own) with
 // 2 MB still free after it. Its allocations then fit in that block, carved in order, the transient buffer last and
 // given back each read, so none fails; one that did anyway would leave its read's code memory unused in the arena
@@ -560,7 +561,135 @@ uint32_t __wrap_RoomPlan_roomCode(Runner* runner, int32_t* out, uint32_t max);
 static const char ccLog[] CC_RODATA =
     "Room load (codeclose): %s: the plan's code after the tiles, %u groups in %u reads, %u KB in %.0f ms; %u entries not read\n";
 
-CC_CODE uint32_t __wrap_RoomPlan_roomCode(Runner* runner, int32_t* out, uint32_t max) {
+// The wrap's first body (744 B) was replaced after review R300b (its list growth could stop the game, below). Its place
+// is kept so that no late address after it moves: a branch to the body now in use, ccRoomCode (appended, at this
+// file's end), and the rest of the old size unused, at the old section's 8-byte alignment.
+uint32_t ccRoomCode(Runner* runner, int32_t* out, uint32_t max);
+__attribute__((naked, aligned(8), section(".text.codeclose_late")))
+uint32_t __wrap_RoomPlan_roomCode(Runner* runner __attribute__((unused)), int32_t* out __attribute__((unused)),
+                                  uint32_t max __attribute__((unused))) {
+    __asm__ volatile("b ccRoomCode\n.space 740");
+}
+
+// ===[ leftcode (change auditfixe R295, UNDERTALE Old only): the room's object code that step 1 left, after the tiles ]===
+// Step 1 above stops reading at ROOMLOAD_CODE_NANOS (120 ms). On a slow SD card it stopped there in Snowdin's
+// cont_snowz entry (6 of 29 Old console rows: 9-10 of the 13 groups read), and the rest (the player object's Step and
+// Draw among it) loaded on the game thread in the room's first frames, one group a read: 5 of those 6 rows went over
+// 33 ms at f158, none of the 23 whose read finished (R295). Here, at the end of
+// the whole room load (ctr_argui.c's call of CtrTextures_roomLoadedOld is pointed at this, CMakeLists.txt), the same
+// list is made again from the room's instances and whatever of it is still not in memory is read with codeclose's
+// pass and guards above (file order, neighbouring groups in one read, a heap check and probe before each pass). That
+// is what step 1 reads on a fast card, so the code memory a room leaves matches the full read's. Code loads only: no
+// game state or random numbers change; a room whose step 1 finished reads nothing and logs nothing. Late code and
+// constants of their own, appended (late_reserve.ld), and rl's own statics: nothing that existed moves.
+// The pass is optional (what it leaves loads lazily, as before), so nothing in it may stop the game or take memory
+// meant for something else: relief and linear overflow are off for all of it, and the code memory list's room for the
+// pass is made with a realloc that may fail (lcReserve), not stb_ds's growth, whose failure is fatal (review R300).
+// Its limits are checked between reads, not during one (review R300): CC_CODE_NANOS (400 ms, timed from after the
+// list walk) and CC_CODE_BYTES (512 KB) stop the next read, and a read under way finishes. Neighbouring groups join up
+// to 64 KB a read, but one group larger than that is read whole (UNDERTALE's largest is 707 KB), and there are two
+// passes at most, so a call reads at most CC_CODE_BYTES and two of its largest reads, in a time no limit here cuts.
+#define LC_CODE __attribute__((noinline, optimize("Os"), section(".text_leftcode")))
+#define LC_RODATA __attribute__((aligned(4), section(".rodata.leftcode_in_text")))
+
+void CtrTextures_roomLoadedOld(CtrTextureCache* cache, Runner* runner); // ctr_textures.c (omegaflowey L1)
+void CtrLeftcode_roomLoaded(CtrTextureCache* cache, Runner* runner);
+
+static const char lcLog[] LC_RODATA =
+    "Room load (leftcode): %s: object code after the tiles, %u groups in %u reads, %u KB in %.0f ms; %u entries not read before, %u after\n";
+
+// Room in the code memory list for CC_ARENA_ENTRIES more blocks, so that rlArena's arrput (stb_ds's growth, the
+// checked realloc) does not grow it during the pass. Grown here with the plain realloc instead; when that fails the
+// list is kept as it was and false is returned. The header is stb_ds's own, as its growth leaves it.
+LC_CODE static bool lcReserve(DataWin* dw) {
+    size_t want = (size_t) arrlen(dw->codeArenaBlocks) + CC_ARENA_ENTRIES;
+    if (arrcap(dw->codeArenaBlocks) >= want) return true;
+    stbds_array_header* old = dw->codeArenaBlocks != nullptr ? stbds_header(dw->codeArenaBlocks) : nullptr;
+    stbds_array_header* list = (stbds_array_header*) realloc(old, sizeof(stbds_array_header) + want * sizeof(uint8_t*));
+    if (list == nullptr) return false;
+    if (old == nullptr) {
+        list->length = 0;
+        list->hash_table = nullptr;
+        list->temp = 0;
+    }
+    list->capacity = want;
+    dw->codeArenaBlocks = (uint8_t**) (list + 1);
+    return true;
+}
+
+// The pass itself, with relief off (CtrLeftcode_roomLoaded).
+LC_CODE static void lcRead(Runner* runner, DataWin* dw) {
+    uint8_t* seen = (uint8_t*) calloc((dw->objt.count + 7u) / 8u + 1u, 1);
+    if (seen == nullptr) return;
+    uint32_t count = 0;
+    for (ptrdiff_t i = 0; arrlen(runner->instances) > i; i++) {
+        const Instance* instance = runner->instances[i];
+        if (instance->destroyed) continue;
+        count = rlAddObjectCode(dw, instance->objectIndex, seen, count);
+    }
+    free(seen);
+    // What step 1 left: entries not in memory, and the largest group among them (CC_PASS_NEED).
+    uint32_t before = 0;
+    uint32_t span = ROOMLOAD_SPAN_BYTES;
+    for (uint32_t i = 0; count > i; i++) {
+        if (0 > rl.codeIds[i]) continue; // Create has run
+        const CodeEntry* code = &dw->code.entries[rl.codeIds[i]];
+        if (!code->present || code->bytecode != nullptr) continue;
+        uint32_t blob = rlBlobOf(dw, code->bytecodeAbsoluteOffset);
+        if (dw->codeBlobCount <= blob || dw->codeBlobs[blob].bytes != nullptr) continue;
+        before++;
+        uint32_t group = dw->codeBlobs[blob].group, after = 0;
+        uint32_t size = rlGroupEnd(dw, group, &after) - dw->codeBlobs[group].absoluteOffset;
+        if (size > span) span = size;
+    }
+    if (before == 0) return;
+    uint64_t start = nowNanos();
+    uint64_t deadline = start + CC_CODE_NANOS;
+    uint64_t copyNanos = rl.copyNanos;
+    uint32_t groups = 0, reads = 0, bytes = 0;
+    uint64_t nanos = 0;
+    uint32_t need = CC_PASS_NEED(span);
+    while (CC_CODE_BYTES > bytes && deadline > nowNanos()) {
+        struct mallinfo mi = mallinfo();
+        if ((uint32_t) mi.uordblks + CC_HEAP_FREE + need > __ctru_heap_size) break;
+        void* volatile room = malloc(need); // volatile, or GCC drops the malloc/free pair and the probe with it
+        if (room == nullptr) break;
+        free(room);
+        if (!lcReserve(dw)) break;
+        uint32_t was = bytes;
+        rlReadCode(dw, count, deadline, &groups, &reads, &bytes, &nanos);
+        if (ROOMLOAD_CODE_BYTES > bytes - was) break;
+    }
+    rl.copyNanos = copyNanos;
+    uint32_t left = 0;
+    for (uint32_t i = 0; count > i; i++) {
+        if (0 <= rl.codeIds[i] && rlResidentBytes(dw, &dw->code.entries[rl.codeIds[i]]) == nullptr) left++;
+    }
+    logInfo(lcLog, runner->currentRoom->name, (unsigned) groups, (unsigned) reads, (unsigned) (bytes / 1024),
+            (double) (nowNanos() - start) / 1e6, (unsigned) before, (unsigned) left);
+}
+
+LC_CODE void CtrLeftcode_roomLoaded(CtrTextureCache* cache, Runner* runner) {
+    CtrTextures_roomLoadedOld(cache, runner);
+    if (runner == nullptr || runner->dataWin == nullptr || runner->currentRoom == nullptr) return;
+    DataWin* dw = runner->dataWin;
+    if (dw->bytecodeFile == nullptr || dw->codeBlobs == nullptr || dw->codeBlobCount == 0) return;
+    bool relief = CtrMemory_allowRelief(false);
+    lcRead(runner, dw);
+    CtrMemory_allowRelief(relief);
+}
+
+// ===[ codeclose's wrap after review R300b (change auditfixe, UNDERTALE Old only): the same pass, never stopping the game ]===
+// The first body (its place above, __wrap_RoomPlan_roomCode) grew rlArena's block list with stb_ds's arrsetcap, whose
+// realloc is the checked one (abort on failure), with relief still on and before the heap check, and did so even when
+// the plan listed nothing (R300b-1). This one reads the same list in the same passes with the same guards; relief and
+// linear overflow are off for every allocation the pass makes, the list's room is made in each pass after the heap
+// check and the probe by leftcode's lcReserve (a realloc that may fail: the pass then stops and what it left loads
+// lazily, as before), and nothing is reserved or read when no listed entry is missing. Appended (AFTER_GOGUT), so
+// every earlier late symbol keeps its place.
+#define CCFIX_CODE __attribute__((noinline, optimize("Os"), section(".text_ccfix")))
+
+CCFIX_CODE uint32_t ccRoomCode(Runner* runner, int32_t* out, uint32_t max) {
     // The room load's call fills rl.codeIds from its objects' count on, which may be its end (max 0).
     if ((uintptr_t) out - (uintptr_t) rl.codeIds <= sizeof(rl.codeIds)) return __real_RoomPlan_roomCode(runner, out, max);
     DataWin* dw = runner->dataWin;
@@ -568,7 +697,7 @@ CC_CODE uint32_t __wrap_RoomPlan_roomCode(Runner* runner, int32_t* out, uint32_t
     uint64_t start = nowNanos();
     uint64_t deadline = start + CC_CODE_NANOS;
     uint64_t copyNanos = rl.copyNanos; // the room load's, for its log line
-    uint32_t groups = 0, reads = 0, bytes = 0;
+    uint32_t groups = 0, reads = 0, bytes = 0, missing = 0;
     uint64_t nanos = 0;
     uint32_t span = ROOMLOAD_SPAN_BYTES;
     for (uint32_t i = 0; count > i; i++) {
@@ -576,19 +705,20 @@ CC_CODE uint32_t __wrap_RoomPlan_roomCode(Runner* runner, int32_t* out, uint32_t
         if (!code->present || code->bytecode != nullptr) continue;
         uint32_t blob = rlBlobOf(dw, code->bytecodeAbsoluteOffset);
         if (dw->codeBlobCount <= blob || dw->codeBlobs[blob].bytes != nullptr) continue;
+        missing++;
         uint32_t group = dw->codeBlobs[blob].group, after = 0;
         uint32_t size = rlGroupEnd(dw, group, &after) - dw->codeBlobs[group].absoluteOffset;
         if (size > span) span = size;
     }
     uint32_t need = CC_PASS_NEED(span);
-    arrsetcap(dw->codeArenaBlocks, arrlen(dw->codeArenaBlocks) + CC_ARENA_ENTRIES);
     bool relief = CtrMemory_allowRelief(false);
-    while (count > 0 && CC_CODE_BYTES > bytes && deadline > nowNanos()) {
+    while (missing > 0 && CC_CODE_BYTES > bytes && deadline > nowNanos()) {
         struct mallinfo mi = mallinfo();
         if ((uint32_t) mi.uordblks + CC_HEAP_FREE + need > __ctru_heap_size) break;
-        void* room = malloc(need);
+        void* volatile room = malloc(need); // volatile, or GCC drops the malloc/free pair and the probe with it
         if (room == nullptr) break;
         free(room);
+        if (!lcReserve(dw)) break;
         uint32_t before = bytes;
         rlReadCode(dw, count, deadline, &groups, &reads, &bytes, &nanos);
         if (ROOMLOAD_CODE_BYTES > bytes - before) break;

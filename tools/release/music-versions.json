@@ -1071,7 +1071,11 @@
               "size": 14007,
               "sha256": "762bb73a6158f511356f205065f5fe2271569b5b75d3da96250998a03818ed5e"
             }
-          ]
+          ],
+          "credits": {
+            "size": 12162,
+            "sha256": "5e5ab1852c4734a547e6143ef643b43d211e3cee334e949cb59fffb51bf04098"
+          }
         }
       },
       "macos": {
@@ -2141,7 +2145,11 @@
               "size": 14007,
               "sha256": "a66e3b41929a07f5984ca830bafad84fb25c657e0315df6babedd2f66d061981"
             }
-          ]
+          ],
+          "credits": {
+            "size": 12162,
+            "sha256": "5e5ab1852c4734a547e6143ef643b43d211e3cee334e949cb59fffb51bf04098"
+          }
         }
       }
     },
@@ -3213,7 +3221,11 @@
               "size": 14007,
               "sha256": "9fe2c121edf61f6b277ad0836e02dc6e65c652a26da3814689593f2b7e6ef247"
             }
-          ]
+          ],
+          "credits": {
+            "size": 12162,
+            "sha256": "5e5ab1852c4734a547e6143ef643b43d211e3cee334e949cb59fffb51bf04098"
+          }
         }
       }
     }

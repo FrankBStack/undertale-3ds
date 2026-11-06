@@ -71,8 +71,6 @@ KRSHARP_SPRITES = ("6f1e8407773113149a7127da8aa3c6cf4c3a124d",)
 # (Chapter 5's Susie emblem in the battle panel, round 16 identity).
 MIX_PREFIX_SHA1, MIX_PREFIX_LEN = "8e928685bd9c5b38ce53fdc05657d3bc11a745c2", 8
 MIX_MIN, MIX_MAX, CTR_TILE_MAX = 8, 96, 256  # ctr_cmdlabel.c's SMARTMIX_MIN and SMARTMIX_MAX, ctr_texture_pack.h
-
-
 def tpag_items(win):
     ptrs = win.plist("TPAG")
     items = [fv.tpag_item(win, p) if p else None for p in ptrs]
@@ -242,7 +240,8 @@ def ink(page, exact, x0, y0, w, h):
 
 
 def in_range(item):
-    return SMART_ITEM_MAX >= item["sw"] >= SMART_ITEM_MIN and SMART_ITEM_MAX >= item["sh"] >= SMART_ITEM_MIN
+    ceiling = SMART_ITEM_MAX
+    return ceiling >= item["sw"] >= SMART_ITEM_MIN and ceiling >= item["sh"] >= SMART_ITEM_MIN
 
 
 def verdict(page, exact, item, keep_sharp, index):

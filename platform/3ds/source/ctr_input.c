@@ -265,7 +265,14 @@ INPUT_LATE void CtrInput_stop(void) {
     if (worker != NULL) {
         bool self = threadGetCurrent() == worker;
         Result result = self ? -1 : threadJoin(worker, 250000000ULL);
-        if (R_FAILED(result)) {
+        if (
+#if !defined(PLATFORM_3DS) || defined(ENABLE_WAD16)
+            result != 0
+#else
+            R_FAILED(result)
+#endif
+        ) {
+#line 269
             return; // don't free a live thread, or hang exceptional exit forever
         }
         threadFree(worker);

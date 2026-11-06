@@ -154,4 +154,22 @@ bool FreeWins_skip(unsigned bit);
 #define FW_SKIP(bit) 0
 #endif
 
+// pacealign (auditfixe, Option A, 2026-11-05; UNDERTALE only, CMakeLists.txt defines CTRPORT_PACEALIGN): a
+// measured window's opening and end, and a battle sweep's end, log the pacer's numbers for the frames up to there
+// (source/z_pacealign.c). Three calls in ctr_benchmark.c go there instead of CtrLog_beginConsole and logInfo, with the
+// same arguments; elsewhere they are those calls, so every other build compiles to the same code.
+#ifdef CTRPORT_PACEALIGN
+void CtrBench_paceOpen(void);
+void CtrBench_paceWindowEnd(const char* format, ...);
+void CtrBench_paceSweepEnd(const char* format, ...);
+void CtrBench_paceFrames(int32_t* now, int32_t* first);
+#define BENCH_PACE_OPEN CtrBench_paceOpen
+#define BENCH_PACE_WINDOW_END CtrBench_paceWindowEnd
+#define BENCH_PACE_SWEEP_END CtrBench_paceSweepEnd
+#else
+#define BENCH_PACE_OPEN CtrLog_beginConsole
+#define BENCH_PACE_WINDOW_END logInfo
+#define BENCH_PACE_SWEEP_END logInfo
+#endif
+
 #endif

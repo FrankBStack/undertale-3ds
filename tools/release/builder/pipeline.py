@@ -15,13 +15,17 @@ import re
 import shlex
 import shutil
 import signal
+import stat
 import subprocess
 import sys
 import threading
+import tempfile
 import time
 
 import products
+import cleanup
 import toolchain
+import library_pins
 import home_art
 import sfx_encoder
 from processes import hidden_options
@@ -79,11 +83,44 @@ class WorkBusy(WorkLockError):
     pass
 
 
-def claim_work(work):
+def require_launcher_paths(work, source_root=None, devkitpro=None):
+    """CMake splits compiler-launcher paths at semicolons on every host."""
+    if sys.platform == 'win32' and any(c in value for value in (os.path.abspath(work), os.path.realpath(work))
+                                     for c in "'[],"):
+        raise WorkLockError("The work folder path contains an apostrophe, bracket or comma, which the Windows "
+                            "build tools can't use. Start the builder from a command line with --work and a "
+                            "short, plain folder path, for example --work C:/u3ds.")
+    for label, path in (("builder", SOURCE_ROOT if source_root is None else source_root),
+                        ("Python", toolchain.python_exe()), ("work", work),
+                        ("devkitPro", devkitpro or toolchain.candidate_roots()[0])):
+        # Check both the spelling passed to the build and the interpreter's resolved
+        # location: a harmless-looking link can point into a semicolon-named folder.
+        if any(';' in value for value in (os.fspath(path), os.path.realpath(path))):
+            if label == 'work':
+                message = ("The work folder path contains a semicolon (;). Start the builder from a command line "
+                           "with --work and a folder whose path has no semicolon.")
+            elif label == 'devkitPro':
+                message = ("The devkitPro folder path contains a semicolon (;). "
+                           "Use devkitPro in a folder whose path has no semicolon, then open the builder again.")
+            else:
+                message = ("The builder's %s path contains a semicolon (;). " %
+                           ('folder' if label == 'builder' else 'Python') +
+                           "Move the builder to a folder whose path has no semicolon, then open it again.")
+                if label == 'Python':
+                    message += " If you use a separate Python, its folder path must have no semicolon either."
+            raise WorkLockError(message)
+
+
+def claim_work(work, devkitpro=None):
     """One builder process per work folder (AUD-15): builds mirror and delete src/build, and delivery and
     cleanup rewrite the rest. The OS lock goes when the process ends, so a crashed builder never blocks the next.
     Returns the held lease, or raises WorkLockError: WorkBusy for another builder, otherwise the folder or its lock
     file can't be used, and the builder stops rather than run unlocked (R175 F3)."""
+    require_launcher_paths(work, devkitpro=devkitpro)
+    try:
+        cleanup.require_work_paths(work)
+    except (ValueError, OSError) as exc:
+        raise WorkLockError(str(exc)) from exc
     import sd_transaction
     try:
         os.makedirs(work, exist_ok=True)
@@ -105,12 +142,12 @@ def default_work_dir(env=None, platform=sys.platform):
     if platform == "win32":
         base = env.get("LOCALAPPDATA", "")
         cand = os.path.join(base, "u3ds", "w") if base else ""
-        if cand and not any(c in cand for c in ' %\t\r\n') and cand.isascii() and len(cand) <= 60:
+        if cand and not any(c in cand for c in " %;'[],\t\r\n") and cand.isascii() and len(cand) <= 60:
             return cand
         return "C:/u3ds"
     candidate = (os.path.join(os.path.expanduser("~/Library/Caches"), "u3ds") if platform == 'darwin'
                  else os.path.join(env.get("XDG_CACHE_HOME") or os.path.expanduser("~/.cache"), "u3ds"))
-    if candidate.isascii() and not any(c in candidate for c in ' %\t\r\n'):
+    if candidate.isascii() and not any(c in candidate for c in ' %;\t\r\n'):
         return candidate
     user = hashlib.sha256(os.path.expanduser('~').encode('utf-8')).hexdigest()[:12]
     return '/tmp/u3ds-' + user
@@ -218,8 +255,8 @@ def source_wanted(relative, game=None):
         # which gmlaot.py imports for a typed-priority list (part of its import closure for both games).
         return len(parts) == 3 and (parts[-1] in (
             "builtin_audit.py", "btnprompt.py", "corpus.py", "data_versions.py", "escape.py", "fontverdict.py",
-            "gmlaot.py", "itemverdict.py", "prepare.py", "padrefs.py", "aot_select.py", "typed.py", "typed_priority.py",
-            "loadscreen_art.py", "late_numeric.py",
+            "gmlaot.py", "itemverdict.py", "inkart.py", "prepare.py", "padrefs.py", "aot_select.py", "typed.py", "typed_priority.py",
+            "loadscreen_art.py", "late_numeric.py", "private_game.py",
             "symverdict.py", "stglyphs.py", "stpack.py", "stasrtext.py", "credits.py", "weirdshd.py")
             # dskip.py: UNDERTALE Old's covered-star key (build.sh runs it for UNDERTALE only).
             or (parts[-1] in ("pixgrid.py", "btnprompt_build.py", "stmenu.py", "dskip.py") and game != "deltarune")
@@ -231,6 +268,8 @@ def source_wanted(relative, game=None):
             or (parts[-1] == "chapter_manifest.py" and game != "undertale")
             # check_dspe_gate.py: knightgpu dspe's room gate check (build.sh runs it; DELTARUNE New only).
             or (parts[-1] == "check_dspe_gate.py" and game != "undertale"))
+    if parts[:2] == ["tools", "texprep"] and parts[-1].startswith("test_"):
+        return False  # Host-only regression tests use private pytest/compiler helpers.
     if parts[:2] == ["tools", "analysis"]:
         # The renderer launcher's helpers (SOURCE_FILES too), and UNDERTALE's half-resolution art packer with its list
         # of sprite name hashes (build.sh halfart, products.HALFART).
@@ -285,6 +324,9 @@ def source_wanted(relative, game=None):
         if parts == ["platform", "3ds", "source", "z_builderx_old.c"] and game == "undertale":
             return False
         if parts[2:] == ["source", "z_gogut.c"]:
+            return game != "deltarune"
+        # pacealign's bench window edges (CMake compiles it for UNDERTALE only).
+        if parts[2:] == ["source", "z_pacealign.c"]:
             return game != "deltarune"
         # knightnew's afterimage history (build.sh knightnew-history, DELTARUNE New only; Policy E).
         if parts[2:] == ["source", "z_knightnew_history.c"]:
@@ -343,6 +385,7 @@ def source_directories(game):
 def mirror_source(src_root, dest_root, game=None, *, source_digest=None):
     """Mirror by contents, never archive timestamps. Changed inputs invalidate generated build state;
     an unchanged kit (including a second model) keeps its objects. Returns (copied, removed)."""
+    cleanup.require_plain_tree(dest_root)
     copied = removed = 0
     os.makedirs(dest_root, exist_ok=True)
     invalidated = False
@@ -615,11 +658,11 @@ def write_python_shims(bin_dir, python):
         py = "/" + py[0].lower() + py[2:]
     for name in ("python3", "python"):
         with open(os.path.join(bin_dir, name), "w", encoding="utf-8", newline="\n") as f:
-            f.write('#!/bin/sh\nexec %s "$@"\n' % shlex.quote(py))
+            f.write('#!/bin/sh\nexec %s -X utf8 "$@"\n' % shlex.quote(py))
         os.chmod(os.path.join(bin_dir, name), 0o755)
     # build.sh uses nproc, which macOS does not ship. Keep this local to the builder.
     with open(os.path.join(bin_dir, "nproc"), "w", encoding="utf-8", newline="\n") as f:
-        f.write('#!/bin/sh\nexec %s -I -c "import os; print(os.cpu_count() or 1)"\n' % shlex.quote(py))
+        f.write('#!/bin/sh\nexec %s -X utf8 -I -c "import os; print(os.cpu_count() or 1)"\n' % shlex.quote(py))
     os.chmod(os.path.join(bin_dir, "nproc"), 0o755)
 
 
@@ -632,6 +675,7 @@ export DEVKITARM="$DEVKITPRO/devkitARM"
 export PATH="$DEVKITARM/bin:$DEVKITPRO/tools/bin:$PATH"
 cd "$(cygpath -u "$3")"
 shift 4
+if [ -n "${CTRPORT_LIBRARY_SHIMS:-}" ]; then export PATH="$CTRPORT_LIBRARY_SHIMS:$PATH"; fi
 exec bash platform/3ds/build.sh "$@"
 '''
 
@@ -642,6 +686,7 @@ export DEVKITARM="$DEVKITPRO/devkitARM"
 export PATH="$1:$2:$2/cmake/cmake-3.31.8-macos-universal/CMake.app/Contents/bin:$DEVKITARM/bin:$DEVKITPRO/tools/bin:/Applications/CMake.app/Contents/bin:/opt/homebrew/bin:/usr/local/bin:$PATH"
 cd "$3"
 shift 4
+if [ -n "${CTRPORT_LIBRARY_SHIMS:-}" ]; then export PATH="$CTRPORT_LIBRARY_SHIMS:$PATH"; fi
 exec bash platform/3ds/build.sh "$@"
 '''
 
@@ -844,6 +889,45 @@ class BuildFailed(Exception):
         self.log_path = log_path
 
 
+class GameFilesRefused(BuildFailed):
+    """The game files changed after verification; return to file selection, not build retry."""
+
+
+def game_files_problem(title, kind):
+    """Player guidance shared by the window and CLI (cli_text translates the final action)."""
+    messages = {
+        'unknown': ("These %s files don't match an official release this builder knows. "
+                    'Restore the complete original game folder, or try a newer builder.'),
+        'unreadable': ('Could not read the %s game files. Check that the game folder is readable '
+                       'and close anything that is using the files.'),
+        'changed': ('The %s game files changed while they were being checked. '
+                    'Wait for any update or file copy to finish, then try again.'),
+        'missing': ('Could not find the %s game files. The game folder may have moved or been removed.'),
+        'art': ('Could not prepare HOME Menu art for %s. Click Copy log to report the error.'),
+    }
+    message = messages[kind] % title
+    return message + ' Go back to choose the game files.'
+
+
+def game_files_refusal(log_path, title):
+    """Recognize build_input's diagnostics; paths and raw errors remain in the support log."""
+    try:
+        with open(log_path, encoding='utf-8', errors='replace') as log:
+            for line in log:
+                text = line.strip()
+                if text == 'Could not find the game files.':
+                    return game_files_problem(title, 'missing')
+                if text.startswith('Refusing to build: could not read '):
+                    kind = 'changed' if text.endswith('(file changed while checking).') else 'unreadable'
+                    return game_files_problem(title, kind)
+                if (text.startswith('Refusing to build: ') and
+                        ' is not an unmodified Steam or GOG copy of %s (SHA-256 ' % title in text):
+                    return game_files_problem(title, 'unknown')
+    except OSError:
+        pass
+    return None
+
+
 FAILED = "The build stopped.\nClick Try again, or click Copy log to report the error."
 # A failing step's own words, so the command line can say what failed (B2). Warnings are never the cause.
 _ERROR_LINE = re.compile(r"(?:^|\s)(?:fatal )?error:|: error\b|overfilled|undefined reference|^ld: |"
@@ -911,13 +995,13 @@ def prepare_sfx_pack(job, data_dir):
     # object cache (for example M1 FMA encodes from before -ffp-contract=off).
     identity = hashlib.sha256(b'\0'.join((audio / name).read_bytes() for name in
         ('dspadpcm.c', 'dspadpcm.py', 'mono_sfx.py', 'sfxpack.py'))).hexdigest()
-    argv = [toolchain.python_exe(), '-I', '-B',
+    argv = [toolchain.python_exe(), '-X', 'utf8', '-I', '-B',
             str(Path(job.work) / 'src/tools/audio/sfxpack.py'), '--data-win',
             str(Path(data_dir) / 'data.win'), '--out', str(temporary),
             '--work', str(Path(job.work) / 'sfx-cache' / identity)]
     if sys.platform == 'win32':
-        library = sfx_encoder.validate(Path(job.source_root) / sfx_encoder.RELATIVE,
-                                       Path(job.work) / 'src')
+        library = Path(job.source_root) / sfx_encoder.RELATIVE
+        sfx_encoder.validate(library, Path(job.work) / 'src')
         argv += ['--dsp-library', str(library)]
     env = dict(os.environ, PYTHONDONTWRITEBYTECODE='1')
     options = hidden_options(group=True)
@@ -970,15 +1054,64 @@ def kill_tree(proc):
             pass
 
 
+# Both-model compiler cache was about 82 MB; old versions can accumulate without reuse.
+WORK_CACHE_CREDIT_MB = 100
+
+
+def existing_work_bytes(work):
+    """Credit reusable work, with bounded cache credit; never exported installs or links."""
+    total, cache_total, seen = 0, 0, set()
+    pending = [(Path(work) / name, name == 'ccache')
+               for name in ('src', 'ccache', 'out/o3ds', 'out/n3ds')]
+    while pending:
+        path, is_cache = pending.pop()
+        try:
+            info = path.lstat()
+            # A junction can point outside the work volume, just like a symlink.
+            attributes = getattr(info, 'st_file_attributes', 0)
+            if stat.S_ISLNK(info.st_mode) or attributes & stat.FILE_ATTRIBUTE_REPARSE_POINT:
+                continue
+            if stat.S_ISDIR(info.st_mode):
+                with os.scandir(path) as entries:
+                    pending.extend((Path(entry.path), is_cache) for entry in entries)
+            elif stat.S_ISREG(info.st_mode):
+                identity = (info.st_dev, info.st_ino)
+                if info.st_ino and identity in seen:
+                    continue
+                seen.add(identity)
+                # Sparse/compressed files must not earn more credit than their allocation.
+                if attributes & (stat.FILE_ATTRIBUTE_SPARSE_FILE | stat.FILE_ATTRIBUTE_COMPRESSED):
+                    continue
+                size = info.st_size
+                if hasattr(info, 'st_blocks'):
+                    size = min(size, info.st_blocks * 512)
+                if is_cache:
+                    cache_total += size
+                else:
+                    total += size
+        except OSError:
+            pass  # Unreadable/missing work earns no credit; do not reduce the space requirement.
+    return total + min(cache_total, WORK_CACHE_CREDIT_MB * 10**6)
+
+
 class Build:
     """One target. run() blocks; cancel() may be called from another thread."""
 
     def __init__(self, product, tc, work, target, data_dir, outputs=("3dsx",), openh264=False, on_line=None,
                  on_progress=None, popen=subprocess.Popen, source_root=SOURCE_ROOT, clock=time.monotonic,
                  art_generator=home_art.generate, store="steam", parts=None, sfx_builder=prepare_sfx_pack):
-        self.product, self.tc, self.work, self.target = product, tc, work, target
         if not str(work).isascii() or any(c in str(work) for c in '%\t\r\n'):
             raise BuildFailed('Choose a work folder with plain letters, numbers and spaces. Leave out % and control characters.')
+        try:
+            require_launcher_paths(work, source_root, getattr(tc, 'root', None))
+            cleanup.require_work_paths(work)
+        except (WorkLockError, ValueError, OSError) as exc:
+            raise BuildFailed(str(exc)) from exc
+        self.product, self.tc, self.work, self.target = product, tc, work, target
+        try:
+            products.require_output_outside_game(data_dir, work)
+        except ValueError as exc:
+            raise BuildFailed(str(exc)) from exc
         self.data_dir, self.outputs, self.openh264 = data_dir, tuple(outputs), openh264
         self.on_line = on_line or (lambda s: None)
         self.on_progress = on_progress or (lambda p: None)
@@ -988,10 +1121,12 @@ class Build:
         self.sfx_builder = sfx_builder
         self.store = store
         self.parts = parts
+        self.libraries = {'packages': [], 'shims': None}
         self.notices = []
         self.progress = Progress(product, target, clock)
         self.progress.cia_wanted = "cia" in self.outputs
         self.proc = None
+        self.cleanup_roots = [os.path.join(work, name) for name in cleanup.WORK_AREAS['build']]
         self.cancelled = False
         self._lock = threading.Lock()
         os.makedirs(os.path.join(work, "logs"), exist_ok=True)
@@ -1004,19 +1139,67 @@ class Build:
             if self.proc is not None:
                 kill_tree(self.proc)
 
+    def refuse_game_files(self, error):
+        import chapters
+        import errno
+        # Validation can fail before log creation, including when the work folder itself is unwritable.
+        log_path = self.log_path
+        try:
+            os.makedirs(os.path.dirname(log_path), exist_ok=True)
+            with open(log_path, 'w', encoding='utf-8') as log:
+                log.write('chapter validation: ' + str(error) + '\n')
+        except OSError:
+            log_path = None
+        if isinstance(error, chapters.UnknownVersion):
+            raise GameFilesRefused(game_files_problem(self.product.title, 'unknown'), log_path) from error
+        if isinstance(error, chapters.GameFilesError):
+            raise GameFilesRefused(str(error) + ' Go back to choose the game files.', log_path) from error
+        if isinstance(error, OSError):
+            if error.errno == errno.ENOSPC:
+                message = 'Not enough space for the selected chapters. Free up space and try again.'
+            elif isinstance(error, chapters.StageCopyError) or error.filename2 is not None:
+                message = ('Could not copy the selected chapters. Check that the game folder is readable '
+                           'and that the work folder has free space and allows these files. '
+                           'Click Try again, or click Copy log to report the error.')
+            else:
+                try:
+                    source_error = (error.filename is not None and
+                                    Path(error.filename).resolve().is_relative_to(Path(self.data_dir).resolve()))
+                except (OSError, ValueError, TypeError):
+                    source_error = False
+                if source_error:
+                    raise GameFilesRefused(game_files_problem(self.product.title, 'unreadable'), log_path) from error
+                message = ('Could not prepare the selected chapters in the work folder. '
+                           'Check free space and folder permissions. '
+                           'Click Try again, or click Copy log to report the error.')
+        else:
+            message = str(error)
+        raise BuildFailed(message, log_path) from error
+
     def prepare(self):
+        try:
+            cleanup.require_work_paths(self.work)
+        except (ValueError, OSError) as exc:
+            raise BuildFailed(str(exc)) from exc
         if self.product.key == 'deltarune':
             import chapters
             try:
                 self.parts = chapters.runtime_selection(self.data_dir, self.parts, self.target)
             except (OSError, ValueError) as exc:
-                raise BuildFailed(str(exc), self.log_path) from exc
+                self.refuse_game_files(exc)
         version = release_version(self.source_root)      # an incomplete archive stops before anything is written
         self.release_source = release_source(self.source_root, self.product.key)
         if self.release_source.get('kind') == 'source':
             self.notices.append(source_build_text(self.release_source))
             self.on_line(self.notices[-1])
-        need = int(self.product.disk_mb[self.target] * 1.5 + 30) * 1024 * 1024
+        if self.product.key == 'undertale':
+            # Options describes total work, including reusable files already on disk.
+            # Recheck remaining space for each model/rerun; keep 30 MB of working room.
+            # Delivery copies have their own actual destination-space check.
+            need = max(30 * 10**6, self.product.work_disk_mb([self.target]) * 10**6
+                       - existing_work_bytes(self.work))
+        else:
+            need = int(self.product.disk_mb[self.target] * 1.5 + 30) * 1024 * 1024
         if self.product.key == 'deltarune':
             need += chapters.stage_bytes(self.data_dir, self.parts)
         os.makedirs(self.work, exist_ok=True)
@@ -1024,13 +1207,30 @@ class Build:
         if free < need:
             raise BuildFailed("%s has %d MB free; %d MB needed.\n"
                               "Free up disk space and try again." % (
-                                  self.work, free // (1 << 20), need // (1 << 20)))
-        copied, removed = mirror_source(self.source_root, os.path.join(self.work, "src"), self.product.key,
-                                        source_digest=self.release_source['source_sha256'])
-        write_python_shims(os.path.join(self.work, "bin"), toolchain.python_exe())
-        # The builder's own .cia tools live here (on PATH for the build); devkitPro's tools/bin is CMake's HINTS.
-        os.makedirs(os.path.join(self.work, "tools", "bin"), exist_ok=True)
-        return version, copied, removed
+                                  self.work, free // 10**6, -(-need // 10**6)))
+        self._cleanup_snapshot = cleanup.begin_build(self.work, self.cleanup_roots)
+        try:
+            copied, removed = mirror_source(self.source_root, os.path.join(self.work, "src"), self.product.key,
+                                            source_digest=self.release_source['source_sha256'])
+            write_python_shims(os.path.join(self.work, "bin"), toolchain.python_exe())
+            os.makedirs(os.path.join(self.work, "tools", "bin"), exist_ok=True)
+            try:
+                self.libraries = library_pins.select(self.tc, self.work, self.on_line)
+            except (toolchain.Refused, OSError, ValueError) as exc:
+                raise BuildFailed(str(exc)) from exc
+            return version, copied, removed
+        finally:
+            if not getattr(self, '_running', False):
+                self.finish_ownership()
+
+    def finish_ownership(self):
+        snapshot = self.__dict__.pop('_cleanup_snapshot', None)
+        if snapshot is not None:
+            try:
+                cleanup.finish_build(self.work, snapshot)
+            except (OSError, ValueError) as exc:
+                # An incomplete ownership record keeps files; it never authorizes deletion.
+                self.on_line('Some work files could not be recorded for cleanup: ' + str(exc))
 
     def environment(self):
         """build.sh's environment, after prepare(): the release profile's source link and, for a source build, the
@@ -1041,47 +1241,73 @@ class Build:
         env["CTRPORT_PYTHON"] = toolchain.python_exe()
         env = products.release_contract.build_environment(
             self.product.key, self.release_source['public_commit'], env)
+        # Player builds never run optional lab qualification, including when a
+        # reused mirror still has an old ON CMake cache entry.
+        env["CTRPORT_PLAYER_BUILD"] = "1"
         env.pop("CTRPORT_SMDH_SOURCE", None)
         stamp = smdh_source(self.release_source)
         if stamp:
             env["CTRPORT_SMDH_SOURCE"] = stamp
         env.pop("CTRPORT_FILE_PREFIX_MAP", None)
+        env.pop('CTRPORT_LIBRARY_SHIMS', None)
+        shims = getattr(self, 'libraries', {}).get('shims')
+        if shims:
+            env['CTRPORT_LIBRARY_SHIMS'] = library_pins.posix_path(shims, self.tc.platform)
         return env
 
     def run(self):
+        try:
+            return self._run()
+        finally:
+            self.finish_ownership()
+            self._running = False
+
+    def _run(self):
+        release_version(self.source_root)
+        compiler = toolchain.compiler_details(self.tc)
+        tested = products.release_contract.read(self.source_root)['tested_compiler']
+        if self.product.key == 'undertale':
+            try:
+                import updates
+                toolchain.require_release_compiler(compiler, tested, self.tc.platform,
+                                                   updates.repository(self.product.key, self.source_root) + '/releases')
+            except toolchain.Refused as exc:
+                raise BuildFailed(str(exc)) from exc
         if self.product.key == 'deltarune':
             import chapters
         t0 = time.monotonic()
+        self._running = True
         version, copied, removed = self.prepare()
         # A macOS copy's game.ios is staged as data.win (products.aot_data_dir); a Windows copy is used where it is.
         if self.product.key == 'deltarune':
             try:
                 data_dir, self.parts = chapters.stage(self.data_dir, self.work, self.parts)
             except (OSError, ValueError) as exc:
-                raise BuildFailed(str(exc), self.log_path) from exc
+                self.refuse_game_files(exc)
         else:
             data_dir = products.aot_data_dir(self.product, self.data_dir, os.path.join(self.work, "data"))
         argv = build_argv(self.tc, self.work, self.product.key, self.target, data_dir, self.openh264,
                           platform=self.tc.platform)
         env = self.environment()
-        compiler = toolchain.compiler_details(self.tc)
-        tested = products.release_contract.read(self.source_root)['tested_compiler']
         compiler['tested'] = tested
         compiler['layout_pins'] = (compiler['version'] == tested['version'] and
                                    compiler['target'] == tested['target'])
         compiler['warning'] = ('' if compiler['layout_pins'] else
             'Tested with devkitARM GCC %s (%s); found %s (%s), so layout pins are off and performance may differ slightly.' %
-            (tested['version'], tested['target'], compiler['version'], compiler['target']))
+            (tested['version'], tested['target'], compiler['version'] or 'not readable',
+             compiler['target'] or 'not readable'))
         kw = hidden_options(group=True)
         if sys.platform != "win32":
             kw["start_new_session"] = True
         # Line-buffered, so the log on disk follows the build (support, and a crash leaves the lines so far).
         with open(self.log_path, "w", encoding="utf-8", newline="\n", buffering=1) as log:
+            products.log_ignored_music(self.product, self.data_dir, lambda message: log.write(message + '\n'))
             log.write("builder: %s %s, source %s (%d files copied, %d removed), data %s\n" % (
                 self.product.key, self.target, version, copied, removed, self.data_dir))
             if data_dir != self.data_dir:
                 log.write("builder: private game inputs staged in %s\n" % data_dir)
             log.write("toolchain packages (pacman -Q at detection):\n")
+            log.write('selected SDK libraries: ' + json.dumps(self.libraries, sort_keys=True) + '\n')
             log.write('public source: ' + self.release_source['source_url'] + '\n')
             if self.release_source.get('kind') == 'source':
                 log.write(source_build_text(self.release_source) + '\n')
@@ -1105,7 +1331,8 @@ class Build:
                     os.path.join(self.tc.root or "/opt/devkitpro", "tools", "bin",
                                  "tex3ds.exe" if self.tc.platform == "win32" else "tex3ds"), store=self.store)
             except home_art.ArtError as exc:
-                raise BuildFailed(str(exc), self.log_path) from exc
+                log.write("HOME Menu art: " + str(exc) + "\n")
+                raise GameFilesRefused(game_files_problem(self.product.title, 'art'), self.log_path) from exc
             except OSError as exc:
                 raise BuildFailed("Could not write HOME Menu art. Check free space and folder permissions.",
                                   self.log_path) from exc
@@ -1129,17 +1356,31 @@ class Build:
             rc = self.proc.wait()
         if self.cancelled and not self.progress.no_aot:
             raise BuildFailed("The build was cancelled.\nClick Try again when ready.", self.log_path)
+        refusal = game_files_refusal(self.log_path, self.product.title) if rc != 0 or self.progress.no_aot else None
+        if refusal:
+            raise GameFilesRefused(refusal, self.log_path)
         if self.progress.no_aot:
             raise BuildFailed("The game code could not be prepared.\n"
-                              "Click Copy log to report the error, then try again with a repaired builder.", self.log_path)
+                              "Click Try again, or click Copy log to report the error.", self.log_path)
         if rc != 0:
-            raise BuildFailed("The build stopped (build.sh exit code %d).\n"
+            for line in Path(self.log_path).read_text(encoding='utf-8', errors='replace').splitlines():
+                if line.startswith('LIBRARY REFUSED: '):
+                    raise BuildFailed(line.removeprefix('LIBRARY REFUSED: '), self.log_path)
+        if rc != 0:
+            raise BuildFailed("The build stopped (exit code %d).\n"
                               "Click Try again, or click Copy log to report the error." % rc, self.log_path)
         try:
             bid = check_build_id(os.path.join(self.work, "src", "build", "3ds-%s-%s" % (self.product.key,
                                               self.target), "generated", "ctrport_build_id.h"), version, self.source_root)
         except BuildFailed as e:
             raise BuildFailed(str(e), self.log_path)
+        linked = []
+        if getattr(self, 'libraries', {}).get('sdk'):
+            try:
+                linked = library_pins.confirm_linked(Path(self.work)/'src/build'/
+                    ('3ds-%s-%s' % (self.product.key, self.target)), self.tc.platform)
+            except (OSError, ValueError) as error:
+                raise BuildFailed('The built game did not pass the library check. '+str(error), self.log_path) from error
         arts = self.collect()
         # Only the Old model runtime reads the pack. Building both models invokes this once.
         if self.product.key == 'undertale' and self.target == 'o3ds':
@@ -1157,10 +1398,13 @@ class Build:
                 pack = None
             if pack is not None:
                 arts.append(pack)
+        with open(self.log_path, 'a', encoding='utf-8') as log:
+            log.write('linked archive SHA-256: ' + json.dumps(linked, sort_keys=True) + '\n')
         record = {"game": self.product.key, "target": self.target, "version": version, "build_id": bid,
                   "chapters": getattr(self, 'chapter_record', None),
                   "home_menu_art": art, "notices": list(self.notices),
                   "toolchain_packages": dict(self.tc.package_versions),
+                  "sdk_libraries": self.libraries, "linked_libraries": linked,
                   "compiler": compiler, "release_source": self.release_source,
                   "halfart": products.halfart(self.product.key, self.target),
                   "seconds": round(time.monotonic() - t0, 1), "compiler_warnings": self.progress.warnings,
@@ -1179,9 +1423,9 @@ class Build:
         try:
             with open(cache, encoding="utf-8", errors="replace") as f:
                 if not re.search(r"^CTRPORT_AOT_DIR:PATH=.+$", f.read(), re.M):
-                    raise BuildFailed("The build finished without AOT code.\n" + FAILED, self.log_path)
+                    raise BuildFailed("The finished build is missing prepared game code.\n" + FAILED, self.log_path)
         except OSError:
-            raise BuildFailed("Missing CMakeCache.txt.\n" + FAILED, self.log_path)
+            raise BuildFailed("The finished build could not be checked.\n" + FAILED, self.log_path)
         out_dir = os.path.join(self.work, "out", self.target)
         os.makedirs(out_dir, exist_ok=True)
         arts = []
@@ -1198,8 +1442,33 @@ class Build:
             if not os.path.isfile(p) or os.path.getsize(p) == 0:
                 if kind == "cia":
                     raise BuildFailed(CIA_NOT_MADE, self.log_path)
-                raise BuildFailed("Missing output %s.\n" % os.path.basename(p) + FAILED, self.log_path)
+                raise BuildFailed("The finished game file is missing: %s.\n" % os.path.basename(p) + FAILED, self.log_path)
             dst = os.path.join(out_dir, os.path.basename(p))
-            shutil.copy2(p, dst)
-            arts.append(Artifact(self.target, kind, dst, os.path.getsize(dst), sha256_file(dst)))
+            # Keep the previous package until a private copy matches the compiler's output.
+            temporary = None
+            try:
+                size, digest = os.path.getsize(p), sha256_file(p)
+                descriptor, temporary = tempfile.mkstemp(prefix='.' + os.path.basename(p) + '.',
+                                                         suffix='.part', dir=out_dir)
+                os.close(descriptor)
+                cleanup.record_temporary(self.work, temporary)
+                shutil.copy2(p, temporary)
+                with open(temporary, 'r+b') as copied:
+                    os.fsync(copied.fileno())
+                if (os.path.getsize(temporary) != size or sha256_file(temporary) != digest or
+                        os.path.getsize(p) != size or sha256_file(p) != digest):
+                    raise BuildFailed("The finished build could not be copied correctly. "
+                                      "Any previous output was kept. Try again.", self.log_path)
+                os.replace(temporary, dst)
+                temporary = None
+            except OSError as exc:
+                raise BuildFailed("The finished build could not be saved. Any previous output was kept. "
+                                  "Check the work folder and try again.", self.log_path) from exc
+            finally:
+                if temporary is not None:
+                    try:
+                        os.unlink(temporary)
+                    except FileNotFoundError:
+                        pass
+            arts.append(Artifact(self.target, kind, dst, size, digest))
         return arts

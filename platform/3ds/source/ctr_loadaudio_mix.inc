@@ -1,3 +1,13 @@
+// audpar: preserve these existing helpers' exact places after the menu query.
+// A new query call edge can reorder functions within their former shared section.
+#if defined(ENABLE_WAD16)
+#define AUDPAR_DSP_SECTION ".text.audofix_late_dsp"
+#define AUDPAR_BOUNDARY_SECTION ".text.audofix_late_boundary"
+#else
+#define AUDPAR_DSP_SECTION ".text.audofix_late"
+#define AUDPAR_BOUNDARY_SECTION ".text.audofix_late"
+#endif
+#line 1
 // Hidden room loads: request on the game thread, apply on the DSP callback.
 // No wait, source walk, vtable replacement or per-voice clock on the requester.
 #define LM_BSS __attribute__((section(".bss.late.loadaudio")))
@@ -160,9 +170,9 @@ LM_CODE static void lmReset(void) {
 }
 
 #ifndef LM_HOST
-static void ptDspCallback(void* data); __attribute__((noinline, noipa, optimize("Os"), section(".text.audofix_late"))) static void audofixDspCallback(void* data); LM_CODE static void lmRegister(ndspCallback callback, void* data) {
+static void gomDspCallback(void* data); static void ptDspCallback(void* data); __attribute__((noinline, noipa, optimize("Os"), section(AUDPAR_DSP_SECTION))) static void audofixDspCallback(void* data); LM_CODE static void lmRegister(ndspCallback callback, void* data) {
     lmReset();
-    UTA_PHYS_CALLBACK(callback != NULL ? ptDspCallback : NULL, data); // play-through -> audofix H1 -> lmCallback (file end)
+    UTA_PHYS_CALLBACK(callback != NULL ? gomDspCallback : NULL, data); // gomusic -> play-through -> audofix H1 -> lmCallback (file end)
 }
 #endif
 
@@ -310,7 +320,7 @@ LM_CODE void CtrLoadmix_boundary(Runner* runner, bool loaded) {
 // Keep the freebies wrapper's original single-call extent and function order.
 // The audio object is excluded from earlier generic late-section collectors.
 void __real_Runner_handlePendingRoomChange(Runner* runner);
-__attribute__((noinline, noipa, optimize("Os"), section(".text.audofix_late"))) static void audofixBoundary(Runner* runner, bool loaded); void audofixPtRoomCall(Runner* runner, bool loaded) __asm__("audofixPtRoom"); LM_CODE void CtrLoadmix_handleRoomChange(Runner* runner) {
+__attribute__((noinline, noipa, optimize("Os"), section(AUDPAR_BOUNDARY_SECTION))) static void audofixBoundary(Runner* runner, bool loaded); void audofixPtRoomCall(Runner* runner, bool loaded) __asm__("audofixPtRoom"); LM_CODE void CtrLoadmix_handleRoomChange(Runner* runner) {
     int32_t pending = runner->pendingRoom;
     audofixPtRoomCall(runner, false); // audofix H1 + play-through (file end: audofixPtRoom)
     __real_Runner_handlePendingRoomChange(runner);
@@ -357,14 +367,14 @@ __attribute__((noinline, noipa, optimize("Os"), section(".text.audofix_late"))) 
 }
 
 // The DSP frame callback (lmRegister installs this in lmCallback's place).
-__attribute__((noinline, noipa, optimize("Os"), section(".text.audofix_late"))) static void audofixDspCallback(void* data) {
+__attribute__((noinline, noipa, optimize("Os"), section(AUDPAR_DSP_SECTION))) static void audofixDspCallback(void* data) {
     audofixLeaveOutAway();
     lmCallback(data);
 }
 
 // The game thread's boundary before a room change (H1's part; audofixPtRoom, below, calls it and adds the
 // play-through's snapshot). Its size stays H1's: code placed after it in .text.audofix_late keeps its address.
-__attribute__((noinline, noipa, optimize("Os"), section(".text.audofix_late"))) static void audofixBoundary(Runner* runner, bool loaded) {
+__attribute__((noinline, noipa, optimize("Os"), section(AUDPAR_BOUNDARY_SECTION))) static void audofixBoundary(Runner* runner, bool loaded) {
     if (!loaded) audofixLeaveOutAway();
     CtrLoadmix_boundary(runner, loaded);
 }
@@ -419,7 +429,8 @@ PT_CODE void ptPhysPaused(int p, bool paused) {
     UTA_PHYS_PAUSED(p, paused || held);
 }
 #ifndef LM_HOST
-__asm__(".set audofixPtPaused, ptPhysPaused\n");
+__asm__(".set gomMixLink, gomPhysMix\n"); // gomusic: a stream's mix (ctr_audio_system.c's end)
+__asm__(".set audofixPtPaused, gomPhysPaused\n"); // gomusic's hold first (ctr_audio_system.c's end), then ptPhysPaused
 #endif
 
 // Game thread, after the boundary: a window opened from none takes the snapshot; a close drops it.

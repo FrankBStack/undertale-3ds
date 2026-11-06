@@ -3,6 +3,41 @@
 #include "utils.h"
 #include "random.h"
 
+#if !defined(PLATFORM_3DS) || defined(ENABLE_WAD16)
+static inline
+#if defined(__GNUC__)
+__attribute__((always_inline))
+#endif
+void randomSeedState(Random* m, uint32_t seed) {
+    m->state[0] = seed;
+    for (int i = 1; 16 > i; ++i)
+        m->state[i] = i + 0x6C078965 * (m->state[i - 1] ^ (m->state[i - 1] >> 30));
+}
+
+#if defined(PLATFORM_3DS) && defined(__GNUC__)
+static __attribute__((noinline, noipa, section(".text.late.auditfixg")))
+void auditfixgReseed(Random* m, uint32_t seed) {
+    m->index = 0;
+    randomSeedState(m, seed);
+}
+void Random_setSeed(Random* m, uint32_t seed) {
+    auditfixgReseed(m, seed);
+}
+#else
+void Random_setSeed(Random* m, uint32_t seed) {
+    m->index = 0;
+    randomSeedState(m, seed);
+}
+#endif
+
+Random Random_create(uint32_t seed) {
+    Random ret;
+    ret.index = 0;
+    randomSeedState(&ret, seed);
+    return ret;
+}
+
+#else
 void Random_setSeed(Random* m, uint32_t seed) {
     m->state[0] = seed;
     for (int i = 1; 16 > i; ++i)
@@ -16,6 +51,7 @@ Random Random_create(uint32_t seed) {
     return ret;
 }
 
+#endif
 uint32_t Random_nextUInt32(Random* m) {
     uint32_t a, b, c, d;
 
@@ -32,3 +68,7 @@ uint32_t Random_nextUInt32(Random* m) {
 
     return m->state[m->index];
 }
+
+#if defined(PLATFORM_3DS) && defined(ENABLE_WAD16) && defined(__GNUC__)
+__asm__(".pushsection .text.Random_setSeed,\"ax\",%progbits\n.subsection 1\n.org 48, 0\n.popsection\n");
+#endif

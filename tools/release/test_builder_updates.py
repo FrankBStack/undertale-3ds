@@ -32,6 +32,11 @@ def setUpModule():
     unittest.addModuleCleanup(NETWORK_ATTEMPTS.assert_not_called)
 
 
+def tearDownModule():
+    # Pytest calls the module hooks but does not drain unittest's cleanup stack.
+    unittest.doModuleCleanups()
+
+
 def release(tag, notes='A small fix.', **kw):
     return dict(tag_name=tag, body=notes, draft=False, prerelease='-' in tag, **kw)
 
@@ -364,7 +369,8 @@ class Gui(unittest.TestCase):
         try:
             root = gui.tk.Tk()
         except gui.tk.TclError as exc:
-            self.skipTest('Tk display unavailable: %s' % exc)
+            from gui_test_support import tk_unavailable
+            tk_unavailable(exc)
         root.withdraw()
         try:
             with tempfile.TemporaryDirectory() as work, \

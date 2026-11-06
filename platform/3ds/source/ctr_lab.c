@@ -1,5 +1,7 @@
 #include "ctr_release_branding.h"
-
+#include "ctr_r216_ut.h" // R216: UNDERTALE only (R216_PICK, R216_UT)
+#line 2
+#define CtrExitFiles_labExit R216_PICK(CtrSaveguard_exit, CtrExitFiles_labExit) // R216b: the crash exit settles the saves first (file end)
 // Lab mode: unattended test runs on the consoles that end cleanly whatever happens, and hand the console back to
 // the lab host, which waits for the next .3dsx, so overnight tests need nobody to press a button.
 //
@@ -51,14 +53,14 @@
 #include "ctr_lab.h"
 #include "ctr_exit.h"
 #line 52
-
+#define svcSleepThread R216_PICK(CtrArgcrash_labSleep, svcSleepThread) // R216b: a sleep for good lets go of the painter claim (file end)
 #include <3ds.h>
 #include <stdlib.h>
 #include <string.h>
-
+#define LabProto_append R216_PICK(CtrSaveguard_labAppend, LabProto_append) // R216b2: the claimer's first report line starts the claim's clock
 #include "ctr_hbldr.h"
 #include "ctr_lab_proto.h"
-
+R216_UT(void CtrLab_entryWrap(ERRF_ExceptionInfo* info, CpuRegisters* regs) __attribute__((noreturn)); void CtrLab_guardWake(long long ns);) // R216b4 (file end)
 #define REPORT_SIZE 8192
 #define WORK_STACK_SIZE (16 * 1024)
 #define MAIN_ENTRY_STACK_SIZE 512
@@ -394,7 +396,7 @@ static void hangLeave(const char* what, int seconds) {
 }
 
 // ===[ Threads ]===
-
+#define CtrLab_guardSleep R216_PICK(CtrLab_guardWake, CtrLab_guardSleep) // R216b4: a hang claim's clock (file end)
 static void guardMain(void* arg) {
     (void) arg;
     u32 last = cfg->progress != NULL ? cfg->progress() : 0;
@@ -502,7 +504,7 @@ bool CtrLab_start(const CtrLabConfig* config) {
     LightEvent_Init(&leaveEvent, RESET_STICKY);
     active = true;
     // The main thread's handler is also the one for threads without their own.
-    threadOnException(entryHandler, mainEntryStack + sizeof(mainEntryStack), WRITE_DATA_TO_HANDLER_STACK);
+    threadOnException(R216_PICK(CtrLab_entryWrap, entryHandler), mainEntryStack + sizeof(mainEntryStack), WRITE_DATA_TO_HANDLER_STACK);
     fallbackThread = threadCreate(fallbackMain, NULL, FALLBACK_STACK_SIZE, GUARD_PRIORITY, -2, true);
     guardThread = threadCreate(guardMain, NULL, GUARD_STACK_SIZE, GUARD_PRIORITY, -2, true);
     atexit(onExit);
@@ -527,7 +529,7 @@ void CtrLab_runThread(void (*entry)(void*), void* arg) {
         return;
     }
     u8 area[THREAD_ENTRY_STACK_SIZE] __attribute__((aligned(8)));
-    threadOnException(entryHandler, area + sizeof(area), WRITE_DATA_TO_HANDLER_STACK);
+    threadOnException(R216_PICK(CtrLab_entryWrap, entryHandler), area + sizeof(area), WRITE_DATA_TO_HANDLER_STACK);
     entry(arg);
     // The area goes with this frame; the main thread's handler covers the rest of the thread's life.
     threadOnException(NULL, NULL, NULL);
@@ -657,3 +659,132 @@ __attribute__((noinline, section(".text.leavekeep_late"))) void CtrLab_aimHost(b
     const char* args[] = { hostArg0, "--after", after };
     CtrHbldr_setNext(hostPath, args, 3);
 }
+
+#ifdef ENABLE_WAD16 // R216b..R216b4: UNDERTALE only (ctr_r216_ut.h)
+#line 659
+// R216b (change auditfixe2, c26rev2 R216 and R216b). The three renames on this file's line 2, the line after #line 52 and
+// the line before ctr_hbldr.h's include (before the includes that declare them, so the declarations are renamed with
+// the calls, and GCC's call graph keeps its shape: a callee changed or added in a body reorders this file's output):
+//  - svcSleepThread is CtrArgcrash_labSleep (z_argcrash.c's end), which sleeps the same way. A sleep of a second or
+//    more lets go of the crash screen's painter claim if this thread holds it: standAside's and CtrLab_poll's sleeps
+//    for good (R216 finding 1: a thread that held the claim, then faulted while another thread was leaving, kept it
+//    for good, and the thread that left could only light the screens); fallbackMain's never holds it.
+//  - CtrExitFiles_labExit is CtrSaveguard_exit (ctr_file_system.c's end): the saves queued before the fatal claim get
+//    up to their deadline to reach the card, then the exit as before (R216 finding 2; leave, standAside, fallbackMain).
+//  - LabProto_append is CtrSaveguard_labAppend (ctr_file_system.c's end), which asks the claim's clock
+//    (CtrLab_claimMark, below), then appends as before: the claimer's own report fixes the clock early.
+// R216b4 (c26rev2 R216b3 finding 1; the ruling: a save queued before the fault gets 2 s from the claim itself,
+// and no write starts later). Each way in to a claim reads the clock first, a few instructions before its claim:
+// claim() itself can't change (it is inlined into its callers, and the exception handler's starts with it), so the
+// entries are wrapped instead, each a trampoline below that reads the clock (CtrLab_entryMark) and goes on:
+//  - the exception handler: both threadOnException registrations name CtrLab_entryWrap in place of entryHandler (the
+//    same literal, another symbol), which goes on to entryHandler;
+//  - CtrLab_fail and CtrLab_aimHost (its own exit): CMakeLists.txt's --wrap sends every caller in another file
+//    (main.c, z_argcrash.c, z_leavekeep.c; none in this one) to __wrap_CtrLab_fail and __wrap_CtrLab_aimHost;
+//  - a hang: guardMain's one-second sleep is CtrLab_guardWake (a rename on the blank line before guardMain), which
+//    sleeps as before (CtrLab_guardSleep, the stack check included), then reads the clock: the hang checks and
+//    hangLeave's claim follow in the same pass of its loop.
+// labEntryAt is the latest of those reads made while no claim had been made: the clock (64-bit ticks, which never wrap)
+// is read, then leaver (a fence between), and the read is kept only if leaver was still NULL, so every value kept came
+// before the claim's compare-exchange. The claimer's own read is kept (it sees no claim yet), so the latest is no
+// earlier than its read, a few instructions before its claim: the latest of them, not the earliest, so another
+// thread's older read (a thread that read the clock and never claimed, the guard's pass a second ago) can't cut the
+// claimer's 2 s short. No look by an observer counts any more: R216b3's labClearAt, the last clock seen by any
+// CtrLab_fatalAt before the claim, could be seconds old at the claim (a card write stalled before the fault), and
+// dropped a save queued before it (c26rev2's production_stale fixture).
+// labFatalAt: the fatal claim's clock: 0 before the claim, then labEntryAt in svcGetSystemTick() >> 18 (about 1 ms:
+// 1,023 a second; odd, at most 1 early, never 0), fixed by the first CtrLab_fatalAt after the claim (the claimer's
+// report, a save's stamp, the writer, the crash screen; compare-exchange from 0). It reads leaver with an acquire load
+// that sees the claim, so it sees the claimer's labEntryAt (made before the claim's compare-exchange) or a later one,
+// itself made before the claim. With none at all (no wrapped entry: not a path this file has), the clock is 1 and the
+// deadline is long past. Read and written only atomically; leaver is read through a plain pointer, as CtrLab_aimHost
+// reads it (a volatile access here makes GCC name a temporary, which renumbers crashMain's switch table). Own sections,
+// after every other late input (late_reserve.ld: .text_labfatal, .bss.labfatal_late).
+static u32 labFatalAt __attribute__((section(".bss.labfatal_late")));
+static u64 labEntryAt __attribute__((section(".bss.labfatal_late")));
+
+static __attribute__((noinline, section(".text_labfatal"))) u32 labFatalLatch(void) {
+    u64 entry = __atomic_load_n(&labEntryAt, __ATOMIC_ACQUIRE);
+    u32 before = entry != 0 ? ((u32) (entry >> 18) - 1u) | 1u : 1u;
+    u32 latched = 0;
+    if (__atomic_compare_exchange_n(&labFatalAt, &latched, before, false, __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE))
+        return before;
+    return latched;
+}
+
+// The fatal claim's clock, for the save guard and the crash screen: 0 while no thread has claimed the leave (a fault,
+// CtrLab_fail, a hang, or CtrLab_aimHost's own exit); after the claim, labFatalAt, fixed now if no caller has yet.
+__attribute__((noinline, section(".text_labfatal"))) u32 CtrLab_fatalAt(void) {
+    const void* const* who = (const void* const*)&leaver;
+    u32 at = __atomic_load_n(&labFatalAt, __ATOMIC_ACQUIRE);
+    if (at != 0) return at;
+    __atomic_thread_fence(__ATOMIC_SEQ_CST);
+    if (__atomic_load_n(who, __ATOMIC_ACQUIRE) != NULL) return labFatalLatch();
+    return 0;
+}
+
+// CtrSaveguard_labAppend's look at the clock, before every LabProto_append of this file (any thread, before or after
+// a claim).
+__attribute__((noinline, section(".text_labfatal"))) void CtrLab_claimMark(void) {
+    (void) CtrLab_fatalAt();
+}
+
+// Each way in to a claim (the trampolines below), any thread, before or after a claim: labEntryAt is raised to the
+// clock read here if no claim has been made yet. __sync's compare-and-swap (full barriers) answers the old value: a
+// loop on __atomic_compare_exchange_n's addressable expected value makes GCC name two temporaries, which renumbers
+// crashMain's switch table.
+__attribute__((noinline, section(".text_labfatal"))) void CtrLab_entryMark(void) {
+    const void* const* who = (const void* const*)&leaver;
+    u64 now = svcGetSystemTick();
+    __atomic_thread_fence(__ATOMIC_SEQ_CST);
+    if (__atomic_load_n(who, __ATOMIC_ACQUIRE) != NULL) return;
+    u64 seen = __atomic_load_n(&labEntryAt, __ATOMIC_ACQUIRE);
+    while (now > seen) {
+        u64 got = __sync_val_compare_and_swap(&labEntryAt, seen, now);
+        if (got == seen) break;
+        seen = got;
+    }
+}
+
+// The trampolines (and CtrLab_entryWrap, the last function): the clock, then the way in as before, with its
+// arguments and return address (CtrLab_fail's report names its caller) as they came. The exception handler's runs on the thread's small entry stack: 16 bytes more, given
+// back before entryHandler starts. CtrLab_guardWake's push comes before the sleep (the stack is there then) and its pop
+// after CtrLab_guardSleep has found the stack still there.
+__asm__(
+    "    .section .text_labfatal,\"ax\",%progbits\n"
+    "    .arm\n"
+    "    .align 2\n"
+    "    .global __wrap_CtrLab_fail\n"
+    "    .type __wrap_CtrLab_fail, %function\n"
+    "__wrap_CtrLab_fail:\n"
+    "    push {r0, r1, r2, lr}\n"
+    "    bl CtrLab_entryMark\n"
+    "    pop {r0, r1, r2, lr}\n"
+    "    b __real_CtrLab_fail\n"
+    "    .size __wrap_CtrLab_fail, . - __wrap_CtrLab_fail\n"
+    "    .global __wrap_CtrLab_aimHost\n"
+    "    .type __wrap_CtrLab_aimHost, %function\n"
+    "__wrap_CtrLab_aimHost:\n"
+    "    push {r0, r1, r2, lr}\n"
+    "    bl CtrLab_entryMark\n"
+    "    pop {r0, r1, r2, lr}\n"
+    "    b __real_CtrLab_aimHost\n"
+    "    .size __wrap_CtrLab_aimHost, . - __wrap_CtrLab_aimHost\n"
+    "    .global CtrLab_guardWake\n"
+    "    .type CtrLab_guardWake, %function\n"
+    "CtrLab_guardWake:\n"
+    "    push {r4, lr}\n"
+    "    bl CtrLab_guardSleep\n"
+    "    bl CtrLab_entryMark\n"
+    "    pop {r4, pc}\n"
+    "    .size CtrLab_guardWake, . - CtrLab_guardWake\n"
+    "    .previous\n");
+
+// The exception handler's trampoline, as the three above. In C (naked: no code of GCC's own), so that entryHandler is
+// still a C reference of this file's, as it was the registrations': GCC keeps it, with the same code and statics in
+// the same order (with `used` in its place, GCC emits it earlier, and this file's statics move).
+__attribute__((naked, target("arm"), section(".text_labfatal"))) void CtrLab_entryWrap(
+    __attribute__((unused)) ERRF_ExceptionInfo* info, __attribute__((unused)) CpuRegisters* regs) {
+    __asm__("push {r0, r1, r2, lr}\n\tbl CtrLab_entryMark\n\tpop {r0, r1, r2, lr}\n\tb %c0\n" : : "i"(entryHandler));
+}
+#endif

@@ -66,6 +66,9 @@ class Card(unittest.TestCase):
 
     def stage(self, tx, data):
         put(tx.new, self.base + 'data.win', data)
+        # This fixture publishes a whole selected model, not new shared data
+        # beside an executable still bound to the previous copy (R241-1).
+        put(tx.new, self.base + 'undertale-3ds-o3ds.3dsx', b'program built for ' + data)
 
     def copy(self):
         return deliver.copy_with_textures(str(self.card), self.items, UT, str(self.source), str(self.work),

@@ -19,8 +19,8 @@ def validate(path, source_root):
     path = Path(path)
     data = path.read_bytes()
     if len(data) != SIZE or hashlib.sha256(data).hexdigest() != SHA256:
-        raise ValueError('Windows sound encoder does not match its size/SHA-256 pin')
+        raise ValueError('Windows sound encoder does not match its size/SHA-256 pin: ' + str(path))
     source = Path(source_root) / 'tools/audio/dspadpcm.c'
     if hashlib.sha256(source.read_bytes()).hexdigest() != SOURCE_SHA256:
-        raise ValueError('Windows sound encoder does not match the exported C source')
-    return path
+        raise ValueError('Windows sound encoder does not match the exported C source: ' + str(source))
+    return data

@@ -10,6 +10,10 @@ credits follow, from docs/release/credits-port.txt.
 Without game data (or if the data has no such credits) the file holds this port's credits only.
 
 Output lines: a colour letter (Y yellow, G grey, W white) and the text; an empty line is a gap.
+UNDERTALE's text ends with END_GAP empty lines (CREDCLIP-002). The page stops its roll with the text's last line at
+y 226 (ctr_legal.c: lui.height - 112), so 8 more lines (14 px each) stop it with the last name, the port's own credit, at
+y 114, the middle of the 240-row page (maintainer, 11-06: "it stops when my name is in the middle"). DELTARUNE's text has no
+gap and stays as it was: that fix was captured on UNDERTALE only (z_credclip.c is linked into UNDERTALE only).
 
        py -3 -I tools/aot/credits.py --game <undertale|deltarune> --romfs <build>/romfs [--data <game folder>]
 """
@@ -22,6 +26,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 ROOT = os.path.dirname(os.path.dirname(HERE))
 PORT = os.path.join(ROOT, 'docs', 'release', 'credits-port.txt')
+END_GAP = 8  # UNDERTALE: empty lines after the last name, so the roll stops with it in the page's middle (see above)
 
 OP_POP, OP_CONV, OP_POPZ, OP_DUP, OP_PUSH, OP_PUSHLOC, OP_PUSHGLB, OP_PUSHBLTN, OP_PUSHI, OP_CALL = (
     0x45, 0x07, 0x9E, 0x86, 0xC0, 0xC1, 0xC2, 0xC3, 0x84, 0xD9)
@@ -148,9 +153,17 @@ def credits(game, data):
     if not game_lines:
         print('credits: no %s credits found in the game data; the page has this port\'s only' % game.upper())
     lines = game_lines + ([''] * 3 if game_lines else []) + port('Y' if game == 'undertale' else 'G')
+    return finish(game, lines)
+
+
+def finish(game, lines):
+    """The file's text: no empty lines at either end, then UNDERTALE's END_GAP."""
+    lines = list(lines)
     while lines and not lines[0]:
         lines.pop(0)
-    return '\n'.join(lines) + '\n'
+    while lines and not lines[-1]:
+        lines.pop()
+    return '\n'.join(lines + [''] * (END_GAP if game == 'undertale' else 0)) + '\n'
 
 
 def main():

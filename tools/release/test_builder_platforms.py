@@ -295,7 +295,7 @@ class SteamPlatformTests(fixtures.MusicFixtures):
                 self.assertIn(str(dest), roots)
                 probes = discover.Probes(steam_roots=roots, gog_dirs=[], platform=platform)
                 self.assertTrue(discover.verify_copy("undertale", t.folder, probes, ALLOW).accepted)
-                # Unknown bytes and missing ownership still fail on every platform.
+                # Unknown bytes still fail on every platform.
                 stamp = os.stat(os.path.join(t.folder, "data.win"))
                 write(os.path.join(t.folder, "data.win"), UT[:-1] + b"!")
                 os.utime(os.path.join(t.folder, "data.win"), ns=(stamp.st_atime_ns, stamp.st_mtime_ns))
@@ -305,7 +305,7 @@ class SteamPlatformTests(fixtures.MusicFixtures):
         # A Mac bundle is a known layout (verify_game.MACOS_UNDERTALE); its unknown file is an unknown version.
         for platform, name, expected, status in [
                 ("linux", "assets/game.unx", "Compatibility", discover.vg.MISSING_FILES),
-                ("darwin", "UNDERTALE.app/Contents/Resources/game.ios", "download_depot 391540 391541",
+                ("darwin", "UNDERTALE.app/Contents/Resources/game.ios", "Restore the original game files",
                  discover.vg.UNKNOWN_VERSION)]:
             with tempfile.TemporaryDirectory() as tmp:
                 t = SteamTree(tmp)
@@ -318,21 +318,21 @@ class SteamPlatformTests(fixtures.MusicFixtures):
                 self.assertIn(expected, result.message)
                 self.assertEqual(result.result.status, status)
 
-    def test_loose_download_depot_is_not_an_install(self):
+    def test_loose_download_depot_accepts_known_files(self):
         from test_builder import game_folder
         with tempfile.TemporaryDirectory() as tmp:
             t = SteamTree(tmp)
             depot = game_folder(str(Path(tmp) / "Steam/steamapps/content/app_391540/depot_391541"))
             probes = t.probes()
             probes.platform = "darwin"
-            self.assertFalse(discover.verify_copy("undertale", depot, probes, ALLOW).accepted)
+            self.assertTrue(discover.verify_copy("undertale", depot, probes, ALLOW).accepted)
 
-    def test_signed_out_account_refused_on_unix(self):
+    def test_signed_out_account_does_not_gate_known_files(self):
         with tempfile.TemporaryDirectory() as tmp:
             t = SteamTree(tmp, owner="76561190000000099")
             probes = t.probes()
             probes.platform = "linux"
-            self.assertFalse(discover.verify_copy("undertale", t.folder, probes, ALLOW).accepted)
+            self.assertTrue(discover.verify_copy("undertale", t.folder, probes, ALLOW).accepted)
 
 
 class PipelinePlatformTests(unittest.TestCase):
@@ -352,8 +352,9 @@ class PipelinePlatformTests(unittest.TestCase):
             import json
             (source / pipeline.products.release_contract.DESCRIPTOR).write_text(json.dumps(descriptor))
         def prepare(target):
-            return pipeline.Build(pipeline.products.PRODUCTS['undertale'], tc('win32'),
-                str(work), target, str(Path(tmp) / 'invented-game'), source_root=str(source)).prepare()
+            with mock.patch.object(pipeline.library_pins, 'select', return_value={'packages': [], 'shims': None}):
+                return pipeline.Build(pipeline.products.PRODUCTS['undertale'], tc('win32'),
+                    str(work), target, str(Path(tmp) / 'invented-game'), source_root=str(source)).prepare()
         seal()
         return source, work / 'src', art, seal, prepare
 
@@ -656,22 +657,504 @@ class SupportPrivacyTests(unittest.TestCase):
             self.assertIn("RESULT: PASS", support)
 
 
+class CompilerPreflightReviewTests(unittest.TestCase):
+    def setUp(self):
+        self.tested = fixtures.products.release_contract.read(pipeline.SOURCE_ROOT)['tested_compiler']
+        self.url = 'https://github.com/ethancawse/undertale-3ds/releases'
+
+    def query(self, host, mode):
+        detected = tc(host)
+        detected.root = '/fixture/devkitpro'
+        detected.bash = '/fixture/msys2/bash.exe'
+        calls = []
+        def run(argv, timeout):
+            self.assertEqual(timeout, 5)
+            calls.append(tuple(argv))
+            if argv[-1] in ('devkitarm-gcc', 'pacman -Q devkitarm-gcc'):
+                count = calls.count(tuple(argv))
+                if mode == 'timeout' or mode == 'cold' and count == 1:
+                    raise subprocess.TimeoutExpired(argv, timeout)
+                if mode == 'failed':
+                    return 1, 'fixture query failed'
+                if mode == 'newer':
+                    return 0, 'devkitarm-gcc 17.1.0-1\n'
+                if mode == 'ambiguous':
+                    return 0, 'devkitarm-gcc 16.1.0-1\ndevkitarm-gcc 17.1.0-1\n'
+                return 0, 'profile message\nwarning: fixture\ndevkitARM r68-1\ndevkitarm-gcc 16.1.0-1\n'
+            return 0, {'-dumpversion': '17.1.0\n' if mode == 'newer' else '16.1.0\n',
+                       '-dumpmachine': 'arm-none-eabi\n',
+                       '--version': 'arm-none-eabi-gcc (devkitARM) %s\nCopyright\n' %
+                                    ('17.1.0' if mode == 'newer' else '16.1.0')}[argv[-1]]
+        return toolchain.compiler_details(detected, run=run), calls
+
+    def test_extra_package_output_and_one_cold_retry_are_accepted(self):
+        for host in ('win32', 'linux', 'darwin'):
+            for mode, count in (('extra', 4), ('cold', 5)):
+                with self.subTest(host=host, mode=mode):
+                    info, calls = self.query(host, mode)
+                    self.assertEqual(len(calls), count)
+                    self.assertEqual(info['package'], '16.1.0-1')
+                    self.assertFalse(info['errors'])
+                    toolchain.require_release_compiler(info, self.tested, host, self.url)
+
+    def test_timeout_failure_and_ambiguous_query_say_retry_with_exact_command(self):
+        for host in ('win32', 'linux', 'darwin'):
+            for mode in ('timeout', 'failed', 'ambiguous'):
+                with self.subTest(host=host, mode=mode):
+                    info, calls = self.query(host, mode)
+                    self.assertEqual(len(calls), 5)
+                    with self.assertRaises(toolchain.Refused) as caught:
+                        toolchain.require_release_compiler(info, self.tested, host, self.url)
+                    text = str(caught.exception)
+                    for phrase in ("Couldn't check", 'Try again', info['queries']['package'], '16.1.0-1'):
+                        self.assertIn(phrase, text)
+                    for phrase in ('unknown', 'reinstall', '-Syu', 'newer compiler'):
+                        self.assertNotIn(phrase, text)
+
+    def test_newer_compiler_names_found_required_and_releases_without_upgrade_advice(self):
+        for host in ('win32', 'linux', 'darwin'):
+            info, _ = self.query(host, 'newer')
+            with self.assertRaises(toolchain.Refused) as caught:
+                toolchain.require_release_compiler(info, self.tested, host, self.url)
+            text = str(caught.exception)
+            for phrase in ('17.1.0', '16.1.0-1', self.url, 'build has not started'):
+                self.assertIn(phrase, text)
+            for phrase in ('unknown', '-Syu'):
+                self.assertNotIn(phrase, text)
+            self.assertIn('17.1.0', toolchain.compiler_status(info, self.tested))
+            self.assertIn('Required', toolchain.compiler_status(info, self.tested))
+
+    def test_older_compiler_offers_update_instead_of_a_newer_builder(self):
+        for host in ('win32', 'linux', 'darwin'):
+            for package in ('15.2.0-1', '16.1.0-0'):
+                with self.subTest(host=host, package=package):
+                    info = dict(version=package.rsplit('-', 1)[0], package=package,
+                                vendor='devkitARM', target='arm-none-eabi', errors={})
+                    with self.assertRaises(toolchain.Refused) as caught:
+                        toolchain.require_release_compiler(info, self.tested, host, self.url)
+                    text = str(caught.exception)
+                    self.assertIn('Click Update devkitPro', text)
+                    self.assertIn(package, text)
+                    self.assertNotIn('Do not update', text)
+                    self.assertNotIn('newer compiler', text)
+
+    def test_no_compiler_yet_has_a_neutral_status(self):
+        for host in ('win32', 'linux', 'darwin'):
+            detected = tc(host)
+            detected.root = None
+            query = mock.Mock(side_effect=AssertionError('No compiler to query'))
+            info = toolchain.compiler_details(detected, run=query)
+            self.assertIn('Found: Not installed yet.', toolchain.compiler_status(info, self.tested))
+            query.assert_not_called()
+
+    def test_query_failure_or_newer_compiler_stops_before_build_preparation(self):
+        for mode in ('timeout', 'failed', 'newer'):
+            with self.subTest(mode=mode), tempfile.TemporaryDirectory() as tmp:
+                src = fixtures.fake_source(tmp)
+                detected = tc('win32')
+                detected.root = '/fixture/devkitpro'
+                info, _ = self.query('win32', mode)
+                process = mock.Mock()
+                build = pipeline.Build(fixtures.products.PRODUCTS['undertale'], detected, str(Path(tmp) / 'work'),
+                                       'o3ds', '/fixture/game', source_root=src, popen=process)
+                with mock.patch.object(toolchain, 'compiler_details', return_value=info), \
+                        mock.patch.object(build, 'prepare') as prepare, self.assertRaises(pipeline.BuildFailed):
+                    build.run()
+                prepare.assert_not_called()
+                process.assert_not_called()
+                self.assertFalse(Path(build.log_path).exists())
+
+    def setup_query(self, offered='16.1.0-1', failure=None, post='16.1.0-1', cold=False):
+        calls = []
+        def run(argv, timeout):
+            self.assertEqual(timeout, 5)
+            calls.append(tuple(argv))
+            if argv[-1].startswith('https://') or argv[-1] == 'pacman -Si devkitarm-gcc':
+                if failure == 'timeout' or cold and calls.count(tuple(argv)) == 1:
+                    raise subprocess.TimeoutExpired(argv, timeout)
+                if failure == 'failed':
+                    return 1, 'fixture query failure'
+                if failure == 'malformed':
+                    return 0, '<html>not metadata</html>'
+                if argv[-1] == 'pacman -Si devkitarm-gcc':
+                    return 0, 'Name : devkitarm-gcc\nVersion : %s\nDescription : fixture\n' % offered
+                return 0, 'profile message\nother-package 9.0-1\ndevkitarm-gcc %s\n' % offered
+            return 0, {'-dumpversion': post.rsplit('-', 1)[0], '-dumpmachine': 'arm-none-eabi',
+                       '--version': 'arm-none-eabi-gcc (devkitARM) ' + post.rsplit('-', 1)[0],
+                       'devkitarm-gcc': 'devkitarm-gcc ' + post,
+                       'pacman -Q devkitarm-gcc': 'devkitarm-gcc ' + post}[argv[-1]]
+        return run, calls
+
+    def test_newer_repository_stops_every_ut_mutation_before_download_or_record(self):
+        for host in ('win32', 'linux', 'darwin'):
+            steps = toolchain.full_plan('/fixture/tools', '/fixture/downloads', root='/fixture/devkitpro', platform=host)
+            steps.append(toolchain.update_step('/fixture/devkitpro', platform=host))
+            protected = [s for s in steps if s.key in ('devkitpro', 'packages', 'update')]
+            self.assertEqual({s.key for s in protected}, {'devkitpro', 'packages', 'update'})
+            for step in protected:
+                with self.subTest(host=host, step=step.key):
+                    query, calls = self.setup_query('17.1.0-1')
+                    actions, log, stage = mock.Mock(), mock.Mock(), mock.Mock()
+                    actions.query = query
+                    with mock.patch('cleanup.record_before') as record, self.assertRaises(toolchain.Refused) as caught:
+                        toolchain.run_step(step, log, False, actions, stage=stage, work='/fixture/no-write',
+                                           game='undertale', tested=self.tested, releases_url=self.url)
+                    self.assertFalse(actions.mock_calls)
+                    record.assert_not_called()
+                    self.assertEqual(len(calls), 1)
+                    self.assertIn('a newer compiler', str(caught.exception))
+                    self.assertIn('Nothing has been installed or updated', str(caught.exception))
+                    self.assertIn(self.url, str(caught.exception))
+
+    def test_fresh_setup_and_update_proceed_for_qualified_repository_and_check_afterwards(self):
+        for host in ('win32', 'linux', 'darwin'):
+            for key in ('devkitpro', 'packages', 'update'):
+                with self.subTest(host=host, key=key), tempfile.TemporaryDirectory() as tmp:
+                    query, calls = self.setup_query(cold=True)
+                    events = []
+                    # Real Windows bootstrap includes its pinned download and elevated installer.
+                    step = toolchain.full_plan(tmp, tmp, platform='win32', want_cia=False)[0] if (
+                        host == 'win32' and key == 'devkitpro') else toolchain.Step(
+                            key, 'fixture setup', 'fixture consent', [], [['fixture-install']], platform=host)
+                    def install(*args):
+                        events.append('install')
+                        if host == 'win32' and key == 'devkitpro':
+                            write(str(Path(tmp) / 'devkitpro/devkitARM/bin/arm-none-eabi-gcc.exe'), b'fixture')
+                            write(str(Path(tmp) / 'devkitpro/msys2/usr/bin/bash.exe'), b'fixture')
+                        return 0
+                    actions = toolchain.Actions(query=query, download=lambda *a, **kw: events.append('download'),
+                                                elevated=install, run=install)
+                    self.assertTrue(toolchain.run_step(step, lambda s: None, False, actions,
+                                    root=str(Path(tmp) / 'devkitpro'), game='undertale',
+                                    tested=self.tested, releases_url=self.url))
+                    self.assertIn('install', events)
+                    self.assertTrue(calls[0][-1].startswith('https://'))
+                    if key == 'devkitpro' and host != 'win32':
+                        self.assertTrue(calls[-1][-1].startswith('https://'))
+                    else:
+                        self.assertIn(calls[-1][-1], ('devkitarm-gcc', 'pacman -Q devkitarm-gcc'))
+
+    def test_unix_bootstrap_with_existing_compiler_checks_it_afterwards(self):
+        for host in ('linux', 'darwin'):
+            with self.subTest(host=host), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp) / 'devkitpro'
+                write(str(root / 'devkitARM/bin/arm-none-eabi-gcc'), b'fixture')
+                query, calls = self.setup_query()
+                step = toolchain.Step('devkitpro', 'fixture', 'fixture', [], [['fixture-install']], platform=host)
+                self.assertTrue(toolchain.run_step(step, mock.Mock(), False,
+                                toolchain.Actions(query=query, run=lambda *a: 0), root=str(root),
+                                game='undertale', tested=self.tested, releases_url=self.url))
+                self.assertEqual(calls[-1][-1], 'devkitarm-gcc')
+
+    def test_failed_repository_check_proceeds_with_setup_and_still_checks_afterwards(self):
+        for host in ('win32', 'linux', 'darwin'):
+            for key in ('devkitpro', 'packages', 'update'):
+                for mode in ('failed', 'timeout', 'malformed'):
+                    with self.subTest(host=host, step=key, failure=mode), tempfile.TemporaryDirectory() as tmp:
+                        root = Path(tmp) / 'devkitpro'
+                        self.assertFalse(root.exists())  # A first-time player has no devkitPro yet.
+                        query, calls = self.setup_query(failure=mode)
+                        events, logged = [], []
+                        def install(*args):
+                            events.append('install')
+                            if host == 'win32' and key == 'devkitpro':
+                                write(str(root / 'devkitARM/bin/arm-none-eabi-gcc.exe'), b'fixture')
+                                write(str(root / 'msys2/usr/bin/bash.exe'), b'fixture')
+                            return 0
+                        step = (toolchain.full_plan(tmp, tmp, platform=host, want_cia=False)[0]
+                                if host == 'win32' and key == 'devkitpro' else toolchain.Step(
+                                    key, 'fixture setup', 'fixture consent', [], [['fixture-install']], platform=host))
+                        actions = toolchain.Actions(query=query, download=lambda *a, **kw: events.append('download'),
+                                                    elevated=install, run=install)
+                        self.assertTrue(toolchain.run_step(step, logged.append, False, actions, root=str(root),
+                                        game='undertale', tested=self.tested, releases_url=self.url))
+                        self.assertIn('install', events)
+                        if host == 'win32' and key == 'devkitpro':
+                            self.assertEqual(events, ['download', 'install'])
+                        self.assertIn("Couldn't check the compiler version", '\n'.join(logged))
+                        self.assertIn('Continuing setup', '\n'.join(logged))
+                        self.assertNotIn('Click Try again', '\n'.join(logged))
+                        if key == 'devkitpro' and host != 'win32':
+                            self.assertEqual(len(calls), 4)  # Both bootstrap checks tolerate query failure.
+                        else:
+                            self.assertIn(calls[-1][-1], ('devkitarm-gcc', 'pacman -Q devkitarm-gcc'))
+
+    def test_failed_repository_query_does_not_bypass_wrong_post_install_compiler(self):
+        for mode in ('failed', 'timeout', 'malformed'):
+            with self.subTest(mode=mode), tempfile.TemporaryDirectory() as tmp:
+                write(str(Path(tmp) / 'devkitARM/bin/arm-none-eabi-gcc.exe'), b'fixture')
+                query, _ = self.setup_query(failure=mode, post='17.1.0-1')
+                install = mock.Mock(return_value=0)
+                step = toolchain.Step('update', 'fixture', 'fixture', [], [['fixture-install']], platform='win32')
+                with self.assertRaisesRegex(toolchain.Refused, '17.1.0'):
+                    toolchain.run_step(step, mock.Mock(), False, toolchain.Actions(query=query, run=install),
+                                       root=tmp, game='undertale', tested=self.tested, releases_url=self.url)
+                install.assert_called_once()
+
+    def test_windows_installer_without_3ds_component_explains_how_to_add_it(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            write(str(Path(tmp) / 'compiler-missing/msys2/usr/bin/bash.exe'), b'fixture')
+            query, calls = self.setup_query()
+            install = mock.Mock(return_value=0)
+            step = toolchain.full_plan(tmp, tmp, platform='win32', want_cia=False)[0]
+            with self.assertRaises(toolchain.Refused) as caught:
+                toolchain.run_step(step, mock.Mock(), False,
+                    toolchain.Actions(query=query, download=mock.Mock(), elevated=install),
+                    root=str(Path(tmp) / 'compiler-missing'), game='undertale', tested=self.tested, releases_url=self.url)
+            text = str(caught.exception)
+            self.assertIn("The 3DS compiler wasn't found", text)
+            self.assertIn(str(Path(tmp) / 'compiler-missing'), text)
+            self.assertIn('Try again', text)
+            self.assertIn('tick 3DS Development', text)
+            self.assertIn('Install beside the 3DS tools', text)
+            self.assertNotIn('busy', text)
+            install.assert_called_once()
+            self.assertEqual(len(calls), 1)
+
+            # Exercise the real failure handler without opening a Tk window.
+            import gui
+            box = gui.StepBox.__new__(gui.StepBox)
+            box.go = mock.Mock()
+            box.bar = mock.Mock()
+            box.show_btn = mock.Mock()
+            box.page_btn = None
+            box._say = mock.Mock()
+            box.failed(text)
+            box.go.config.assert_called_once_with(text='Try again')
+            box.go.state.assert_called_once_with(['!disabled'])
+
+    def test_update_without_a_compiler_succeeds_and_names_install_packages(self):
+        for host in ('win32', 'linux', 'darwin'):
+            with self.subTest(host=host), tempfile.TemporaryDirectory() as tmp:
+                query, calls = self.setup_query()
+                def missing_compiler(argv, timeout):
+                    if '-dumpversion' in argv or argv[-1] in ('-dumpmachine', '--version'):
+                        raise FileNotFoundError('fixture compiler not installed')
+                    return query(argv, timeout)
+                install, log, stage = mock.Mock(return_value=0), mock.Mock(), mock.Mock()
+                step = toolchain.Step('update', 'fixture', 'fixture', [], [['fixture-update']], platform=host)
+                self.assertTrue(toolchain.run_step(step, log, False,
+                    toolchain.Actions(query=missing_compiler, run=install), root=tmp, stage=stage,
+                    game='undertale', tested=self.tested, releases_url=self.url))
+                install.assert_called_once()
+                notice = ("Update finished. The 3DS compiler isn't installed yet; "
+                          "use Install beside the 3DS tools on the compiler page.")
+                log.assert_any_call(notice)
+                stage.assert_any_call('notice', notice)
+                self.assertNotIn('busy', str(log.call_args_list))
+
+    def test_packages_without_a_compiler_refuses_instead_of_saying_update_finished(self):
+        for host in ('win32', 'linux', 'darwin'):
+            with self.subTest(host=host), tempfile.TemporaryDirectory() as tmp:
+                query, _ = self.setup_query()
+                def missing_compiler(argv, timeout):
+                    if '-dumpversion' in argv or argv[-1] in ('-dumpmachine', '--version'):
+                        raise FileNotFoundError('fixture compiler not installed')
+                    return query(argv, timeout)
+                install, log, stage = mock.Mock(return_value=0), mock.Mock(), mock.Mock()
+                step = toolchain.Step('packages', 'fixture', 'fixture', [], [['fixture-install']], platform=host)
+                with self.assertRaises(toolchain.Refused):
+                    toolchain.run_step(step, log, False, toolchain.Actions(query=missing_compiler, run=install),
+                                       root=tmp, stage=stage, game='undertale', tested=self.tested,
+                                       releases_url=self.url)
+                install.assert_called_once()
+                self.assertNotIn('Update finished', str(log.call_args_list) + str(stage.call_args_list))
+
+    def test_update_missing_compiler_notice_stays_in_the_step_box_after_success(self):
+        import gui
+        for host in ('win32', 'linux', 'darwin'):
+            with self.subTest(host=host), tempfile.TemporaryDirectory() as tmp:
+                query, _ = self.setup_query()
+                actions = toolchain.Actions(query=query, run=mock.Mock(return_value=0))
+                page = gui.ToolchainPage.__new__(gui.ToolchainPage)
+                page.app = mock.Mock(state=gui.State('undertale'))
+                page.st.tc = toolchain.Toolchain(tmp, '/fixture/bash', [], [], [], None, None, None, host)
+                page.app.opts = mock.Mock(toolchain_dry_run=False, work=None)
+                page.app.call = lambda fn, *args: fn(*args)
+                page.app.work = lambda job, done, **kw: done(job())
+                page.running_step, page.failures = False, {}
+                for name in ('result', 'update_buttons', 'write', 'detect'):
+                    setattr(page, name, mock.Mock())
+                box = mock.Mock(step=toolchain.Step('update', 'fixture', 'fixture', [],
+                                                    [['fixture-update']], platform=host))
+                with mock.patch.object(toolchain, 'Actions', return_value=actions):
+                    self.assertTrue(page.run_step(box, confirmed=True))
+                notice = ("Update finished. The 3DS compiler isn't installed yet; "
+                          "use Install beside the 3DS tools on the compiler page.")
+                box.succeeded.assert_called_once()
+                box._say.assert_called_once_with(notice)
+                self.assertLess(box.mock_calls.index(mock.call.succeeded()),
+                                box.mock_calls.index(mock.call._say(notice)))
+                page.result.config.assert_called_with(text=notice)
+                page.detect.assert_called_once()
+                page.app.ask.assert_not_called()
+
+    def test_update_with_an_unreadable_present_compiler_still_refuses(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            write(str(Path(tmp) / 'devkitARM/bin/arm-none-eabi-gcc.exe'), b'fixture')
+            query, calls = self.setup_query()
+            def unreadable_compiler(argv, timeout):
+                if '-dumpversion' in argv or argv[-1] in ('-dumpmachine', '--version'):
+                    raise OSError('fixture compiler cannot run')
+                return query(argv, timeout)
+            step = toolchain.Step('update', 'fixture', 'fixture', [], [['fixture-update']], platform='win32')
+            with self.assertRaisesRegex(toolchain.Refused, "Couldn't check the compiler"):
+                toolchain.run_step(step, mock.Mock(), False,
+                    toolchain.Actions(query=unreadable_compiler, run=lambda *a: 0), root=tmp,
+                    game='undertale', tested=self.tested, releases_url=self.url)
+
+    def test_post_install_mismatch_refuses_success(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            write(str(Path(tmp) / 'devkitARM/bin/arm-none-eabi-gcc.exe'), b'fixture')
+            query, calls = self.setup_query(post='17.1.0-1')
+            install = mock.Mock(return_value=0)
+            step = toolchain.Step('update', 'fixture', 'fixture', [], [['fixture-install']], platform='win32')
+            with self.assertRaises(toolchain.Refused) as caught:
+                toolchain.run_step(step, mock.Mock(), False, toolchain.Actions(query=query, run=install),
+                                   root=tmp, game='undertale', tested=self.tested, releases_url=self.url)
+            install.assert_called_once()
+            self.assertIn('17.1.0', str(caught.exception))
+
+    def test_windows_packages_checks_local_sync_version_without_partial_upgrade(self):
+        self.assertEqual(toolchain.sync_package_version('Name : another\nVersion : 99.0-1\n\n'
+                         'Name : devkitarm-gcc\nVersion : 16.1.0-1\n'), '16.1.0-1')
+        query, calls = self.setup_query()
+        def run(argv, timeout):
+            if argv[-1] == 'pacman -Si devkitarm-gcc':
+                return 0, 'Name : devkitarm-gcc\nVersion : 17.1.0-1\n'
+            return query(argv, timeout)
+        step = next(s for s in toolchain.full_plan('/fixture/tools', '/fixture/downloads', platform='win32')
+                    if s.key == 'packages')
+        install = mock.Mock()
+        with self.assertRaises(toolchain.Refused):
+            toolchain.run_step(step, mock.Mock(), False, toolchain.Actions(query=run, run=install),
+                               game='undertale', tested=self.tested, releases_url=self.url)
+        install.assert_not_called()
+        for host in ('win32', 'linux', 'darwin'):
+            self.assertNotIn('--ignore', str(toolchain.update_step(None, platform=host).commands))
+
+    def test_windows_stale_sync_list_says_update_not_get_another_builder(self):
+        query, _ = self.setup_query()
+        def run(argv, timeout):
+            if argv[-1] == 'pacman -Si devkitarm-gcc':
+                return 0, 'Name : devkitarm-gcc\nVersion : 15.2.0-1\n'
+            return query(argv, timeout)
+        step = toolchain.Step('packages', 'fixture', 'fixture', [], [['fixture-install']], platform='win32')
+        install = mock.Mock()
+        with self.assertRaises(toolchain.Refused) as caught:
+            toolchain.run_step(step, mock.Mock(), False, toolchain.Actions(query=run, run=install),
+                               game='undertale', tested=self.tested, releases_url=self.url)
+        self.assertIn('package list is out of date', str(caught.exception))
+        self.assertIn('Click Update devkitPro', str(caught.exception))
+        self.assertNotIn('Get a builder', str(caught.exception))
+        install.assert_not_called()
+
+    def test_windows_unreadable_local_sync_list_allows_setup_and_checks_installed_compiler(self):
+        query, calls = self.setup_query()
+        def run(argv, timeout):
+            if argv[-1] == 'pacman -Si devkitarm-gcc':
+                return 1, 'fixture local database error'
+            return query(argv, timeout)
+        step = toolchain.Step('packages', 'fixture', 'fixture', [], [['fixture-install']], platform='win32')
+        install, log = mock.Mock(return_value=0), mock.Mock()
+        self.assertTrue(toolchain.run_step(step, log, False, toolchain.Actions(query=run, run=install),
+                        game='undertale', tested=self.tested, releases_url=self.url))
+        install.assert_called_once()
+        self.assertIn("Couldn't check the compiler version", log.call_args.args[0])
+        self.assertEqual(calls[-1][-1], 'pacman -Q devkitarm-gcc')
+
+    def test_live_database_is_read_only_and_binds_the_package_name(self):
+        data = io.BytesIO()
+        with tarfile.open(fileobj=data, mode='w:gz') as archive:
+            for name, version in (('unrelated', '99.0-1'), ('devkitarm-gcc', '16.1.0-1')):
+                content = ('%%NAME%%\n%s\n\n%%VERSION%%\n%s\n' % (name, version)).encode()
+                member = tarfile.TarInfo(name + '-' + version + '/desc')
+                member.size = len(content)
+                archive.addfile(member, io.BytesIO(content))
+        opener = mock.Mock(return_value=io.BytesIO(data.getvalue()))
+        self.assertEqual(toolchain.repository_package('https://fixture.invalid/db', opener), 'devkitarm-gcc 16.1.0-1')
+        self.assertEqual(opener.call_args.kwargs, {'timeout': 5})
+        for host, arch, part in (('win32', 'AMD64', 'windows/x86_64/dkp-windows.db'),
+                                 ('linux', 'x86_64', 'linux/x86_64/dkp-linux.db'),
+                                 ('darwin', 'aarch64', 'osx/arm64/dkp-osx.db'),
+                                 ('darwin', 'x86_64', 'osx/x86_64/dkp-osx.db')):
+            self.assertTrue(toolchain.repository_command(host, arch)[-1].endswith(part))
+
+    def test_update_button_runs_query_in_worker_and_reports_refusal(self):
+        import gui
+        for host in ('win32', 'linux', 'darwin'):
+            page = gui.ToolchainPage.__new__(gui.ToolchainPage)
+            page.app = mock.Mock()
+            page.app.opts.toolchain_dry_run = False
+            page.app.state.game = 'undertale'
+            page.app.state.tc = tc(host)
+            page.running_step = False
+            page.failures = {}
+            page.update_buttons = mock.Mock()
+            page.write = mock.Mock()
+            page.show_log = mock.Mock()
+            page.result = mock.Mock()
+            page.extra = mock.Mock()
+            page.update_box = None
+            box = mock.Mock(step=toolchain.update_step('/fixture/devkitpro', platform=host))
+            def work(job, after, errors):
+                with self.assertRaises(toolchain.Refused) as caught:
+                    job()
+                after(caught.exception)
+            page.app.work.side_effect = work
+            query, calls = self.setup_query('17.1.0-1')
+            actions = toolchain.Actions(query=query, run=mock.Mock(), download=mock.Mock())
+            with mock.patch.object(gui, 'StepBox', return_value=box), mock.patch.object(toolchain, 'Actions', return_value=actions):
+                page.update()
+            page.app.work.assert_called_once()
+            page.app.opts.confirm_install.assert_called_once()
+            actions.run.assert_not_called()
+            actions.download.assert_not_called()
+            self.assertIs(page.update_box, box)
+            self.assertIn('16.1.0-1', page.result.config.call_args.kwargs['text'])
+            self.assertIn(self.url, page.result.config.call_args.kwargs['text'])
+
+    def test_refusal_has_no_log_or_copy_action_and_missing_log_race_is_safe(self):
+        import gui
+        page = gui.BuildPage.__new__(gui.BuildPage)
+        page.app = mock.Mock()
+        for attr in ('packaging', 'details', 'intro', 'status', 'cancel_btn', 'retry_btn', 'copy_btn'):
+            setattr(page, attr, mock.Mock())
+        page.log_path = '/fixture/never-created.log'
+        page.finished(pipeline.BuildFailed('Fixture compiler check refused'))
+        self.assertIsNone(page.log_path)
+        self.assertNotIn('Log:', page.status.config.call_args.kwargs['text'])
+        page.copy_btn.state.assert_called_with(['disabled'])
+        page.copy_log()
+        page.app.root.clipboard_clear.assert_not_called()
+        page.log_path = '/fixture/deleted-before-copy.log'
+        page.copy_log()
+        self.assertIsNone(page.log_path)
+        page.app.root.clipboard_clear.assert_not_called()
+
+
 class PackageVersionLogTests(unittest.TestCase):
-    def test_compiler_query_is_host_independent_and_unreadable_only_warns(self):
+    def test_compiler_query_is_fresh_bounded_and_host_independent(self):
         for host in ('win32', 'linux', 'darwin'):
             detected = tc(host)
             detected.root = '/fixture/devkitpro'
             calls = []
-            def run(argv):
+            def run(argv, timeout):
+                self.assertEqual(timeout, 5)
                 calls.append(argv)
-                return 0, 'arm-none-eabi\n' if argv[-1] == '-dumpmachine' else '16.1.0\n'
+                return 0, {'-dumpmachine': 'arm-none-eabi\n', '-dumpversion': '16.1.0\n',
+                           '--version': 'arm-none-eabi-gcc.exe (devkitARM) 16.1.0\nCopyright\n',
+                           'devkitarm-gcc': 'devkitarm-gcc 16.1.0-1\n',
+                           'pacman -Q devkitarm-gcc': 'devkitarm-gcc 16.1.0-1\n'}[argv[-1]]
             actual = toolchain.compiler_details(detected, run=run)
             self.assertEqual((actual['version'], actual['target']), ('16.1.0', 'arm-none-eabi'))
+            self.assertEqual((actual['vendor'], actual['package']), ('devkitARM', '16.1.0-1'))
+            self.assertEqual(len(calls), 4)
             self.assertEqual(calls[0][0], os.path.join(detected.root, 'devkitARM', 'bin', 'arm-none-eabi-gcc') +
                              ('.exe' if host == 'win32' else ''))
-            def missing(argv):
+            def missing(argv, timeout):
                 raise OSError('fixture missing compiler')
-            self.assertEqual(toolchain.compiler_details(detected, run=missing)['version'], 'unknown')
+            self.assertIsNone(toolchain.compiler_details(detected, run=missing)['version'])
 
     def test_detected_package_versions_reach_build_log_and_record(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -687,9 +1170,11 @@ class PackageVersionLogTests(unittest.TestCase):
                 write(str(bdir / "undertale-3ds-n3ds.3dsx"), b"fixture artifact")
             build = pipeline.Build(fixtures.products.PRODUCTS["undertale"], detected, str(work), "n3ds", "/fixture",
                                    source_root=src, popen=lambda *a, **kw: fixtures.FakeProc([], 0, on_start=output),
-                                    art_generator=lambda *a, **k: {})
-            with mock.patch.object(toolchain, 'compiler_details', return_value={
-                    'path': '/fixture/gcc', 'version': '16.1.0', 'target': 'arm-none-eabi'}):
+                                    art_generator=lambda *a, **k: {}, sfx_builder=lambda *a: None)
+            with mock.patch.object(pipeline.library_pins, 'select', return_value={'packages': [], 'shims': None}), \
+                 mock.patch.object(toolchain, 'compiler_details', return_value={
+                    'path': '/fixture/gcc', 'version': '16.1.0', 'target': 'arm-none-eabi',
+                    'vendor': 'devkitARM', 'package': '16.1.0-1'}):
                 _arts, record = build.run()
             self.assertEqual(record["toolchain_packages"], detected.package_versions)
             log = Path(build.log_path).read_text()
@@ -768,6 +1253,9 @@ class PackagingTests(unittest.TestCase):
         # Discover dependencies from real sources, independently of the package allow-list.
         # AST traversal includes imports inside GUI/platform branches that this host cannot run.
         repo = HERE.parents[1]
+        if (fixtures.app.FIXED_GAME == 'deltarune' and
+                not (repo / 'tools/release/sfxpack-versions.json').is_file()):
+            self.skipTest("UNDERTALE repackaging audit needs UNDERTALE source inputs, omitted from this DELTARUNE kit")
         search = (HERE / "builder", HERE, HERE.parent / "aot")
         available = {p.stem: p for directory in reversed(search) for p in directory.glob("*.py")}
         pending = [p.stem for p in (HERE / "builder").glob("*.py")]

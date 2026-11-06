@@ -3,7 +3,7 @@
 release_find_python() {
     python=()
     if [ -n "${CTRPORT_PYTHON:-}" ]; then
-        if "$CTRPORT_PYTHON" -c 'import sys; sys.exit(sys.version_info < (3, 8))' > /dev/null 2>&1; then
+        if "$CTRPORT_PYTHON" -X utf8 -c 'import sys; sys.exit(sys.version_info < (3, 8))' > /dev/null 2>&1; then
             python=("$CTRPORT_PYTHON")
         else
             printf '%s\n' 'ERROR: CTRPORT_PYTHON must name a working Python 3.8+ executable.' >&2
@@ -11,12 +11,12 @@ release_find_python() {
         fi
     else
         for p in python3 python; do
-            if command -v "$p" > /dev/null 2>&1 && "$p" -c 'import sys; sys.exit(sys.version_info < (3, 8))' > /dev/null 2>&1; then
+            if command -v "$p" > /dev/null 2>&1 && "$p" -X utf8 -c 'import sys; sys.exit(sys.version_info < (3, 8))' > /dev/null 2>&1; then
                 python=("$p")
                 break
             fi
         done
-        if [ "${#python[@]}" = 0 ] && command -v py > /dev/null 2>&1 && py -3 -c 'import sys; sys.exit(sys.version_info < (3, 8))' > /dev/null 2>&1; then
+        if [ "${#python[@]}" = 0 ] && command -v py > /dev/null 2>&1 && py -3 -X utf8 -c 'import sys; sys.exit(sys.version_info < (3, 8))' > /dev/null 2>&1; then
             python=(py -3)
         fi
     fi
@@ -32,7 +32,7 @@ release_find_python() {
 # prefix. Passing C:/... as FILEPATH to MSYS CMake makes it relative to the repo.
 release_python_executable() {
     local executable
-    executable=$("${python[@]}" -c 'import sys; print(sys.executable)')
+    executable=$("${python[@]}" -X utf8 -c 'import sys; print(sys.executable)')
     executable=${executable//$'\r'/}
     if command -v cygpath > /dev/null 2>&1; then
         cygpath -u "$executable"

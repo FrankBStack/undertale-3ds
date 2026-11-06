@@ -21,6 +21,8 @@
 #include "common.h"
 #include "log.h"
 #include "runner.h"
+#include "ctr_r216_ut.h" // R216: UNDERTALE only (R216_PICK, R216_UT)
+#line 24
 #include "utils.h"
 
 #include "ctr_benchmark.h"
@@ -436,7 +438,7 @@ ARGCRASH_LATE static void paintBuffer(u8* fb, u16 fbW, u16 fbH, GSPGPU_Framebuff
 
     GSPGPU_FlushDataCache(fb, fbBytes);
 }
-
+#include "z_argcrash_sd.h" // UTSCOURD-001 (the code is at the end)
 #if !defined(NDEBUG) || defined(CTRPORT_CRASH_TEST)
 ARGCRASH_STR(strCrashTestPath, CTRPORT_GAME_DIR "/crashtest.txt");
 ARGCRASH_STR(strBmpTopFmt, CTRPORT_GAME_DIR "/crash_top_%s.bmp");
@@ -535,6 +537,7 @@ ARGCRASH_FUNC static u32 checkCrashTxtSize(void) {
 }
 #endif
 static void argcrashPaintFixed(u8*, u16, u16, GSPGPU_FramebufferFormat, bool, ArgcrashKind, bool); // file end
+R216_UT(static Result argcrashLcdSkip(void);) // file end: the backlight comes after the painter's claim (argcrashPaintGated)
 ARGCRASH_LATE static void argcrashPaintScreens(ArgcrashKind kind, bool exiting) {
     if (!argcrashGfxReady) return;
     // The real setter (only the flag): the boot log's wrap would point the consoles back and free their own buffer
@@ -547,7 +550,7 @@ ARGCRASH_LATE static void argcrashPaintScreens(ArgcrashKind kind, bool exiting) 
         argcrashNullOut.write_r = nullWrite;
         devoptab_list[STD_OUT] = &argcrashNullOut;
     }
-    if (R_SUCCEEDED(gspLcdInit())) {
+    if (R_SUCCEEDED(R216_PICK(argcrashLcdSkip, gspLcdInit)())) { // R188g: never (argcrashPaintGated sets the backlight, outside its claim)
         GSPLCD_PowerOnBacklight(GSPLCD_SCREEN_TOP | GSPLCD_SCREEN_BOTTOM);
         gspLcdExit();
     }
@@ -558,7 +561,7 @@ ARGCRASH_LATE static void argcrashPaintScreens(ArgcrashKind kind, bool exiting) 
         for (int i = 0; i < 2; i++) {
             u16 fbW = 0, fbH = 0;
             u8* fb = gfxGetFramebuffer(screen, GFX_LEFT, &fbW, &fbH);
-            if (fb != prevFb) argcrashPaintFixed(fb, fbW, fbH, fmt, s == 0, kind, exiting); // SCOURS4-004
+            if (fb != prevFb) ARGCRASH_SD_PAINT(fb, fbW, fbH, fmt, s == 0, kind, exiting); // SCOURS4-004, UTSCOURD-001
             prevFb = fb;
             gfxSetDoubleBuffering(screen, false);
         }
@@ -589,6 +592,7 @@ ARGCRASH_LATE static ArgcrashKind argcrashClassifyReport(const char* text) {
     return lastErrorKind != CRASH_NONE ? lastErrorKind : CRASH_ABORT;
 }
 
+R216_UT(static void argcrashPaintGated(ArgcrashKind, bool);) // SCOURS4-005, file end
 // Emergency callback for normal (non-lab) runs: idles the watchdog without joining or freeing anything,
 // flushes the technical report to TCP and SD log.txt, parks the main thread if a worker thread faulted,
 // paints the friendly crash screen on both displays, and waits for START (or HOME -> Close) before returning to leave().
@@ -611,7 +615,7 @@ ARGCRASH_LATE static void argcrashEmergency(const char* report, int waitMs) {
 #if !defined(NDEBUG) || defined(CTRPORT_CRASH_TEST)
     if (argcrashTestKind[0] != '\0') {
         CtrLog_emergencyKeepLink(report, waitMs);
-        argcrashPaintScreens(kind, false);
+        R216_PICK(argcrashPaintGated, argcrashPaintScreens)(kind, false);
         const CrashDesc* d = &crashDescs[(unsigned int) kind < CRASH_KIND_COUNT ? kind : CRASH_NONE];
         char msg[192];
         snprintf(msg, sizeof(msg), strTestSummaryFmt, d->code, d->title, (unsigned long) checkCrashTxtSize());
@@ -620,7 +624,7 @@ ARGCRASH_LATE static void argcrashEmergency(const char* report, int waitMs) {
 #endif
     {
         __real_CtrLog_emergency(report, waitMs);
-        argcrashPaintScreens(kind, false);
+        R216_PICK(argcrashPaintGated, argcrashPaintScreens)(kind, false);
     }
 
     bool unattendedRun = argcrashLaunch != nullptr &&
@@ -637,12 +641,12 @@ ARGCRASH_LATE static void argcrashEmergency(const char* report, int waitMs) {
         hidScanInput();
         if ((hidKeysDown() & KEY_START) != 0) break;
         if (!__real_aptMainLoop()) break;
-        if ((++frames % 30) == 0) argcrashPaintScreens(kind, false);
+        if ((++frames % 30) == 0) R216_PICK(argcrashPaintGated, argcrashPaintScreens)(kind, false);
 #if !defined(NDEBUG) || defined(CTRPORT_CRASH_TEST)
         if (argcrashTestAutoExit && frames >= 30) break;
 #endif
     }
-    argcrashPaintScreens(kind, true);
+    R216_PICK(argcrashPaintGated, argcrashPaintScreens)(kind, true);
     if (deferredLeaveEvent != nullptr) __real_LightEvent_Signal(deferredLeaveEvent);
 }
 
@@ -967,7 +971,7 @@ ARGCRASH_LATE void __wrap_CtrLab_poll(void) {
 ARGCRASH_LATE void __wrap_CtrLog_emergency(const char* text, int waitMs) {
     __real_CtrLog_emergency(text, waitMs);
     if (argcrashGfxReady && !cleanExitStarted) {
-        argcrashPaintScreens(argcrashClassifyReport(text), false);
+        R216_PICK(argcrashPaintGated, argcrashPaintScreens)(argcrashClassifyReport(text), false);
     }
 }
 
@@ -998,7 +1002,7 @@ ARGCRASH_LATE void __wrap_platformLog(const logType type, const char* format, va
             }
         } else if (type == LOG_TYPE_NORMAL && strcmp(format, strLogExitFmt) == 0) {
             cleanExitStarted = true;
-            if (pendingScreenActive) argcrashPaintScreens(pendingScreenKind, true);
+            if (pendingScreenActive) R216_PICK(argcrashPaintGated, argcrashPaintScreens)(pendingScreenKind, true);
         }
     }
 
@@ -1012,7 +1016,7 @@ ARGCRASH_LATE void __wrap_platformLog(const logType type, const char* format, va
 }
 
 ARGCRASH_LATE Result __wrap_svcOutputDebugString(const char* str, s32 length) {
-    Result rc = __real_svcOutputDebugString(str, length);
+    Result rc = ARGCRASH_SD_DEBUG_OUT(str, length); // UTSCOURD-001
     if (str != nullptr) {
         if (startsWith(str, strErrFatalPrefix)) {
             pendingScreenActive = true;
@@ -1038,7 +1042,7 @@ ARGCRASH_LATE bool __wrap_aptMainLoop(void) {
 #if !defined(NDEBUG) || defined(CTRPORT_CRASH_TEST)
             argcrashReadTestFile();
 #endif
-            argcrashPaintScreens(pendingScreenKind, false);
+            R216_PICK(argcrashPaintGated, argcrashPaintScreens)(pendingScreenKind, false);
 #if !defined(NDEBUG) || defined(CTRPORT_CRASH_TEST)
             if (argcrashTestKind[0] != '\0') {
                 const CrashDesc* d = &crashDescs[(unsigned int) pendingScreenKind < CRASH_KIND_COUNT ? pendingScreenKind : CRASH_NONE];
@@ -1049,7 +1053,7 @@ ARGCRASH_LATE bool __wrap_aptMainLoop(void) {
         }
 #if !defined(NDEBUG) || defined(CTRPORT_CRASH_TEST)
         if (argcrashTestAutoExit && ++argcrashAutoExitFrames >= 30) {
-            argcrashPaintScreens(pendingScreenKind, true);
+            R216_PICK(argcrashPaintGated, argcrashPaintScreens)(pendingScreenKind, true);
             return false;
         }
 #endif
@@ -1090,8 +1094,7 @@ ARGCRASH_LATE void __wrap_exit(int status) {
 // argcrashPaintFixed, which calls the old paintBuffer only where that returns at once (no framebuffer). The new
 // function sits between the old caller and the old callee, so GCC's call graph keeps its order and every old
 // function, constant and static keeps its place and size (only the call's target changes). Own section, appended in
-// late_reserve.ld. SCOURS4-005 (the crash screen stops the loading bar) is parked for 1.0 (11-04,
-// review R188i); its code is not in this build.
+// late_reserve.ld. SCOURS4-005 (the crash screen stops the loading bar) is the next block (R216b; UNDERTALE only).
 #if defined(__3DS__) && defined(__GNUC__)
 #define ARGCRASH_FIX __attribute__((noinline, noipa, section(".text_argcrashfix")))
 #else
@@ -1168,3 +1171,394 @@ ARGCRASH_FIX static void argcrashPaintFixed(u8* fb, u16 fbW, u16 fbH, GSPGPU_Fra
 
     GSPGPU_FlushDataCache(fb, fbBytes);
 }
+// ---- UTSCOURD-001 (change auditfixe2), UNDERTALE only: a stop because the SD card couldn't be read gets its own title.
+// The overlay reader's stop (z_overlayread.c's overlayreadUnreadable: a save that's there but can't be read) and the
+// data.win check's (z_datarefuse.c's datarefuseUnreadable) reach __wrap_svcOutputDebugString as "[ERROR] Fatal: ..."
+// lines with neither "Saving failed", "New 3DS" nor "bytecode version", so they are CRASH_DATAWIN, whose title
+// ("Game files are missing. Run the builder again.") is wrong advice for a card that can't be read. Append-only
+// (RULES 3adf7ac34): z_argcrash_sd.h, included on a line that was blank, sends that wrap's call of the real
+// svcOutputDebugString to argcrashSdOut and argcrashPaintScreens's call of argcrashPaintFixed to argcrashPaintSd.
+// No kind is added, so crashDescs and every old constant, static and function keep their place and size; the old
+// classification is untouched (a line with "Saving failed", "New 3DS" or "bytecode version" keeps its title). Own
+// sections, appended in late_reserve.ld. The screen's other old statics are reached by their assembler names, so
+// nothing here changes where GCC puts them.
+#ifdef ENABLE_WAD16
+#if defined(__3DS__) && defined(__GNUC__)
+#define ARGCRASH_SD __attribute__((noinline, noipa, section(".text_utsdread")))
+#define ARGCRASH_SD_RODATA __attribute__((section(".rodata.utsdread_in_text")))
+#define ARGCRASH_SD_BSS __attribute__((section(".bss.utsdread_late")))
+#else
+#define ARGCRASH_SD
+#define ARGCRASH_SD_RODATA
+#define ARGCRASH_SD_BSS
+#endif
+#define ARGCRASH_SD_STR(name, text) static const char name[(sizeof(text) + 3u) & ~3u] ARGCRASH_SD_RODATA = text
+
+ARGCRASH_SD_STR(strSdFatalPrefix, "[ERROR] Fatal: ");
+// The two messages' own words (one line of each, so fatalSummary's line joins can't split them); a test pins them
+// to z_overlayread.c and z_datarefuse.c.
+ARGCRASH_SD_STR(strSdOverlay, "from the SD card. It wasn't changed.");
+ARGCRASH_SD_STR(strSdDataWin, "data.win couldn't be read to check it.");
+ARGCRASH_SD_STR(strSdTitle, "* The SD card couldn't be read. Check the card and try again.");
+ARGCRASH_SD_STR(strSdCode, "ERR-SD-READ");
+
+// Whether the latest "[ERROR] Fatal: " line was an SD read (set before that line's kind, both before any paint).
+static volatile bool argcrashSdRead ARGCRASH_SD_BSS;
+
+extern const ScreenLine argcrashSdLines[8] __asm__("screenLines");
+extern const char argcrashSdPressStart[] __asm__("strPressStart");
+extern const char argcrashSdQuitting[] __asm__("strReturningHome");
+
+ARGCRASH_SD static Result argcrashSdOut(const char* str, s32 length) {
+    Result rc = __real_svcOutputDebugString(str, length);
+    if (str != nullptr && strncmp(str, strSdFatalPrefix, sizeof("[ERROR] Fatal: ") - 1) == 0) {
+        argcrashSdRead = strstr(str, strSdOverlay) != nullptr || strstr(str, strSdDataWin) != nullptr;
+    }
+    return rc;
+}
+
+// putPixel on the given framebuffer (the old one draws on curFbPtr, which this painter leaves alone).
+ARGCRASH_SD static void argcrashSdPixel(u8* fb, u16 fbH, GSPGPU_FramebufferFormat fmt, int x, int y, u32 rgb) {
+    int wide = (fbH == 800u);
+    int col = x << wide;
+    u8 r = (u8) (rgb >> 16), g = (u8) (rgb >> 8), b = (u8) rgb;
+    u16 rgb565 = (u16) (((r & 0xF8u) << 8) | ((g & 0xFCu) << 3) | (b >> 3));
+    for (int n = 0; n <= wide; n++, col++) {
+        int idx = col * 240 + (239 - y);
+        if (fmt == GSP_BGR8_OES) {
+            u8* p = fb + idx * 3;
+            p[0] = b;
+            p[1] = g;
+            p[2] = r;
+        } else {
+            ((u16*) fb)[idx] = rgb565;
+        }
+    }
+}
+
+// argcrashPaintFixed's screen with the SD card title and code, for CRASH_DATAWIN after an SD read's fatal line;
+// anything else (and no framebuffer) goes to argcrashPaintFixed as before.
+ARGCRASH_SD static void argcrashPaintSd(u8* fb, u16 fbW, u16 fbH, GSPGPU_FramebufferFormat fmt, bool isTop,
+                                        ArgcrashKind kind, bool exiting) {
+    if (kind != CRASH_DATAWIN || !argcrashSdRead || fb == nullptr || fbW == 0 || fbH == 0) {
+        argcrashPaintFixed(fb, fbW, fbH, fmt, isTop, kind, exiting);
+        return;
+    }
+    u32 fbBytes = (u32) fbW * (u32) fbH * (fmt == GSP_BGR8_OES ? 3u : 2u);
+    memset(fb, 0, fbBytes);
+
+    int textX = isTop ? 28 : 4;
+    int ruleW = isTop ? 344 : 312;
+    for (int x = textX; x < textX + ruleW; x++) {
+        argcrashSdPixel(fb, fbH, fmt, x, 30, 0xFFFFFFu);
+        argcrashSdPixel(fb, fbH, fmt, x, 86, 0x505868u);
+        argcrashSdPixel(fb, fbH, fmt, x, 166, 0x505868u);
+        argcrashSdPixel(fb, fbH, fmt, x, 204, 0xFFFFFFu);
+    }
+
+    const char* dynText[3] = {
+        strSdTitle,
+        strSdCode,
+        exiting ? argcrashSdQuitting : argcrashSdPressStart,
+    };
+
+    const ConsoleFont* font = &consoleGetDefault()->font;
+    for (size_t i = 0; i < 8; i++) {
+        const char* s = (i < 5) ? argcrashSdLines[i].text : dynText[i - 5];
+        u32 rgb = (i == 7 && exiting) ? 0x80FF60u : argcrashSdLines[i].rgb;
+        int y0 = argcrashSdLines[i].y;
+        for (int x = textX + argcrashSdLines[i].dx; *s != '\0'; s++, x += 8) {
+            if (*s == ' ') { // break here past ruleW - 48, or when the next word would end past the rule
+                const char* w = s + 1;
+                while (*w != ' ' && *w != '\0') w++;
+                if (x > textX + ruleW - 48 || x + 8 * (int) (w - s) > textX + ruleW) {
+                    x = textX + 8;
+                    y0 += 12;
+                    continue;
+                }
+            }
+            const u8* glyph = font->gfx + ((unsigned char) *s - font->asciiOffset) * 8u;
+            for (int r = 0; r < 8; r++) {
+                u8 bits = glyph[r];
+                for (int c = 0; c < 8; c++) {
+                    // A glyph past the edge never leaves the buffer (the pixel doubles x on the wide top).
+                    if ((bits & (0x80u >> c)) != 0 && 240u > (unsigned) (y0 + r) &&
+                        fbH > (unsigned) ((x + c) << (fbH == 800u)))
+                        argcrashSdPixel(fb, fbH, fmt, x + c, y0 + r, rgb);
+                }
+            }
+        }
+    }
+
+    GSPGPU_FlushDataCache(fb, fbBytes);
+}
+
+// ---- UTSCOURD F4 (change auditfixe2; regaudit F4): the data.win check's stop is an SD read only when the card failed.
+// When its 64 KB read buffer couldn't be allocated (ctr_data_version.c's CtrDataVersion_buffer), the check answers
+// CTR_DATA_UNREADABLE and z_datarefuse.c stops with the same message as for a card that can't be read; that screen
+// gets CRASH_OOM's title and code (the console ran out of memory, or the .cia hint), as any other out-of-memory stop.
+// Every other screen goes to argcrashPaintSd unchanged. Own section, appended (late_reserve.ld: .text_utsdmem).
+extern volatile bool ctrDataVersionNoMemory;
+#if defined(__3DS__) && defined(__GNUC__)
+#define ARGCRASH_MEM __attribute__((noinline, noipa, section(".text_utsdmem")))
+#else
+#define ARGCRASH_MEM
+#endif
+ARGCRASH_MEM static void argcrashPaintMem(u8* fb, u16 fbW, u16 fbH, GSPGPU_FramebufferFormat fmt, bool isTop,
+                                          ArgcrashKind kind, bool exiting) {
+    if (kind == CRASH_DATAWIN && argcrashSdRead && ctrDataVersionNoMemory) kind = CRASH_OOM;
+    argcrashPaintSd(fb, fbW, fbH, fmt, isTop, kind, exiting);
+}
+#include "z_fatalgfx.inc"
+#endif
+
+// R333: fatal exitStep("done") also logs after gfxExit. The shared painter must
+// become unavailable before graphics are released, including every fatal kind.
+// Own appended sections preserve all old bodies, constants and static addresses.
+#ifdef ENABLE_WAD16
+#define SAVEAUDIT_FATAL __attribute__((noinline, noipa, section(".text_saveauditfatal")))
+#define SAVEAUDIT_FATAL_RO __attribute__((section(".rodata_saveauditfatal")))
+static volatile bool saveauditFolderFatal __attribute__((section(".bss.saveauditfatal_late")));
+static const char saveauditFatalPrefix[] SAVEAUDIT_FATAL_RO = "[ERROR] Fatal: ";
+static const char saveauditFolderWords[] SAVEAUDIT_FATAL_RO = "The SD card or saves folder";
+static const char saveauditFolderTitle[] SAVEAUDIT_FATAL_RO =
+    "* SD card or saves folder unreadable. Saves left alone.";
+static const char saveauditFolderCode[] SAVEAUDIT_FATAL_RO = "ERR-SAVE-READ";
+
+SAVEAUDIT_FATAL static Result saveauditFatalOut(const char* str, s32 length) {
+    Result rc = argcrashSdOut(str, length);
+    if (str != nullptr && startsWith(str, saveauditFatalPrefix))
+        saveauditFolderFatal = strstr(str, saveauditFolderWords) != nullptr;
+    return rc;
+}
+
+SAVEAUDIT_FATAL static void saveauditFatalPaint(u8* fb, u16 fbW, u16 fbH, GSPGPU_FramebufferFormat fmt,
+                                               bool isTop, ArgcrashKind kind, bool exiting) {
+    if (kind != CRASH_DATAWIN || !saveauditFolderFatal || fb == nullptr || fbW == 0 || fbH == 0) {
+        argcrashPaintMem(fb, fbW, fbH, fmt, isTop, kind, exiting);
+        return;
+    }
+    u32 bytes = (u32) fbW * fbH * (fmt == GSP_BGR8_OES ? 3u : 2u);
+    memset(fb, 0, bytes);
+    int textX = isTop ? 28 : 4;
+    int ruleW = isTop ? 344 : 312;
+    for (int x = textX; x < textX + ruleW; x++) {
+        argcrashSdPixel(fb, fbH, fmt, x, 30, 0xFFFFFFu);
+        argcrashSdPixel(fb, fbH, fmt, x, 86, 0x505868u);
+        argcrashSdPixel(fb, fbH, fmt, x, 166, 0x505868u);
+        argcrashSdPixel(fb, fbH, fmt, x, 204, 0xFFFFFFu);
+    }
+    const char* dynText[3] = {saveauditFolderTitle, saveauditFolderCode,
+                            exiting ? argcrashSdQuitting : argcrashSdPressStart};
+    const ConsoleFont* font = &consoleGetDefault()->font;
+    for (size_t i = 0; i < 8; i++) {
+        const char* s = i < 5 ? argcrashSdLines[i].text : dynText[i - 5];
+        u32 rgb = i == 7 && exiting ? 0x80FF60u : argcrashSdLines[i].rgb;
+        int y = argcrashSdLines[i].y;
+        for (int x = textX + argcrashSdLines[i].dx; *s != '\0'; s++, x += 8) {
+            if (*s == ' ') {
+                const char* word = s + 1;
+                while (*word != ' ' && *word != '\0') word++;
+                if (x > textX + ruleW - 48 || x + 8 * (int) (word - s) > textX + ruleW) {
+                    x = textX + 8;
+                    y += 12;
+                    continue;
+                }
+            }
+            const u8* glyph = font->gfx + ((unsigned char) *s - font->asciiOffset) * 8u;
+            for (int r = 0; r < 8; r++) {
+                for (int c = 0; c < 8; c++) {
+                    if ((glyph[r] & (0x80u >> c)) != 0 && 240u > (unsigned) (y + r) &&
+                        fbH > (unsigned) ((x + c) << (fbH == 800u)))
+                        argcrashSdPixel(fb, fbH, fmt, x + c, y + r, rgb);
+                }
+            }
+        }
+    }
+    GSPGPU_FlushDataCache(fb, bytes);
+}
+#endif
+#line 1311
+
+#ifdef ENABLE_WAD16 // SCOURS4-005, R216b..R216c: UNDERTALE only (ctr_r216_ut.h)
+#line 1312
+// ---- SCOURS4-005 (R188e..R188i; R216b: ported to the 1.0 layout, and c26rev2 R216 finding 1). Every crash-screen
+// paint call (above) goes to argcrashPaintGated, which calls argcrashPaintScreens. Own sections after every other
+// late input of the release builds (late_reserve.ld: .text_argcrashgate, .bss.argcrashfix_late), so no earlier late
+// code, constant or static moves: the old callers differ only in their calls' targets.
+#if defined(__3DS__) && defined(__GNUC__)
+#define ARGCRASH_GATE __attribute__((noinline, noipa, section(".text_argcrashgate")))
+#define ARGCRASH_FIX_BSS __attribute__((section(".bss.argcrashfix_late")))
+#else
+#define ARGCRASH_GATE __attribute__((noinline, noipa))
+#define ARGCRASH_FIX_BSS
+#endif
+
+bool CtrLoadscreen_halt(void);    // z_loadscreen.c: the loading bar stops; true once no draw on another thread is live
+bool CtrLoadscreen_drawing(void); // z_loadscreen.c: a bar draw is still live (no wait)
+u32 CtrLab_fatalAt(void);         // ctr_lab.c: the fatal claim's clock for the save guard (0 before the claim)
+bool CtrRosalina_quiet(void);     // CtrArgcrash_quiet (a CMakeLists.txt rename; file end): true once the watcher ended
+void CtrArgcrash_depart(ArgcrashKind kind, void (*paint)(ArgcrashKind, bool)); // R216c: file end
+
+// An ordinary bar draw is one frame: the bar into the back buffer and a swap, no wait for the GPU or VBlank, so a few
+// ms (with the loadshot.txt test hook a draw also writes a picture to the card first). One that holds the gate for a
+// second (30 frames at the bar's 33 ms) is taken as stuck: waiting for it more would leave the crash unseen (a dead
+// bar is not worth a blank crash screen). Ticks (u32: a difference is exact up to 16 s). After the takeover the bar
+// can't show anything new: no draw starts once the halt has come, and the one still live skips its swap
+// (z_loadscreen.c lsSwapGated). A swap already past its check may still present once, the crash screen's slot (double
+// buffering is off by then), at worst with an old right eye in 3D; that and its pixel writes already under way are
+// covered by the next repaint (R188i: no wait on the crash path is unbounded, so a frame can be stale, never dark).
+#define ARGCRASH_STUCK_TICKS ((u32) SYSCLOCK_ARM11)
+static u32 argcrashStuckTick ARGCRASH_FIX_BSS; // the first refusal's tick (odd: at most 1 early, never 0); else 0
+static bool argcrashOverStuck ARGCRASH_FIX_BSS; // the last paint went over a stuck draw
+static void* argcrashPainter ARGCRASH_FIX_BSS;  // the thread that paints (its TLS pointer), until it parks for good
+// pendingScreenActive, pendingScreenPainted and argcrashMainTls (above) by their link names: GCC places a file's
+// statics in the order its functions first use them, so naming them here would move them.
+extern volatile bool argcrashPendingActive __asm__("pendingScreenActive");
+extern volatile bool argcrashPendingPainted __asm__("pendingScreenPainted");
+extern const void* argcrashMainTlsRef __asm__("argcrashMainTls");
+
+// SCOURS4-005 (R188e..R188i): every crash-screen paint ends up on screen without painting into a frame a live draw
+// owns, and nothing on the way waits without a bound. R188h (c26rev2 R188g): one thread paints at a time. The first
+// to claim argcrashPainter (ldrex/strex) keeps it, with no handoff, while it can still run, and alone owns the state
+// below; it may come back in (a fault inside its own paint). It lets go only when it parks for good (R216b:
+// CtrArgcrash_labSleep, below). Every other thread's call returns without painting. The halt stops the bar and waits up
+// to 50 ms for a draw already started. While a draw is still live this asks again, up to a second from the first
+// refusal, and paints as soon as it ends. A draw that holds the gate past the second is stuck (its thread may be
+// parked for good inside its swap: c26rev2 R188h finding 1): the crash screen paints over it (the repaints too). The
+// pending screen's paint (__wrap_aptMainLoop asks once, each frame until it has) is asked for again while the stuck
+// draw holds the gate (no wait: the gate is only read) and paints once more when it ends, in case the draw's last
+// pixels covered it.
+// The backlight goes on a gsp::Lcd session of this call's own, best-effort (as ctr_rosalina.c's rosaBacklight):
+// never libctru's shared gspLcdInit session, which another thread may be opening (c26rev2 R188g finding 2). The
+// painter lights after its frames are presented; every other thread's call lights at once, without painting, so a
+// painter held anywhere can't keep presented frames dark (R188h finding 2). Lit before the first frame, the screens
+// show the old picture until it comes. The srv and gsp::Lcd requests have no deadline of the caller's: lighting is
+// best-effort, as accepted (R216).
+// R216b4: after the claim, a paint fixes the save guard's clock if nothing has yet (ctr_lab.c's end: the clock read
+// on the claimer's way in; no look after the claim moves it). R240 F1 (c26rev6): first, ctr_rosalina.c's watcher is
+// stopped (CtrRosalina_quiet: a flag, then a wait of at most 100 ms for it to end), so a Rosalina combo can no longer
+// clear the bottom error or switch the bottom off: this light goes past ctr_screens.c's dark mark, which the watcher
+// reads.
+ARGCRASH_GATE static void argcrashPaintGated(ArgcrashKind kind, bool exiting) {
+    bool quiet = CtrRosalina_quiet();
+    (void) CtrLab_fatalAt();
+    bool pending = argcrashPendingActive && !exiting; // the pending screen's paint: asked for again each frame
+    void* self = getThreadLocalStorage();
+    void* owner = nullptr;
+    bool painted = false;
+    bool mine = __atomic_compare_exchange_n(&argcrashPainter, &owner, self, false, __ATOMIC_ACQUIRE,
+                                            __ATOMIC_RELAXED) || owner == self;
+    if (mine) {
+        bool clear = false;
+        if (!argcrashOverStuck || !CtrLoadscreen_drawing()) {
+            while (!(clear = CtrLoadscreen_halt())) {
+                if (argcrashStuckTick == 0) argcrashStuckTick = ((u32) svcGetSystemTick() - 1u) | 1u; // <= now, not 0
+                if (ARGCRASH_STUCK_TICKS <= (u32) svcGetSystemTick() - argcrashStuckTick) break;
+            }
+        }
+        painted = clear || !argcrashOverStuck || !pending;
+        if (painted) argcrashPaintScreens(kind, exiting);
+        // R216c: the departing screen has no later frame to repair it (file end).
+        if (painted && exiting && !quiet) CtrArgcrash_depart(kind, argcrashPaintScreens);
+        argcrashOverStuck = !clear;
+        if (clear) argcrashStuckTick = 0;
+        // Over a stuck draw: the pending paint once more. Only the game thread (any thread before it is marked: the
+        // model check's screen comes first) asks: it alone runs __wrap_aptMainLoop, which owns the flag.
+        else if (pending && (argcrashMainTlsRef == nullptr || self == argcrashMainTlsRef)) argcrashPendingPainted = false;
+    }
+    if (painted || !mine) {
+        u32 name[3]; // "gsp::Lcd", stored word by word from the literal pool (a string or initializer adds rodata)
+        name[0] = 0x3A707367u;
+        name[1] = 0x64634C3Au;
+        name[2] = 0;
+        Handle lcd;
+        if (R_SUCCEEDED(srvGetServiceHandle(&lcd, (const char*) name))) {
+            u32* cmd = getThreadCommandBuffer();
+            cmd[0] = IPC_MakeHeader(0x11, 1, 0); // gsp::Lcd PowerOnBacklight
+            cmd[1] = GSPLCD_SCREEN_BOTH;
+            svcSendSyncRequest(lcd);
+            svcCloseHandle(lcd);
+        }
+    }
+}
+
+// R188g: argcrashPaintScreens's backlight call, which now never runs there (the call's target only, so that function
+// keeps its size): argcrashPaintGated sets the backlight on a session of its own (R188h, R188i).
+ARGCRASH_GATE static Result argcrashLcdSkip(void) {
+    return -1;
+}
+
+// R216b (c26rev2 R216 finding 1): the painter keeps argcrashPainter only while its thread can still run. Every
+// svcSleepThread in ctr_lab.c is this (a rename at that file's top), which sleeps the same way; a sleep of a second
+// or more is one of its sleeps for good: standAside's (a thread that faults, or calls CtrLab_fail, while another
+// thread leaves), CtrLab_poll's (the game thread stopped for another thread's leave), and fallbackMain's 25 s before
+// the exit (its thread never paints). After any of them the thread only sleeps again or ends the run.
+// If the sleeping thread holds the token, it lets it go here (a compare-exchange from its own TLS pointer, with
+// release order, so its writes to the state above come first), and the thread that leaves, the fatal report's
+// owner, paints on its next call (argcrashEmergency repaints each 30 frames). Before that every call of the leaver
+// lit the screens without painting, and the old picture stayed (R216: A claims the token, is preempted before its
+// first frame, B faults and takes the leave, then A faults and parks in standAside). The parked thread never runs
+// paint code again, so two threads still never paint at once; its paint may have stopped halfway (a fault inside
+// it), and every paint draws both screens from the start. No wait; nothing else changes for a thread that holds no
+// token.
+ARGCRASH_GATE void CtrArgcrash_labSleep(s64 ns) {
+    if (ns >= 1000000000LL) {
+        void* self = getThreadLocalStorage();
+        __atomic_compare_exchange_n(&argcrashPainter, &self, nullptr, false, __ATOMIC_RELEASE, __ATOMIC_RELAXED);
+    }
+    svcSleepThread(ns);
+}
+
+// R216d: this block's #ifdef ENABLE_WAD16 now opens at the SCOURS4-005 header above
+// R216b5 (c26rev2 R216b4 finding 2; UNDERTALE only, as ctr_rosalina.c's part): argcrashPaintGated's first call is
+// this (CMakeLists.txt renames its CtrRosalina_quiet call). It stops the Rosalina watcher as before and says whether
+// the watcher is quiet (R216c: argcrashPaintGated keeps the answer). While the watcher is not yet quiet (being
+// created, or still running past the 100 ms wait), a clear it had already checked for can still land after this call's
+// paint, so the pending screen's paint (__wrap_aptMainLoop's one-shot screen, which the game thread alone asks for and
+// owns the flag of) is asked for again. That repairs only while frames keep coming: each frame repaints until the
+// watcher is quiet, and the frame after that paints once more, after its end. A watcher that never ends is repainted
+// over each frame, about 10 Hz (each wait is 100 ms); argcrashEmergency's loop repaints every 30 frames anyway. A
+// paint with no frame after it, the departing screen's, is CtrArgcrash_depart's (below).
+// The body is CtrArgcrash_quietBody, which nothing here calls, and the asm below names it CtrArgcrash_quiet (a
+// link-time alias GCC doesn't see): argcrashPaintGated's call stays a call to an outside function, so this file's
+// functions and statics keep their order (GCC orders them by calls and first uses).
+#undef CtrRosalina_quiet
+bool CtrRosalina_quiet(void); // ctr_rosalina.c: true once its watcher can send nothing more
+ARGCRASH_GATE bool CtrArgcrash_quietBody(void) {
+    bool quiet = CtrRosalina_quiet();
+    if (!quiet && argcrashPendingActive &&
+        (argcrashMainTlsRef == nullptr || getThreadLocalStorage() == argcrashMainTlsRef))
+        argcrashPendingPainted = false;
+    return quiet;
+}
+
+// R216c (c26rev2 R216b5 LOW): the departing screen ("returning to HOME": argcrashEmergency's last paint, and each of
+// main.c exitAfterScreen's exit steps) is a paint after which no frame comes, so the pending paint asked for above is
+// never made, and a clear the watcher had already checked for could land after it and stay (the bottom text erased,
+// the backlight on). So when a departing paint finds the watcher not yet quiet, its painter (argcrashPaintGated, inside
+// its claim, after the paint and before its backlight) serves the repaint itself while the departure waits: the stop
+// again (at most 100 ms each), then the screen painted again, until a stop says the watcher has ended (that paint
+// comes after its end) or one second has gone from the first such wait of the run (a deadline kept for the whole
+// departure: the exit steps that follow each find it spent, and add only their own stop's 100 ms, as before). A
+// watcher still running after that second (held inside a GSP request past its check) can still erase the departing
+// screen's bottom text; the backlight ends lit (CtrRosalina_watchRun). Called only by the painter that holds the claim
+// (argcrashPainter), so one thread alone reads and writes the deadline; the screen is painted through the pointer the
+// gate passes (argcrashPaintScreens), so this file gets no new call to its own functions. An alias as above.
+#define ARGCRASH_DEPART_BSS __attribute__((section(".bss_argdepart_late,\"aw\",%nobits @")))
+u64 argcrashDepartBy ARGCRASH_DEPART_BSS; // the departure's repaint deadline in ticks; 0 before the first
+ARGCRASH_GATE void CtrArgcrash_departBody(ArgcrashKind kind, void (*paint)(ArgcrashKind, bool)) {
+    if (argcrashDepartBy == 0) argcrashDepartBy = svcGetSystemTick() + (u64) ARGCRASH_STUCK_TICKS;
+    while (argcrashDepartBy > svcGetSystemTick()) {
+        bool quiet = CtrRosalina_quiet();
+        paint(kind, true);
+        if (quiet) break;
+    }
+}
+__asm__(".global CtrArgcrash_quiet\n"
+        ".type CtrArgcrash_quiet, %function\n"
+        ".set CtrArgcrash_quiet, CtrArgcrash_quietBody\n"
+        ".global CtrArgcrash_depart\n"
+        ".type CtrArgcrash_depart, %function\n"
+        ".set CtrArgcrash_depart, CtrArgcrash_departBody\n");
+#endif

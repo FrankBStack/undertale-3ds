@@ -409,6 +409,12 @@ class Transaction:
         import texcache
         self.check_owner()
         names = {path.relative_to(self.new).as_posix() for path in self.new.rglob('*') if path.is_file()}
+        install_record.check_retained_models(self.product, names,
+            {name: texcache.checked_digest(self.target(self.new, name)) for name in names
+             if name.rsplit('/', 1)[-1].casefold() == 'data.win'},
+            previous=install_record.read(self.root, self.product),
+            present=lambda name: self.target(self.root, name).is_file(),
+            digest=lambda name: texcache.checked_digest(self.target(self.root, name)))
         removals = set(removals)
         # If no PC texture/receipt could be made for changed data, the old validity markers must go too.
         for name in names:

@@ -49,3 +49,14 @@ DH_CODE void __wrap_CtrDialogue_init(CtrDialoguePolicy* policy, const DataWin* d
     }
 }
 #endif
+
+#if defined(ENABLE_WAD16)
+// UNDERTALE must stop showing the redirected picture when its current draws stop.
+// Keep the old policy entry linked at its original address for frozen layout.
+__attribute__((section(".text.late.dlglinger"), noinline, noipa))
+bool CtrDlglinger_noHold(const CtrDialoguePolicy* policy, Runner* runner) {
+    (void) policy;
+    (void) runner;
+    return false;
+}
+#endif

@@ -82,6 +82,13 @@ def retain(text, sections, old, game=None):
     assert sizes
     first = re.search(r'(?m)^\s*\.section\s+\.text[^\n]*\n', text)
     assert first and first.start() < sizes[0].start()
+    # A moved chunk must not reach a .loc before the numbered .file GCC emitted with the first function using it.
+    numbered = re.compile(r'(?m)^[ \t]*\.file[ \t]+\d+[ \t]+"[^\n]*\n')
+    files = numbered.findall(text[first.start():])
+    text = text[:first.start()]+''.join(files)+numbered.sub('', text[first.start():])
+    sizes = list(re.finditer(r'(?m)^\s*\.size\s+([\w.]+),\s*\.\-\1\s*$', text))
+    first = re.search(r'(?m)^\s*\.section\s+\.text[^\n]*\n', text)
+    assert first and first.start() < sizes[0].start()
     prefix, suffix = text[:first.start()], text[sizes[-1].end():]
     chunks, position, section = [], first.start(), None
     for match in sizes:
@@ -102,6 +109,14 @@ def retain(text, sections, old, game=None):
              'psSaveShot': ['Loadgame_prepare', 'Loadgame_format', 'Loadgame_present', 'Loadgame_saveShot', 'Loadgame_swap']} if game == 'undertale' else {}
     packed = {part['name']: part for part in chunks
               if any(part['name'] in names for names in fills.values())}
+    # zq52 froze this helper at 100 B on both UT models. Its new predicate
+    # lives at the append point; preserve this slot and every following helper.
+    if game == 'undertale':
+        name = 'Loadgame_present'
+        pattern = r'(?m)^\s*\.size\s+'+name+r',\s*\.\-'+name+r'\s*$'
+        text, count = re.subn(pattern, lambda _: '\n\t.global __dlgtopfix_present_end\n\t.set __dlgtopfix_present_end, .\n\t.type __dlgtopfix_present_end,%notype\n\t.size __dlgtopfix_present_end,0\n\t.org '+name+' + 100, 0\n\t.size '+name+', .-'+name, packed[name]['text'])
+        assert count == 1
+        packed[name]['text'] = text
     assert set(packed) == {name for names in fills.values() for name in names}
     chunks = [part for part in chunks if part['name'] not in packed]
     for section, entries in sections.items():
@@ -161,11 +176,40 @@ def write_assembly(path, text):
 
 
 def main_slots(text, game, model):
-    for name, size in {'CtrBootlog_hide': 248, 'CtrScreens_moveConsoles': 248 if game == 'undertale' and model == 'o3ds' else 344}.items():
+    slots = {'CtrBootlog_hide': 248, 'CtrScreens_moveConsoles': 248 if game == 'undertale' and model == 'o3ds' else 344}
+    # R270 appends guarded bodies and keeps both reviewed player entry slots.
+    if game == 'undertale' and 'Loadgame_guardedCarry:' in text:
+        slots.update(Loadgame_carryCopy=112, Loadgame_restoreMenu=36 if model == 'o3ds' else 44)
+    for name, size in slots.items():
         pattern = r'(?m)^\s*\.size\s+'+name+r',\s*\.\-'+name+r'\s*$'
         end = '__loadgame_body_end_'+name
         text, count = re.subn(pattern, lambda _: '\n\t.global '+end+'\n\t.set '+end+', . - 1\n\t.type '+end+',%notype\n\t.size '+end+',0\n\t.org '+name+' + '+str(size)+', 0\n\t.size '+name+', .-'+name, text)
         assert count == 1
+    # A new external cold callee can make GCC emit moveConsoles last in this
+    # input section. Restore whole compiler chunks, never instructions, to
+    # the existing five-function order; all other chunks keep their position.
+    order = ('CtrScreens_moveConsoles', 'CtrScreens_flushConsoles',
+             'CtrScreens_benchLaunched', 'CtrScreens_screenshotNotice',
+             '__wrap_CtrLog_emergencyKeepLink')
+    if game == 'undertale' and 'CtrScreens_flushConsoles:' in text:
+        sizes = list(re.finditer(r'(?m)^\s*\.size\s+([\w.]+),\s*\.\-\1\s*$', text))
+        first = re.search(r'(?m)^\s*\.section\s+[^\n]*\n', text)
+        assert sizes and first and first.start() < sizes[0].start()
+        prefix, suffix = text[:first.start()], text[sizes[-1].end():]
+        chunks, position, section = [], first.start(), None
+        for match in sizes:
+            body = text[position:match.end()]
+            names = re.findall(r'(?m)^\s*\.section\s+([^,\s]+)[^\n]*', body)
+            if names: section = names[-1]
+            chunks.append(dict(name=match[1],section=section,text=body))
+            position=match.end()
+        indices=[i for i,c in enumerate(chunks) if c['name'] in order]
+        selected={chunks[i]['name']:chunks[i] for i in indices}
+        assert set(selected)==set(order)
+        assert all(c['section']=='.text.late.screens' for c in selected.values())
+        for index,name in zip(indices,order):
+            chunks[index]=dict(selected[name],text='\n\t.section .text.late.screens,"ax",%progbits\n'+selected[name]['text'])
+        text=prefix+''.join(c['text'] for c in chunks)+suffix
     return text+'\n'
 
 

@@ -22,6 +22,24 @@ spec.loader.exec_module(gate)
 
 
 class ReleaseGateTests(unittest.TestCase):
+    def policy_entries(self, entries):
+        manifests = [gate.ROOT / 'tools/release' / ('manifest-' + short + '.txt') for short in ('ut', 'dr')]
+        present = [path for path in manifests if path.is_file()]
+        if not present:
+            self.skipTest('This source export does not include a source manifest')
+        if len(present) == len(manifests):
+            return entries  # The complete source tree checks every policy revision.
+        members = {line.strip() for line in present[0].read_text(encoding='utf-8').splitlines()
+                   if line.strip() and not line.lstrip().startswith('#')}
+        selected = []
+        for entry in entries:
+            if entry['member'] in members:
+                selected.append(entry)  # Missing declared files must still fail on read.
+            else:
+                with self.subTest(policy_member=entry['member']):
+                    self.skipTest('Policy member is not part of this product export')
+        return selected
+
     def test_product_selects_its_own_default_manifest(self):
         self.assertEqual(gate.export_product(None, None), ('tools/release/manifest-ut.txt', 'undertale'))
         for game, short in (('undertale', 'ut'), ('deltarune', 'dr')):
@@ -197,7 +215,7 @@ class ReleaseGateTests(unittest.TestCase):
 
     def test_checked_in_d2_revisions_have_headers_and_match_the_policy(self):
         policy = gate.read_identifier_policy(gate.ROOT / 'tools/release/identifier-allowlist.json')
-        for entry in policy['entries']:
+        for entry in self.policy_entries(policy['entries']):
             data = (gate.ROOT / entry['member']).read_bytes()
             self.assertEqual(hashlib.sha256(data).hexdigest(), entry['sha256'], entry['member'])
             self.assertTrue(entry['justification'].strip(), entry['member'])
@@ -240,7 +258,7 @@ class ReleaseGateTests(unittest.TestCase):
         policy = gate.read_identifier_policy(gate.ROOT / 'tools/release/identifier-allowlist.json')
         entries = [e for e in policy['entries'] if e['class'] in gate.FALSE_POSITIVE_CLASSES]
         self.assertTrue(entries)
-        for entry in entries:
+        for entry in self.policy_entries(entries):
             name = entry['member']
             data = (gate.ROOT / name).read_bytes()
             hits = gate.inspect_member(name, data, [])
@@ -300,7 +318,7 @@ class ReleaseGateTests(unittest.TestCase):
         self.assertEqual({e['member'] for e in policy['entries'] if '-deltarune-' in e['member']}, {
             'platform/3ds/assets/%s-deltarune-%s.png' % (kind, target)
             for kind in ('banner', 'icon') for target in ('o3ds', 'n3ds')})
-        for entry in policy['entries']:
+        for entry in self.policy_entries(policy['entries']):
             data = (gate.ROOT / entry['member']).read_bytes()
             member = dict(path=entry['member'], bytes=len(data), sha256=hashlib.sha256(data).hexdigest())
             hits = gate.inspect_member(entry['member'], data, gate.data_hashes())
@@ -322,6 +340,8 @@ class ReleaseGateTests(unittest.TestCase):
         sys.path.insert(0, str(gate.ROOT / 'tools/aot'))
         import prepare
         path = gate.ROOT / 'tools/aot/selection/deltarune-parts-n3ds.txt'
+        if not path.is_file():
+            self.skipTest('This source export does not include the DELTARUNE selection')
         data = path.read_bytes()
         comment, original = data.split(b'\n', 1)
         self.assertIn(b'names only', comment)
@@ -354,12 +374,16 @@ class ReleaseGateTests(unittest.TestCase):
         self.assertEqual(len(records), 12)  # 9 room plan records (2 GOG), 1 phase record (phaseplan, DELTARUNE),
         # 1 track record (drresid, DELTARUNE New), 1 shared-surface record (sharebuf, DELTARUNE New)
         for game, filename in (('undertale', 'manifest-ut.txt'), ('deltarune', 'manifest-dr.txt')):
-            manifest = set((gate.ROOT / 'tools/release' / filename).read_text().splitlines())
-            required = {record for record in records
-                        if Path(record).name.startswith(game + '-') or Path(record).name == game + '.json'}
-            self.assertTrue(required <= manifest)
-            self.assertFalse((records - required) & manifest)
-            self.assertIn('tools/roomplan/records.py', manifest)
+            with self.subTest(game=game):
+                path = gate.ROOT / 'tools/release' / filename
+                if not path.is_file():
+                    self.skipTest('This source export does not include ' + filename)
+                manifest = set(path.read_text().splitlines())
+                required = {record for record in records
+                            if Path(record).name.startswith(game + '-') or Path(record).name == game + '.json'}
+                self.assertTrue(required <= manifest)
+                self.assertFalse((records - required) & manifest)
+                self.assertIn('tools/roomplan/records.py', manifest)
 
     def test_invalid_source_and_asset_approvals_are_rejected(self):
         with tempfile.TemporaryDirectory(dir=gate.ROOT / 'scratch') as directory:
@@ -417,6 +441,8 @@ class ReleaseGateTests(unittest.TestCase):
 
     def test_public_readme_comes_from_its_template(self):
         manifest = gate.ROOT / 'tools/release/manifest-ut.txt'
+        if not manifest.is_file():
+            self.skipTest('This source export does not include the UT manifest')
         self.assertEqual(gate.read_manifest_sources(manifest),
                          {'README.md': 'tools/release/templates/README-undertale.md'})
         names = manifest.read_text(encoding='utf-8').splitlines()
@@ -426,6 +452,8 @@ class ReleaseGateTests(unittest.TestCase):
     def test_public_source_digest_hashes_the_mapped_export_bytes(self):
         # argstage59 F-5.1: DELTARUNE maps drawskip_deltarune.txt to a generic template. The descriptor's digest must
         # be the one package_builder computes from the exported tree (mapped bytes, builder.py's FIXED_GAME set).
+        if not all((gate.ROOT / ('tools/release/manifest-%s.txt' % short)).is_file() for short in ('ut', 'dr')):
+            self.skipTest('Cross-product export mapping needs both source manifests')
         import package_builder
         for game, short in (('undertale', 'ut'), ('deltarune', 'dr')):
             names, _tracked, sources = gate.read_manifest(gate.safe_local('tools/release/manifest-%s.txt' % short))
@@ -450,7 +478,10 @@ class ReleaseGateTests(unittest.TestCase):
             gate.public_source_digest({}, {n: files[n] for n in wanted if n != member}, sources, wanted)
 
     def test_export_manifest_omits_private_bench_scripts(self):
-        manifest = (gate.ROOT / 'tools/release/manifest-ut.txt').read_text().splitlines()
+        path = gate.ROOT / 'tools/release/manifest-ut.txt'
+        if not path.is_file():
+            self.skipTest('This source export does not include the UT manifest')
+        manifest = path.read_text().splitlines()
         self.assertNotIn('platform/3ds/bench/undertale.txt', manifest)
         self.assertNotIn('platform/3ds/bench/sweep_undertale.txt', manifest)
         self.assertFalse(any('shader_handles' in name for name in manifest))

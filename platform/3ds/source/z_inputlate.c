@@ -39,6 +39,9 @@ void __real_CtrRenderer_endFrame(Renderer* renderer);
 void __wrap_CtrRenderer_endFrame(Renderer* renderer);
 CtrBenchFrame __real_CtrBench_beginFrameTimed(u32 down, double seconds);
 CtrBenchFrame __wrap_CtrBench_beginFrameTimed(u32 down, double seconds);
+#ifdef CTRPORT_TITANDIAG_INPUTLATE_CHAIN
+CtrBenchFrame Titandiag_beginFrameTimed(u32 down, double seconds);
+#endif
 u32 __real_hidKeysHeld(void);
 u32 __wrap_hidKeysHeld(void);
 void __real_RunnerKeyboard_onKeyDown(RunnerKeyboardState* kb, int32_t key);
@@ -109,7 +112,11 @@ CODE u32 __wrap_hidKeysHeld(void) {
 }
 
 CODE CtrBenchFrame __wrap_CtrBench_beginFrameTimed(u32 down, double seconds) {
+#ifdef CTRPORT_TITANDIAG_INPUTLATE_CHAIN
+    CtrBenchFrame result = Titandiag_beginFrameTimed(down, seconds);
+#else
     CtrBenchFrame result = __real_CtrBench_beginFrameTimed(down, seconds);
+#endif
     benchPaused = result == BENCH_FRAME_PAUSE;
     return result;
 }

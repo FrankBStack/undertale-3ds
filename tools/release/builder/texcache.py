@@ -66,18 +66,11 @@ PAD_START, PAD_END = 52, 56
 # docs/release/builder-status.md, "Texture preparation on the PC".
 # Rebuild and re-pin whenever any file in `texprep --sources` changes (a release step, builder-status.md).
 PINNED = {
-    # MSYS2 UCRT64 gcc 16.1.0, static, UTF-8 paths; stage75zg sources + redpix scoped alpha-0 RGB fix (2026-10-31),
-    # re-pinned for creddodge cdPop's engine/src/vm.h (3DS-only lines; only the embedded digest changes, 2026-11-01),
-    # rebuilt from the export_scrub copy of those sources (builderx hygiene; the kit ships scrubbed copies, 2026-11-01),
-    # re-pinned for uthunt dprank's engine/src/runner.h (3DS-only lines; only the embedded digest changes, 2026-11-01),
-    # re-pinned for creddodge presize's engine/src/instance.h (3DS-only lines; only the embedded digest changes, 2026-11-01),
-    # rebuilt on stage75zn for change racefix's platform/3ds/source/ctr_texture_pack.c (worker hurry slot, damaged-page
-    # marker, c26rev r93 F2's marker turn), from the export_scrub copy of the stage's sources (2026-11-02),
-    # rebuilt on stage75zo for change redpix (UT epochs 5/6, DR 3/4; normal/hurt heads, Steam/GOG, the console's
-    # post-conversion correction) on top of racefix's, from the export_scrub copy of the merged sources (2026-11-02).
-    # texprep-src-1:aec266aff4b83431e4d86741903380e9206ca063d2d55c2f6ca8f7c9cb1bb433
-    ("win32", "x86_64"): ("texprep-windows-x64.exe", 359656,
-                          "a55c7ef5c0c33a33d22c1237e4098cf4d8fd643f0b6019936a4e9f176f3187ca"),
+    # Qualified 639196764 distribution sources (2026-11-06).
+    # MSYS2 UCRT64 GCC 16.1.0, static, zero PE timestamp; two source directories.
+    # texprep-src-1:81af0c3b4657fbd8fe58a778044a75dddd3726a528582900c4e00fe602a71277
+    ("win32", "x86_64"): ("texprep-windows-x64.exe", 365682,
+                          "36e7940695d2f79434af2458c2657add3a8424fb7c30bfdc94eb679537d2d226"),
     # Linux builds locally with the system compiler. The former static glibc 2.39 binary is
     # retired: it lacked a corresponding-source/relink kit and did not fit older Debian hosts.
     # macOS (arm64 and x86_64): texprep-macos-universal, built on an M1 Mac (steps in builder-status.md).
@@ -261,6 +254,13 @@ def _run(argv):
 def _run_texprep(tool, data_win, local, name, run, log, source=None):
     """texprep from data_win (or the copy at source) into a fresh local folder: (page count, bytes) or a problem
     string."""
+    import products
+    # Check before removing a stale output or creating any directory.
+    for selected in (data_win, source):
+        if selected is not None:
+            for folder in {os.path.dirname(selected), os.path.dirname(os.path.realpath(selected))}:
+                products.require_output_outside_game(folder, local)
+                products.require_output_outside_game(local, folder)
     if os.path.isdir(local):
         shutil.rmtree(local)        # always from scratch, so the output depends only on data.win and the tool
     os.makedirs(local)
@@ -286,6 +286,7 @@ def prepare(tool, product, folder, work, parts=None, run=None, log=print, halfar
     complete folders are in sets; a data.win whose folder didn't complete is left to the console. halfart: None
     follows products.HALFART; on, UNDERTALE's half-resolution art folder is prepared too (halfart_set)."""
     import products
+    products.require_output_outside_game(folder, work)
     run = run or _run
     sets, problems = [], []
     for data_win, rel in data_wins(product, folder, parts):
@@ -361,6 +362,9 @@ def halfart_pages(patch, pages_file):
 def halfart_set(tool, product, data_win, work, run=None, log=print):
     """(CacheSet, None) for the half-resolution art build's own folder, or (None, problem): the console prepares it
     when the build's patch is missing, isn't for this data.win, or texprep doesn't finish."""
+    import products
+    for folder in {os.path.dirname(data_win), os.path.dirname(os.path.realpath(data_win))}:
+        products.require_output_outside_game(folder, work)
     base = os.path.join(work, "src", *HALFART_PATCH)
     name = "data.win (half-resolution art)"
     try:
@@ -625,8 +629,14 @@ def deliver_textures(sd_root, product, folder, work, parts=None, tool=None, fs=N
 def dry_run_lines(product, folder, work, parts=None, tool=None):
     """The dry run's texture lines: the tool found, and what would be written per data.win. Writes nothing."""
     tool = tool or find_tool(work, build=lambda: (None, "would build texprep from source here"), log=lambda s: None)
-    lines = ["Texture preparation on the PC: %s" % (tool.message if tool.ok else "off (%s); the 3DS prepares them"
-                                                   % tool.message)]
+    if tool.ok:
+        status = tool.message
+    elif "would build texprep from source here" in tool.message:
+        status = ("will try to build texprep on this PC and prepare the pages before copying; "
+                  "if that fails, the 3DS prepares them on first start")
+    else:
+        status = "off (%s); the 3DS prepares them on first start" % tool.message
+    lines = ["Texture preparation on the PC: " + status]
     if folder is None or not os.path.isdir(folder):
         return lines
     for data_win, rel in data_wins(product, folder, parts):
@@ -780,7 +790,7 @@ def checked_digest(path, expected=None):
         raise OSError("File changed during verification: %s" % path)
     result = sha.hexdigest()
     if expected is not None and result != expected:
-        raise OSError("File content changed. Verify the game files and try again: %s" % path)
+        raise OSError("File content changed. Restore the original game files and try again: %s" % path)
     return result
 
 

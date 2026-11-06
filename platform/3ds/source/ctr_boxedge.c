@@ -113,13 +113,52 @@ static BOXEDGE_TEXT bool boxedgeFit(Renderer* renderer, int32_t tpagIndex, float
     return true;
 }
 
+#ifndef ENABLE_WAD17
+// Keep the old fitter and its slot intact. UNDERTALE's battle border must use
+// the PC sample coverage: widening 2.5 to 3 pixels adds an outside bottom row.
+// Resolve the semantic sprite, not every 5x5 item (eyes and bullets share that
+// geometry). The name fingerprint is an identifier, never artwork.
+static struct {
+    DataWin* data;
+    const Sprite* sprites;
+    int32_t item;
+} thinartEdge __attribute__((section(".bss.thinart_edge_late")));
+
+static __attribute__((noinline, section(".text.thinart_edge_late")))
+void thinartEdgeFit(Renderer* renderer, int32_t tpagIndex, float* x, float* y, float originX, float originY, float* xscale, float* yscale) {
+    DataWin* dw = renderer->dataWin;
+    if (thinartEdge.data != dw || thinartEdge.sprites != dw->sprt.sprites) {
+        thinartEdge.data = dw;
+        thinartEdge.sprites = dw->sprt.sprites;
+        thinartEdge.item = -1;
+        for (uint32_t i = 0; i < dw->sprt.parsedCount; ++i) {
+            const Sprite* sp = &dw->sprt.sprites[i];
+            if (!sp->present || sp->width != 5 || sp->height != 5 || sp->textureCount != 1 || sp->name == nullptr || sp->tpagIndices == nullptr) continue;
+            uint32_t hash = 2166136261u, length = 0;
+            for (const unsigned char* p = (const unsigned char*) sp->name; *p != 0; ++p) {
+                hash = (hash ^ *p) * 16777619u;
+                ++length;
+            }
+            if (length == 10 && hash == 0xbf686d03u) {
+                thinartEdge.item = sp->tpagIndices[0];
+                break;
+            }
+        }
+    }
+    if (tpagIndex != thinartEdge.item || tpagIndex < 0)
+        boxedgeFit(renderer, tpagIndex, x, y, originX, originY, xscale, yscale);
+}
+#else
+#define thinartEdgeFit boxedgeFit
+#endif
+
 static BOXEDGE_TEXT void boxedgeDrawSprite(Renderer* renderer, int32_t tpagIndex, float x, float y, float originX, float originY, float xscale,
                                            float yscale, float angleDeg, uint32_t color, float alpha) {
     BoxedgeDrawSprite next = boxedgeSaved != nullptr ? boxedgeSaved : ((const RendererVtable*) Boxedge_refs[0])->drawSprite;
     const BlendFactors* f = &renderer->blendFactors;
     if (angleDeg == 0.0f && alpha >= 1.0f && (boxedgeAbs(xscale) > 2.5f || boxedgeAbs(yscale) > 2.5f) && f->src == bm_src_alpha &&
         f->dst == bm_inv_src_alpha) {
-        boxedgeFit(renderer, tpagIndex, &x, &y, originX, originY, &xscale, &yscale);
+        thinartEdgeFit(renderer, tpagIndex, &x, &y, originX, originY, &xscale, &yscale);
     }
     next(renderer, tpagIndex, x, y, originX, originY, xscale, yscale, angleDeg, color, alpha);
 }

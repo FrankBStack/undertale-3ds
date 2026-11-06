@@ -44,6 +44,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.dirname(os.path.dirname(HERE))
 sys.path.insert(0, HERE)
 import gmlaot  # noqa: E402
+from private_game import require_private_work, runtime_input  # noqa: E402
 
 DR_ARGS = "-game data.win launcher switch_-1 returning_0"
 # UNDERTALE: a save in the Ruins (as the "ruins" bench scene) and one late in the game for battles (as "undyne").
@@ -106,6 +107,15 @@ def room_names(path):
 
 
 def run_runner(o, data_win, ch, script, scene, frames, window, log, save, timeout):
+    # Host snapshots may reuse the console packer, which caches beside data.win.
+    # --save-folder redirects saves only; it does not redirect that cache.
+    for output in (o.out, save, os.path.dirname(os.path.abspath(log))):
+        require_private_work(data_win, output)
+    with runtime_input(data_win, os.path.dirname(os.path.abspath(save))) as private:
+        return _run_private_runner(o, private.as_posix(), ch, script, scene, frames, window, log, save, timeout)
+
+
+def _run_private_runner(o, data_win, ch, script, scene, frames, window, log, save, timeout):
     os.makedirs(save, exist_ok=True)
     empty = os.path.join(o.out, "empty.json")
     if not os.path.exists(empty):

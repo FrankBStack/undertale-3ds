@@ -1254,3 +1254,78 @@ __attribute__((noinline, optimize("Os"), section(".text_utfade"))) void CtrPacer
     gfxScreenSwapBuffers(screen, false);
 }
 #endif
+
+// ===[ pacealign: where a bench window's edges cut the pacer's numbers (change auditfixe, late code; UNDERTALE only) ]===
+//
+// The bench marks a window's opening in its step of the window's first frame A and its end in its step of the frame
+// after its last, B+1 (z_pacealign.c). The cut waits for that frame E's end, here: CtrRenderer_endFrame waits for the
+// GPU to finish frame E-1, then hands the pacer that frame's GPU time with E's own frame end (CtrPacer_frameEnded,
+// wrapped for UNDERTALE in CMakeLists.txt). The report a cut closes has:
+//   - the main thread's time of every frame up to E-1, which E's slot wait charged before the bench's step: a window's
+//     last is B's, and nothing the bench did after that wait;
+//   - the GPU time of every frame up to E-1, taken here after the GPU finished it: B's too, also with --exit-after,
+//     whose last frame ends the same way before the game leaves;
+//   - the frame end and GPU wait of every frame up to E-1; E's go to the report the cut opens.
+// E's slot (its frame count, and its skip if it goes unshown) goes to the report the cut opens too, unless that would
+// leave the closing one at 0 frames, for which CtrPacer_logStats prints nothing and drops what it had: then the stats
+// block ran in E-1 (or a cut there kept E-1's slot the same way), the slot stays, and the report the cut opens starts
+// at 0 frames, which its next slot wait counts before a print can come (main.c prints every 5 s; a cut in E+1 keeps
+// the slot the same way). So at such a collision a report's frame count is one off; the sum of each report's frames
+// times its averages, and the maxima, are still the window's exactly, and its "Bench: ... measured frames A-B" line
+// gives its frame count. GSP's callbacks count flips when they happen (a frame's done time and hold at its GPU finish,
+// how long the picture before stayed up at its flip), so a window's last flips can come after its end. A frame that
+// goes unshown has no frame end or GPU time (CtrRenderer_endFrame returns before CtrPacer_frameEnded), so its cut is
+// in CtrPacer_frameBegun, which every frame calls after the GPU wait. `pace` by its assembler name, so the functions
+// above keep their code.
+#ifdef CTRPORT_PACEALIGN
+void __real_CtrPacer_frameBegun(void);
+void __real_CtrPacer_frameEnded(float gpuMs);
+void __wrap_CtrPacer_frameBegun(void);
+void __wrap_CtrPacer_frameEnded(float gpuMs);
+
+// The cut: the edges' lines and the closing report (z_pacealign.c), then E's frame end and GPU wait if it is shown.
+__attribute__((noinline, noclone, noipa, section(".text_pacealign"))) static void paceCut(bool shown, uint64_t end,
+                                                                                          uint64_t gpuWait) {
+    extern __typeof__(pace) cutPace __asm__("pace");
+    LightLock_Lock(&cutPace.lock);
+    uint32_t moved = cutPace.stats.frames >= 2 ? 1 : 0;
+    uint32_t skipped = moved != 0 && cutPace.skipping && cutPace.stats.skipped > 0 ? 1 : 0;
+    cutPace.stats.frames -= moved;
+    cutPace.stats.skipped -= skipped;
+    LightLock_Unlock(&cutPace.lock);
+    CtrBench_paceCutLog();
+    LightLock_Lock(&cutPace.lock);
+    cutPace.stats.frames += moved;
+    cutPace.stats.skipped += skipped;
+    if (shown) {
+        cutPace.stats.endTicks += end;
+        if (end > cutPace.stats.endMaxTicks) cutPace.stats.endMaxTicks = end;
+        cutPace.stats.gpuWaitTicks += gpuWait;
+        if (gpuWait > cutPace.stats.gpuWaitMaxTicks) cutPace.stats.gpuWaitMaxTicks = gpuWait;
+    }
+    LightLock_Unlock(&cutPace.lock);
+}
+
+// CtrPacer_frameEnded's own numbers, with the cut between frame E-1's GPU time and frame E's frame end.
+__attribute__((noinline, noclone, noipa, section(".text_pacealign"))) void __wrap_CtrPacer_frameEnded(float gpuMs) {
+    extern __typeof__(pace) cutPace __asm__("pace");
+    if (!CtrBench_paceCutDue()) {
+        __real_CtrPacer_frameEnded(gpuMs);
+        return;
+    }
+    uint64_t end = svcGetSystemTick() - cutPace.endTick;
+    uint64_t gpuWait = CtrGpu_takeWaitTicks();
+    LightLock_Lock(&cutPace.lock);
+    cutPace.stats.gpuMs += gpuMs;
+    if (gpuMs > cutPace.stats.gpuMaxMs) cutPace.stats.gpuMaxMs = gpuMs;
+    LightLock_Unlock(&cutPace.lock);
+    paceCut(true, end, gpuWait);
+}
+
+// An unshown frame's cut (its slot wait set pace.skipping; CtrRenderer_endFrame calls no CtrPacer_frameEnded for it).
+__attribute__((noinline, noclone, noipa, section(".text_pacealign"))) void __wrap_CtrPacer_frameBegun(void) {
+    extern __typeof__(pace) cutPace __asm__("pace");
+    __real_CtrPacer_frameBegun();
+    if (cutPace.skipping && CtrBench_paceCutDue()) paceCut(false, 0, 0);
+}
+#endif

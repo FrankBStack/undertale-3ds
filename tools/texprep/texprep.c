@@ -51,6 +51,7 @@ bool texprepUtCache;
 
 #include "ctr_qoi.h"
 #include "texprep_host.h"
+#include "texprep_paths.h"
 #ifndef TEXPREP_DEPS_PASS
 #include "texprep_sources.h" // written by build.sh
 #endif
@@ -278,6 +279,10 @@ int main(int argc, char** argv) {
     // The console's paths hold 256 bytes; one that doesn't fit would be ignored by CtrPack_setDataWinPath.
     if (strlen(dataWinArg) >= PACK_PATH_MAX || strlen(outDir) + 1 + 16 >= PACK_PATH_MAX) {
         fprintf(stderr, "texprep: path too long (at most %d bytes)\n", PACK_PATH_MAX - 17);
+        return 2;
+    }
+    if (!texprep_output_safe(dataWinArg, outDir)) {
+        fprintf(stderr, "texprep: choose a cache folder outside the source game folder (paths must be resolvable)\n");
         return 2;
     }
 

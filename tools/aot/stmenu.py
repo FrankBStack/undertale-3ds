@@ -298,7 +298,7 @@ def vcat(imgs, gap):
     return out
 
 
-# Crisp text placement: smalltext_carry.py's model of z_smalltext.c (nominal_x, touch, Line).
+# Crisp text placement: smalltext_carry.py's model of z_smalltext.c (nominal_x, touch, gap, even_move, Line).
 def nominal_x(pen, left, ph):
     nx = (pen >> 1) + left
     e = -(pen & 1) - ph
@@ -320,6 +320,51 @@ def touch(a, ax, b, bx, dy=0):
     return False
 
 
+GAP_NONE = 99
+CARRY_MIN = -2
+WORD_GAP = 5
+
+
+def gap(a, ax, b, bx):
+    best = GAP_NONE
+    for r in range(len(a)):
+        if a[r] == sg.NONE:
+            continue
+        right = a[r][1] + ax
+        for q in (r - 1, r, r + 1):
+            if 0 <= q < len(b) and b[q] != sg.NONE:
+                best = min(best, b[q][0] + bx - right - 1)
+    return best
+
+
+def even_move(native_a, ax, native_b, bx, pc_a, pen_a, pc_b, pen_b, carry):
+    pc = gap(pc_a, pen_a, pc_b, pen_b)
+    g = gap(native_a, ax, native_b, bx)
+    most, want = carry - CARRY_MIN, pc >> 1
+    if pc == GAP_NONE or g == GAP_NONE:
+        most, want = max(carry, 0), 1
+        if g == GAP_NONE:
+            return -most
+    want = max(want, 1)
+    if g > want:
+        return -most if g - want > most else want - g
+    return min(want - g, 2)
+
+
+def word_move(native_a, ax, native_b, bx, pc_a, apen, pc_b, bpen, carry):
+    if carry == 0:
+        return 0
+    g = gap(native_a, ax, native_b, bx)
+    if carry > 0:
+        give = g - WORD_GAP
+        return 0 if give <= 0 else -min(give, carry)
+    pc = gap(pc_a, apen, pc_b, bpen)
+    if pc == GAP_NONE or g == GAP_NONE or g >= 2 * WORD_GAP:
+        return -carry
+    room = (pc >> 1) - g
+    return 0 if room <= 0 else min(room, -carry)
+
+
 class Line:
     def __init__(self, adv640):
         self.adv = adv640
@@ -331,15 +376,20 @@ class Line:
         carry = self.carry
         nx = nx0 + carry
         p = self.prev
-        if p is not None and not space_before and pen - self.pen <= self.adv + 1 and not touch(p[2], p[3], pc, pen):
-            while carry > 0 and not touch(p[0], p[1], native, nx - 1):
-                carry -= 1
-                nx -= 1
-            k = 0
-            while k < 2 and touch(p[0], p[1], native, nx):
-                k += 1
-                nx += 1
-            carry += k
+        if p is not None and not space_before and pen - self.pen <= self.adv + 1:
+            if not touch(p[2], p[3], pc, pen):
+                move = even_move(p[0], p[1], native, nx, p[2], p[3], pc, pen, carry)
+                carry += move
+                nx += move
+                k = 0
+                while k < 2 and touch(p[0], p[1], native, nx):
+                    k += 1
+                    nx += 1
+                carry += k
+        elif carry != 0:
+            move = word_move(p[0], p[1], native, nx, p[2], p[3], pc, pen, carry)
+            carry += move
+            nx += move
         self.carry, self.pen = carry, pen
         self.prev = (native, nx, pc, pen)
         return nx

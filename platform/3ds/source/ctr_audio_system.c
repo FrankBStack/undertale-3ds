@@ -365,7 +365,7 @@ struct CtrAudioSystem {
     uint32_t soundCount;
     CachedSfx* sfxCache; // per SOND index
     uint32_t cacheBytes;
-    float* soundLengths; // per SOND index, < 0 until known
+    float* soundLengths; // per SOND index, < 0 until known; UT future offsets follow
     bool* warned; // per SOND index: unsupported format already reported
     uint8_t* soundForms; // per SOND index, SoundForm
     bool* noBackgroundRead; // per SOND index: a background read failed, read it directly
@@ -433,6 +433,13 @@ void CtrAudioSelfTest_step(AudioSystem* audio, float dt);
 
 static CtrAudioSystem* gShutdownTarget = NULL;
 static bool gAtexitRegistered = false;
+#if defined(ENABLE_WAD16)
+void* audparLengthStorage(size_t bytes, const char* file, int line);
+void audparClearVoice(Voice* v, CtrAudioSystem* ca, int32_t soundIndex);
+float audparGetTrackPosition(AudioSystem* audio, int32_t soundOrInstance);
+void audparSetTrackPosition(AudioSystem* audio, int32_t soundOrInstance, float positionSeconds);
+#endif
+#line 434
 
 // ===[ Small helpers ]===
 
@@ -645,7 +652,7 @@ static int countQueued(const StreamContext* s) {
 }
 
 static void finishStream(StreamContext* s) {
-    CtrDecoder_close(&s->decoder);
+    GUN_STREAM_CLOSE(&s->decoder);
     free(s->path);
     s->path = NULL;
     s->memData = NULL;
@@ -1251,6 +1258,10 @@ static void stopLoaderThread(CtrAudioSystem* ca) {
 
 // Queues a background read of a sound's AUDO entry. False when it can't be
 // read in the background (the caller then loads it synchronously).
+#ifdef CTRPORT_PACER_ARENA // E1b: static, as a global here GCC put two existing late functions in another order
+static void CtrArena_loadSignal(LightEvent* ev); // (flowendPlaySound, CtrAudioSystem_chainFlowburst): check_layout
+#endif
+#line 1254
 static bool requestLoad(CtrAudioSystem* ca, int32_t soundIndex, int32_t groupIndex, DataWin* group, const AudioEntry* entry) {
     if (ca->loader == NULL || groupIndex < 0 || groupIndex >= (int32_t) arrlen(ca->groupPaths) || ca->groupPaths[groupIndex] == NULL) return false;
     if (group->lazyLoadFile == NULL || group->mappedFile != NULL || !entry->present || entry->dataSize == 0) return false;
@@ -1279,7 +1290,12 @@ static bool requestLoad(CtrAudioSystem* ca, int32_t soundIndex, int32_t groupInd
     }
     LightLock_Unlock(&ca->loadLock);
     if (freeSlot < 0) return false;
+#ifdef CTRPORT_PACER_ARENA // E1b (UNDERTALE Old): a read over PA_SMALL gets its block here (ctr_audio_system.c's end)
+    CtrArena_loadSignal(&ca->loadEvent);
+#else
     LightEvent_Signal(&ca->loadEvent);
+#endif
+#line 1283
     return true;
 }
 
@@ -1968,7 +1984,7 @@ static void startStream(CtrAudioSystem* ca, int vi, int ctx, char* path, const u
     }
     v->lastPosition = v->startPosition;
     s->state = CTX_OPEN_REQUESTED;
-    LightLock_Unlock(&s->lock);
+    GOM_PUBLISH(&s->lock); // gomusic: the request notes its frame under this lock, so the opener can't take it first (file end)
     v->ctx = ctx;
     LightEvent_Signal(ca->opener != NULL ? &ca->openEvent : &ca->event);
 }
@@ -2026,7 +2042,7 @@ static void shutdownAudio(CtrAudioSystem* ca) {
 
     for (int i = 0; i < STREAM_CONTEXTS; i++) {
         StreamContext* s = &ca->streams[i];
-        CtrDecoder_close(&s->decoder);
+        GUN_STREAM_CLOSE(&s->decoder);
         free(s->path);
         s->path = NULL;
         s->state = CTX_FREE;
@@ -2143,7 +2159,13 @@ static void ctrInit(AudioSystem* audio, DataWin* dataWin, FileSystem* fileSystem
     ca->soundCount = dataWin->sond.count;
     uint32_t allocCount = ca->soundCount > 0 ? ca->soundCount : 1;
     ca->sfxCache = (CachedSfx*) safeCalloc(allocCount, sizeof(CachedSfx));
+#if defined(ENABLE_WAD16)
+    ca->soundLengths = (float*) audparLengthStorage(allocCount * sizeof(float), __FILE__, 2131);
+#else
+#line 2131
     ca->soundLengths = (float*) safeMalloc(allocCount * sizeof(float));
+#endif
+#line 2132
     for (uint32_t i = 0; i < allocCount; i++) ca->soundLengths[i] = -1.0f;
     ca->warned = (bool*) safeCalloc(allocCount, sizeof(bool));
     ca->soundForms = (uint8_t*) safeCalloc(allocCount, sizeof(uint8_t));
@@ -2655,7 +2677,12 @@ static int32_t playSoundImpl(CtrAudioSystem* ca, int32_t soundIndex, int32_t pri
     }
     Voice* v = &ca->voices[vi];
     rampRelease(ca, vi);
+#if defined(ENABLE_WAD16)
+    audparClearVoice(v, ca, soundIndex);
+#else
     memset(v, 0, sizeof(*v));
+#endif
+#line 2631
     v->instanceId = nextInstanceId(ca);
     v->soundIndex = soundIndex;
     v->priority = priority;
@@ -2665,7 +2692,10 @@ static int32_t playSoundImpl(CtrAudioSystem* ca, int32_t soundIndex, int32_t pri
     v->fadeTarget = gain;
     v->pitch = pitch;
     v->emitterGain = 1.0f;
+#if !defined(ENABLE_WAD16)
     v->ctx = -1;
+#endif
+#line 2641
 #if defined(ENABLE_WAD16) && defined(CTR_AUDIO_PCM_HASH)
     latRequest(ca, vi);
 #endif
@@ -2741,6 +2771,12 @@ static void ctrStopAll(AudioSystem* audio) {
     ca->frameTicks += svcGetSystemTick() - t0;
 }
 
+#if defined(ENABLE_WAD16)
+__attribute__((noinline)) static bool ctrIsPlaying(AudioSystem* audio, int32_t soundOrInstance) {
+    bool audparIsPlaying(AudioSystem* audio, int32_t soundOrInstance);
+    return audparIsPlaying(audio, soundOrInstance);
+}
+#else
 static bool ctrIsPlaying(AudioSystem* audio, int32_t soundOrInstance) {
     CtrAudioSystem* ca = (CtrAudioSystem*) audio;
     for (int i = 0; i < VOICE_COUNT; i++) {
@@ -2748,6 +2784,8 @@ static bool ctrIsPlaying(AudioSystem* audio, int32_t soundOrInstance) {
     }
     return false;
 }
+#endif
+#line 2760
 
 static void setPaused(CtrAudioSystem* ca, int32_t soundOrInstance, bool all, bool paused) {
     for (int i = 0; i < VOICE_COUNT; i++) {
@@ -2904,6 +2942,7 @@ static float clockPosition(CtrAudioSystem* ca, const Voice* v) {
 }
 
 static float ctrGetTrackPosition(AudioSystem* audio, int32_t soundOrInstance) {
+
 #if defined(ENABLE_WAD16) && defined(CTR_AUDIO_PCM_HASH)
     if ((uint32_t) soundOrInstance - 0x80000001u < 255u) {
         latMark((uint32_t) soundOrInstance - 0x80000000u);
@@ -2911,15 +2950,25 @@ static float ctrGetTrackPosition(AudioSystem* audio, int32_t soundOrInstance) {
     }
 #endif
 #line 2875
+#if defined(ENABLE_WAD16)
+    return audparGetTrackPosition(audio, soundOrInstance);
+#else
+
     CtrAudioSystem* ca = (CtrAudioSystem*) audio;
     for (int i = 0; i < VOICE_COUNT; i++) {
         if (!voiceMatches(ca, i, soundOrInstance)) continue;
         return GetTime_virtualClockOn() ? clockPosition(ca, &ca->voices[i]) : voicePosition(ca, i);
     }
     return 0.0f;
+#endif
 }
+#line 2882
 
 static void ctrSetTrackPosition(AudioSystem* audio, int32_t soundOrInstance, float positionSeconds) {
+#if defined(ENABLE_WAD16)
+    audparSetTrackPosition(audio, soundOrInstance, positionSeconds);
+#else
+
     CtrAudioSystem* ca = (CtrAudioSystem*) audio;
     u64 t0 = svcGetSystemTick();
     if (positionSeconds < 0.0f) positionSeconds = 0.0f;
@@ -2945,7 +2994,9 @@ static void ctrSetTrackPosition(AudioSystem* audio, int32_t soundOrInstance, flo
         }
     }
     ca->frameTicks += svcGetSystemTick() - t0;
+#endif
 }
+#line 2910
 
 static float ctrGetSoundLength(AudioSystem* audio, int32_t soundOrInstance) {
     CtrAudioSystem* ca = (CtrAudioSystem*) audio;
@@ -5584,7 +5635,7 @@ __attribute__((noinline, optimize("Os"), section(".text.flowburst_late"))) stati
         CachedSfx* c = &ca->sfxCache[soundIndex];
         Voice* v = &ca->voices[vi];
         rampRelease(ca, vi);
-        memset(v, 0, sizeof(*v));
+        audparClearVoice(v, ca, soundIndex);
         id = v->instanceId = flowendNextInstanceId(ca);
         v->soundIndex = soundIndex;
         v->priority = priority;
@@ -5594,7 +5645,7 @@ __attribute__((noinline, optimize("Os"), section(".text.flowburst_late"))) stati
         v->fadeTarget = sound->volume;
         v->pitch = sound->pitch > 0.0f ? sound->pitch : 1.0f;
         v->emitterGain = 1.0f;
-        v->ctx = -1;
+        /* audparClearVoice supplies ctx and snapshots the asset offset. */
 #if defined(ENABLE_WAD16) && defined(CTR_AUDIO_PCM_HASH)
         latRequest(ca, vi);
 #endif
@@ -7992,4 +8043,1433 @@ PACER_CODE void __wrap_vorbis_info_clear(vorbis_info* vi) {
     }
     __real_vorbis_info_clear(vi);
 }
+#endif
+
+#if defined(ENABLE_WAD16) && defined(CTRPORT_PACER_ARENA) // CMakeLists.txt: UNDERTALE Old 3DS, newlib's allocators wrapped
+// ===[ pacer A + E1: the audio threads' blocks come from an arena of their own (late code, UNDERTALE Old) ]===
+// newlib has one heap lock for every thread. On the Old models the audio threads (decode, stream opener, loader, UT sfx
+// worker) all run on core 1, whose app time limit (SYSCORE_PERCENT) pauses them whatever their priority, and the loader
+// (lowest) is also preempted by the decode thread's refills: one paused inside malloc or free held the lock, and the
+// game thread waited 23.6 and 28.5 ms for it at its next allocation (omegaflowey's lock trace, 56d83f348 / f81e401c3;
+// the loader's cache-decode open and close, f13782 and f5456). Here those threads' blocks of up to PA_SMALL bytes come
+// from one block carved from the heap at their first allocation, under a lock only they take, and every other thread's
+// stay on the heap. E1: pacer A took only the audio threads' blocks of up to 31 bytes and their callocs, because
+// devkitARM's malloc asks _memalign_r for 32-byte alignment above 31 bytes and A sent memalign to the heap (the E1
+// arenalog census: ~10 heap-lock takes a second left in Omega Flowey, 0.7 a second with blocks up to 16 KB). The arena
+// now takes alignments up to 32, realloc(NULL), and blocks up to 256 KB (the loader's sound file reads, Tremor's larger
+// tables, the 66 KB tail probe), and a heap block an audio thread frees waits for the game thread to free it
+// (paHeapDrain), so the audio threads take the heap lock only at the carving, when the arena is full (counted and
+// logged) and for a realloc of a heap block or a larger block (none in the census). Every free and realloc goes by
+// address, whatever the thread. Another thread never takes the arena's lock: an arena block it frees goes on a
+// lock-free list that the next audio-thread call frees, and its realloc of one copies it to the heap. newlib's own
+// calloc and realloc read heap chunk headers, so an audio thread inside them allocates from the heap (bypass);
+// ctr_memory.c's malloc_usable_size reads the arena's own header (no wrap: wrapping newlib's would link its member
+// earlier and move every newlib function after it). Arena full or not carved: the heap, counted and logged. The
+// allocator: blocks with a size word (in use, block before in use) and a closing size word while free, free lists by
+// power of two with a bitmap, first fit in the request's own list, split and coalesced both ways.
+#ifndef PACER_ARENA_KB // E1 arenalog (Azahar, every audio block up to PA_SMALL): ut_flowey 950,808 B in use at its peak
+#define PACER_ARENA_KB 1280
+#endif
+#define PA_BYTES ((uint32_t) PACER_ARENA_KB * 1024u)
+#define PA_SPAN (PA_BYTES + 8u) // the block carved from the heap
+#define PA_SMALL (256u * 1024u) // E1: a larger block (none seen; the loader's largest sound file was 226,184 B) uses the heap
+#define PA_BINS 16
+#define PA_USED 1u
+#define PA_PREV 2u // the block before this one is in use
+#define PA_MIN ((uint32_t) ((8 + 2 * sizeof(char*) + 7) & ~7u)) // size word, two links, closing size word
+#define PA_HEAD(b) (*(uint32_t*) (b))
+#define PA_SIZE(b) (PA_HEAD(b) & ~7u)
+#define PA_NEXT(b) (((char**) ((b) + 4))[0])
+#define PA_BACK(b) (((char**) ((b) + 4))[1])
+#define PA_CODE __attribute__((optimize("Os"), section(".pacer_arena")))
+#ifndef PA_TEST_HOOK_MINE // the host test's scheduling points; empty in the game
+#define PA_TEST_HOOK_MINE()
+#define PA_TEST_HOOK_CARVE()
+#endif
+#ifndef PACER_ARENA_SECTION_DATA
+#define PACER_ARENA_SECTION_DATA __attribute__((section(".pacer_arena_data")))
+#endif
+typedef struct PacerArena {
+    LightLock lock;
+    uint32_t state; // 0 not carved, 1 being carved, 2 ready, 3 no heap for it
+    uintptr_t lo; // arena addresses [lo, lo + PA_SPAN); 0 until the arena is valid, then never changed
+    char* deferred; // arena blocks other threads freed (lock-free push, emptied under the lock)
+    char* heapFreed; // E1: heap blocks audio threads freed (lock-free push, freed by the game thread's next call)
+    uint32_t bits; // non-empty free lists
+    char* bins[PA_BINS];
+    uint8_t bypass[4]; // per audio thread: inside newlib's calloc, realloc or memalign
+    Thread who[4]; // each audio thread kind's running thread (CtrArena_runThread), or NULL
+    uint32_t used, peak, fallbacks;
+    CtrAudioSystem* ca; // E1b: the audio system whose load slots rd[] serves (CtrArena_loadSignal)
+    char* rd[LOAD_SLOTS]; // E1b: load slot i's block for a read over PA_SMALL, put by the game thread
+    uint32_t rdN[LOAD_SLOTS]; // its size
+#ifdef PACER_ARENA_LOG
+    uint32_t logged, big, bigMax, allocs[4], req[4]; // req: E1 census, the kind's wrapped call in progress
+#endif
+} PacerArena;
+PACER_ARENA_SECTION_DATA static PacerArena pa = {.lock = 1}; // 1 = libctru's unlocked
+static const char paLogFull[] __attribute__((section(".pacer_arena_ro"))) =
+    "Audio: arena %lu KB (state %lu) full, %lu bytes from the heap (%lu so far)\n";
+static const char paLogReady[] __attribute__((section(".pacer_arena_ro"))) = "Audio: arena %lu KB at %p\n";
+#ifdef PACER_ARENA_LOG
+static const char paLogPeak[] __attribute__((section(".pacer_arena_ro"))) =
+    "Audio: arena peak %lu used %lu largest free %lu fallbacks %lu big %lu (max %lu) allocs d%lu o%lu l%lu s%lu\n";
+// E1 test word census: every time an audio thread takes newlib's heap lock (ctr_watchdog.c's __malloc_lock wrap calls
+// CtrArena_noteHeapLock under PACER_ARENA_LOG), its kind, the wrapped call in progress (req: kind of call << 28 | size;
+// 1 malloc, 2 calloc, 3 realloc, 4 memalign, 5 free; 0 a newlib-internal call) and the code addresses on its stack, in
+// a ring logged later by an audio thread outside every lock (lost: entries the ring overwrote before that). Counts per
+// kind on each line. Never in a release.
+static const char paLogHl[] __attribute__((section(".pacer_arena_ro"))) =
+    "Audio: arena heaplock #%lu k%lu n %lu age %lu req %08lx: %08lx %08lx %08lx %08lx %08lx %08lx %08lx %08lx (d%lu o%lu l%lu s%lu lost %lu)\n";
+#define PA_HL_N 256
+typedef struct PaHeapLock {
+    uint32_t seq, who, n, req, ms, w[8];
+} PaHeapLock;
+static PaHeapLock paHl[PA_HL_N];
+static uint32_t paHlCount[4], paHlPut, paHlGot, paHlLost;
+extern char __late_text_end[];
+#define PA_REQ(who, code, n) \
+    do { \
+        if (who) pa.req[(who) - 1] = ((uint32_t) (code) << 28) | ((uint32_t) (n) & 0x0fffffffu); \
+    } while (0)
+#else
+#define PA_REQ(who, code, n) ((void) 0)
+#endif
+void* __real__malloc_r(struct _reent* r, size_t n);
+void* __real__calloc_r(struct _reent* r, size_t c, size_t n);
+void* __real__realloc_r(struct _reent* r, void* p, size_t n);
+void* __real__memalign_r(struct _reent* r, size_t a, size_t n);
+size_t malloc_usable_size(void* p);
+void __real__free_r(struct _reent* r, void* p);
+void* __wrap__malloc_r(struct _reent* r, size_t n);
+void* __wrap__calloc_r(struct _reent* r, size_t c, size_t n);
+void* __wrap__realloc_r(struct _reent* r, void* p, size_t n);
+void* __wrap__memalign_r(struct _reent* r, size_t a, size_t n);
+size_t CtrArena_usableSize(void* p); // ctr_memory.c's malloc_usable_size calls end here
+void CtrArena_freeR(struct _reent* r, void* p); // ctr_memory.c's free path ends here
+
+// The calling thread: 1-4 for the decode thread, the opener, the loader and the UT sfx worker, 0 for any other (the
+// main thread's handle is NULL). pa.who holds each kind's running thread: a thread stores its own handle there as it
+// starts and takes it out when its entry function returns, before libctru can free its Thread or hand the address to a
+// new thread, so a stored handle always names a live thread and a match can only be the caller itself. Nothing is read
+// through a handle and no audio-system object is read (r2 read the audio system's thread handles, which ctrDestroy
+// frees while other threads may still be allocating: c26rev R159 F2). Every thread starts through ctr_memory.c's
+// threadTrampoline: the link wraps threadCreate, so libctru's Thread always holds the trampoline as its entry (r3 read
+// that and never matched). The trampoline calls CtrLab_runThread with the real entry, and memory_report.c's wrap of
+// it ends here under CTRPORT_PACER_ARENA (only its call's target changes; a check script reads the
+// chain in each ELF). Not a thread-local byte: a .tbss variable moves all of .bss (r4 draft, check_layout).
+// One owner per kind: a thread claims its kind's slot only while it is empty (compare-and-swap) and only the owner
+// clears it, so a second thread of a kind alive at the same time stays on the heap for its whole life. The owner alone
+// reaches its kind's per-kind state (pa.bypass[], read and written without atomics). The game starts no such second
+// thread (decode, opener and loader start once per audio start-up and are joined at shut-down; the sfx worker starts
+// once), but the claim does not depend on that.
+#ifndef PA_TEST_HOOK_WHO
+#define PA_TEST_HOOK_WHO()
+#endif
+PA_CODE static int paWho(void) {
+    Thread t = threadGetCurrent();
+    PA_TEST_HOOK_WHO();
+    if (!t) return 0;
+    for (int k = 0; k < 4; k++)
+        if (__atomic_load_n(&pa.who[k], __ATOMIC_RELAXED) == t) return k + 1;
+    return 0;
+}
+void __real_CtrLab_runThread(void (*entry)(void*), void* arg);
+void CtrArena_runThread(void (*entry)(void*), void* arg);
+PA_CODE void CtrArena_runThread(void (*entry)(void*), void* arg) {
+    int k = entry == decodeThreadMain ? 1
+            : entry == openerThreadMain ? 2
+            : entry == loaderThreadMain ? 3
+            : entry == usWorkerMain     ? 4
+                                        : 0;
+    Thread t = k ? threadGetCurrent() : NULL, none = NULL;
+    if (t && !__atomic_compare_exchange_n(&pa.who[k - 1], &none, t, 0, __ATOMIC_RELAXED, __ATOMIC_RELAXED))
+        t = NULL; // the slot has an owner: this thread stays on the heap for its whole life
+    __real_CtrLab_runThread(entry, arg);
+    if (t) __atomic_compare_exchange_n(&pa.who[k - 1], &t, NULL, 0, __ATOMIC_RELAXED, __ATOMIC_RELAXED);
+}
+
+// An arena block's address lies in [lo, lo + PA_SPAN). lo is one word, stored once (release) after the arena is
+// valid and never again, so a reader sees 0 or the final base, never a mix. r2 stored lo and span separately, and a
+// free(NULL) that read the old lo and the new span took NULL for an arena block (c26rev R159 F1). NULL, every address
+// while lo is 0 and every heap address go to newlib. A relaxed load is enough: a thread holding an arena block got it
+// through a hand-off that already orders the base's store before it, and a non-zero lo is always the final one.
+PA_CODE static int paMine(const void* p) {
+    uintptr_t lo = __atomic_load_n(&pa.lo, __ATOMIC_RELAXED);
+    PA_TEST_HOOK_MINE();
+    return p && lo && (uintptr_t) p - lo < PA_SPAN;
+}
+
+PA_CODE static int paBin(uint32_t s) {
+    int b = 27 - __builtin_clz(s); // 16-31 B: 0
+    return b < PA_BINS ? b : PA_BINS - 1;
+}
+
+PA_CODE static void paInsert(char* b, uint32_t s) { // b free, s bytes; the block before is in use
+    PA_HEAD(b) = s | PA_PREV;
+    *(uint32_t*) (b + s - 4) = s;
+    PA_HEAD(b + s) &= ~PA_PREV;
+    int i = paBin(s);
+    PA_NEXT(b) = pa.bins[i];
+    PA_BACK(b) = NULL;
+    if (pa.bins[i]) PA_BACK(pa.bins[i]) = b;
+    pa.bins[i] = b;
+    pa.bits |= 1u << i;
+}
+
+PA_CODE static void paRemove(char* b) {
+    int i = paBin(PA_SIZE(b));
+    if (PA_NEXT(b)) PA_BACK(PA_NEXT(b)) = PA_BACK(b);
+    if (PA_BACK(b))
+        PA_NEXT(PA_BACK(b)) = PA_NEXT(b);
+    else if (!(pa.bins[i] = PA_NEXT(b)))
+        pa.bits &= ~(1u << i);
+}
+
+PA_CODE static char* paTake(uint32_t s) {
+    int i = paBin(s);
+    char* b = pa.bins[i];
+    while (b && PA_SIZE(b) < s) b = PA_NEXT(b);
+    if (!b) {
+        uint32_t m = pa.bits & ~((2u << i) - 1u); // every block of a higher list fits
+        if (!m) return NULL;
+        b = pa.bins[__builtin_ctz(m)];
+    }
+    paRemove(b);
+    uint32_t have = PA_SIZE(b);
+    if (have - s >= PA_MIN) {
+        paInsert(b + s, have - s);
+        have = s;
+    } else {
+        PA_HEAD(b + have) |= PA_PREV;
+    }
+    PA_HEAD(b) = have | PA_USED | PA_PREV;
+    pa.used += have;
+    if (pa.used > pa.peak) pa.peak = pa.used;
+    return b + 4;
+}
+
+PA_CODE static void paPut(char* b) {
+    uint32_t s = PA_SIZE(b);
+    pa.used -= s;
+    char* n = b + s;
+    if (!(PA_HEAD(n) & PA_USED)) {
+        paRemove(n);
+        s += PA_SIZE(n);
+    }
+    if (!(PA_HEAD(b) & PA_PREV)) {
+        uint32_t back = ((uint32_t*) b)[-1];
+        b -= back;
+        paRemove(b);
+        s += back;
+    }
+    paInsert(b, s);
+}
+
+// E1: a block of s bytes (s a multiple of 8, at least PA_MIN) whose user pointer is a multiple of a (16 or 32).
+// devkitARM's malloc asks _memalign_r for 32-byte alignment for every request over 31 bytes, so without this an audio
+// thread's every larger malloc (all of Tremor's and libogg's) bypassed the arena. Takes s + a + PA_MIN, then gives the
+// leading piece (when the user pointer is not aligned yet) and a large enough tail back through paPut, each first made
+// an in-use block of its own so paPut's coalescing keeps the free lists' invariant (no two free blocks adjacent).
+PA_CODE static char* paTakeAligned(uint32_t s, uint32_t a) {
+    char* q = paTake(s + a + PA_MIN);
+    if (!q) return NULL;
+    char* b = q - 4;
+    uint32_t have = PA_SIZE(b);
+    uint32_t g = (uint32_t) (-(uintptr_t) q & (a - 1)); // to the next multiple of a; q is 8-aligned
+    if (g && g < PA_MIN) g += a; // the leading piece must hold a free block's links
+    if (g) {
+        char* nb = b + g;
+        PA_HEAD(nb) = (have - g) | PA_USED | PA_PREV;
+        PA_HEAD(b) = g | PA_USED | (PA_HEAD(b) & PA_PREV);
+        paPut(b);
+        b = nb;
+        have -= g;
+    }
+    if (have - s >= PA_MIN) {
+        char* t = b + s;
+        PA_HEAD(t) = (have - s) | PA_USED | PA_PREV;
+        PA_HEAD(b) = s | PA_USED | (PA_HEAD(b) & PA_PREV);
+        paPut(t);
+    }
+    return b + 4;
+}
+
+// E1: a heap block an audio thread frees (a stream's path, a block from before the carving or from a full arena) waits
+// on pa.heapFreed for the game thread's next malloc or free, which frees it: an audio thread never takes newlib's heap
+// lock to free (the census's last class: ~0.1 a second, the decode thread at a stream's end), and no other thread
+// holds it longer for them. The game thread allocates every frame, so a block waits about a frame. The link is the
+// block's first word.
+PA_CODE static void paHeapDrain(struct _reent* r) { // the game thread only: libctru's main thread has no Thread
+    if (!__atomic_load_n(&pa.heapFreed, __ATOMIC_RELAXED) || threadGetCurrent()) return;
+    for (char* p = __atomic_exchange_n(&pa.heapFreed, NULL, __ATOMIC_ACQUIRE); p;) {
+        char* next = *(char**) p;
+        __real__free_r(r, p);
+        p = next;
+    }
+}
+
+PA_CODE static void paLockDrain(void) {
+    LightLock_Lock(&pa.lock);
+    for (char* p = __atomic_exchange_n(&pa.deferred, NULL, __ATOMIC_ACQUIRE); p;) {
+        char* next = *(char**) p;
+        paPut(p - 4);
+        p = next;
+    }
+}
+
+#ifdef PACER_ARENA_LOG
+PA_CODE static void paLogNow(void) { // test word: on each new 8 KB of peak
+    LightLock_Lock(&pa.lock);
+    uint32_t largest = 0, peak = pa.peak, used = pa.used;
+    for (int i = 0; i < PA_BINS; i++)
+        for (char* b = pa.bins[i]; b; b = PA_NEXT(b))
+            if (PA_SIZE(b) > largest) largest = PA_SIZE(b);
+    LightLock_Unlock(&pa.lock);
+    logInfo(paLogPeak, (unsigned long) peak, (unsigned long) used, (unsigned long) largest, (unsigned long) pa.fallbacks,
+            (unsigned long) pa.big, (unsigned long) pa.bigMax, (unsigned long) pa.allocs[0], (unsigned long) pa.allocs[1],
+            (unsigned long) pa.allocs[2], (unsigned long) pa.allocs[3]);
+}
+
+void CtrArena_noteHeapLock(void);
+PA_CODE __attribute__((noinline)) void CtrArena_noteHeapLock(void) { // inside the heap lock: no log, no allocation
+    int who = paWho();
+    if (!who) return;
+    uint32_t n = __atomic_add_fetch(&paHlCount[who - 1], 1, __ATOMIC_RELAXED);
+    uint32_t i = __atomic_fetch_add(&paHlPut, 1, __ATOMIC_RELAXED);
+    volatile uint32_t mark = 0;
+    const volatile uint32_t* s;
+    __asm__("" : "=r"(s) : "0"(&mark)); // the stack above mark: hidden from -Warray-bounds
+    PaHeapLock* e = &paHl[i % PA_HL_N];
+    __atomic_store_n(&e->seq, 0, __ATOMIC_RELAXED);
+    __atomic_thread_fence(__ATOMIC_RELEASE);
+    int k = 0;
+    for (int j = 1; j < 112 && k < 8; j++) {
+        uint32_t v = s[j];
+        if (v >= 0x100000u && v < (uint32_t) (uintptr_t) __late_text_end) e->w[k++] = v;
+    }
+    while (k < 8) e->w[k++] = 0;
+    e->n = n;
+    e->who = (uint32_t) who;
+    e->req = pa.req[who - 1];
+    e->ms = (uint32_t) (svcGetSystemTick() / 268111u);
+    __atomic_store_n(&e->seq, i + 1, __ATOMIC_RELEASE);
+}
+
+PA_CODE static void paHlDump(void) { // an audio thread, outside every lock
+    for (;;) {
+        uint32_t g = __atomic_load_n(&paHlGot, __ATOMIC_RELAXED), put = __atomic_load_n(&paHlPut, __ATOMIC_RELAXED);
+        if (g >= put) return;
+        if (put - g > PA_HL_N) { // overwritten before it was logged
+            if (__atomic_compare_exchange_n(&paHlGot, &g, put - PA_HL_N, 0, __ATOMIC_RELAXED, __ATOMIC_RELAXED))
+                __atomic_add_fetch(&paHlLost, put - PA_HL_N - g, __ATOMIC_RELAXED);
+            continue;
+        }
+        PaHeapLock* e = &paHl[g % PA_HL_N];
+        if (__atomic_load_n(&e->seq, __ATOMIC_ACQUIRE) != g + 1) return; // still being written
+        PaHeapLock c = *e;
+        __atomic_thread_fence(__ATOMIC_ACQUIRE);
+        if (__atomic_load_n(&e->seq, __ATOMIC_RELAXED) != g + 1) continue; // overwritten while copied
+        if (!__atomic_compare_exchange_n(&paHlGot, &g, g + 1, 0, __ATOMIC_RELAXED, __ATOMIC_RELAXED)) continue;
+        logInfo(paLogHl, (unsigned long) g, (unsigned long) c.who, (unsigned long) c.n,
+                (unsigned long) ((uint32_t) (svcGetSystemTick() / 268111u) - c.ms), (unsigned long) c.req,
+                (unsigned long) c.w[0], (unsigned long) c.w[1], (unsigned long) c.w[2], (unsigned long) c.w[3],
+                (unsigned long) c.w[4], (unsigned long) c.w[5], (unsigned long) c.w[6], (unsigned long) c.w[7],
+                (unsigned long) paHlCount[0], (unsigned long) paHlCount[1], (unsigned long) paHlCount[2],
+                (unsigned long) paHlCount[3], (unsigned long) paHlLost);
+    }
+}
+#endif
+
+PA_CODE static void* paAlloc(struct _reent* r, int who, size_t n, uint32_t a) { // a: 8, 16 or 32; NULL: the heap
+    uint32_t st = 0;
+    if (pa.bypass[who - 1]) return NULL;
+    if (__atomic_load_n(&pa.state, __ATOMIC_ACQUIRE) != 2 && __atomic_compare_exchange_n(&pa.state, &st, 1, 0, __ATOMIC_ACQUIRE, __ATOMIC_RELAXED)) {
+        char* m = __real__malloc_r(r, PA_BYTES + 8); // 8-aligned: blocks start 4 past a multiple of 8
+        if (m) {
+            PA_HEAD(m + 4 + PA_BYTES) = PA_USED; // the end
+            paInsert(m + 4, PA_BYTES);
+            PA_TEST_HOOK_CARVE();
+            __atomic_store_n(&pa.lo, (uintptr_t) m, __ATOMIC_RELEASE); // published whole, after the arena is valid
+            logInfo(paLogReady, (unsigned long) PACER_ARENA_KB, (void*) m);
+        }
+        __atomic_store_n(&pa.state, m ? 2 : 3, __ATOMIC_RELEASE);
+    }
+    char* p = NULL;
+    st = __atomic_load_n(&pa.state, __ATOMIC_ACQUIRE);
+    if (st == 2) {
+        paLockDrain();
+        uint32_t s = n < PA_MIN - 4 ? PA_MIN : (uint32_t) (n + 11) & ~7u;
+        p = a > 8 ? paTakeAligned(s, a) : paTake(s);
+        LightLock_Unlock(&pa.lock);
+#ifdef PACER_ARENA_LOG
+        pa.allocs[who - 1]++;
+        paHlDump();
+        if (pa.peak >= pa.logged + 8192 || !(pa.allocs[who - 1] & 2047)) { // E1: also every 2048 of a kind's
+            if (pa.peak > pa.logged) pa.logged = pa.peak;
+            paLogNow();
+        }
+#endif
+    }
+    if (!p && st != 1) { // full, or no heap for it (not: another audio thread is carving it right now)
+        uint32_t f = __atomic_add_fetch(&pa.fallbacks, 1, __ATOMIC_RELAXED);
+        if (!(f & (f - 1))) logInfo(paLogFull, (unsigned long) PACER_ARENA_KB, (unsigned long) st, (unsigned long) n, (unsigned long) f);
+    }
+    return p;
+}
+
+// E1b: a loader read over PA_SMALL (an AUDO sound up to 424,840 B: utstep's DREAM census, the 6 heap-lock takes E1
+// left, all the loader's) reads into a block the game thread took from the heap as it queued the read: requestLoad's
+// signal ends here. Under loadLock the game thread gives each queued slot over PA_SMALL a 32-aligned block of its
+// size + header + 1 (readRequest asks for size + header, flowend's piece read one more), replaces a queued slot's block
+// of another size, and frees the block of a slot that is neither queued nor the loader's busy one (its read never
+// asked: an open that failed). It never touches the busy slot's: the loader takes that (paBigTake, an exchange) while
+// the slot is busy, and only the loader makes a slot busy or ends it. The block is then the read's like any other: the
+// game thread adopts or frees it (collectLoads), and a loader free of it goes to the game thread (paHeapDrain).
+PA_CODE static void CtrArena_loadSignal(LightEvent* ev) {
+    CtrAudioSystem* ca = (CtrAudioSystem*) ((char*) ev - offsetof(CtrAudioSystem, loadEvent));
+    LightLock_Lock(&ca->loadLock);
+    __atomic_store_n(&pa.ca, ca, __ATOMIC_RELEASE);
+    for (int i = 0; i < LOAD_SLOTS && !threadGetCurrent(); i++) { // the game thread only (it queues every read)
+        LoadRequest* q = &ca->loads[i];
+        uint32_t t = q->size + q->header + 1;
+        int queued = q->state == LOAD_QUEUED && t > PA_SMALL;
+        if (q->state != LOAD_BUSY && pa.rd[i] && (!queued || pa.rdN[i] != t)) {
+            __real__free_r(_REENT, __atomic_exchange_n(&pa.rd[i], NULL, __ATOMIC_RELAXED));
+        }
+        if (queued && !pa.rd[i]) {
+            pa.rdN[i] = t;
+            __atomic_store_n(&pa.rd[i], (char*) __real__memalign_r(_REENT, 32, t), __ATOMIC_RELEASE);
+        }
+    }
+    LightLock_Unlock(&ca->loadLock);
+    LightEvent_Signal(ev);
+}
+
+PA_CODE static void* paBigTake(int who, size_t n) { // the loader, n over PA_SMALL: its busy slot's block, or NULL
+    CtrAudioSystem* ca = __atomic_load_n(&pa.ca, __ATOMIC_ACQUIRE);
+    if (who != 3 || !ca) return NULL;
+    for (int i = 0; i < LOAD_SLOTS; i++) {
+        if (ca->loads[i].state == LOAD_BUSY && __atomic_load_n(&pa.rd[i], __ATOMIC_ACQUIRE) && pa.rdN[i] - n <= 1u)
+            return __atomic_exchange_n(&pa.rd[i], NULL, __ATOMIC_ACQUIRE);
+    }
+    return NULL;
+}
+
+PA_CODE void* __wrap__malloc_r(struct _reent* r, size_t n) {
+    int w = paWho(), who = n <= PA_SMALL ? w : 0;
+    void* p = who ? paAlloc(r, who, n, 8) : n > PA_SMALL ? paBigTake(w, n) : NULL;
+    if (!w) paHeapDrain(r);
+#ifdef PACER_ARENA_LOG
+    if (n > PA_SMALL && w) {
+        pa.big++;
+        if (n > pa.bigMax) pa.bigMax = n;
+    }
+    if (p) return p;
+    PA_REQ(w, 1, n);
+    p = __real__malloc_r(r, n);
+    PA_REQ(w, 0, 0);
+    return p;
+#else
+    return p ? p : __real__malloc_r(r, n);
+#endif
+}
+
+PA_CODE void* __wrap__calloc_r(struct _reent* r, size_t c, size_t n) {
+    size_t t;
+    int who = paWho();
+    void* p = NULL;
+    if (who && !__builtin_mul_overflow(c, n, &t) && t <= PA_SMALL && (p = paAlloc(r, who, t, 8))) return memset(p, 0, t);
+    if (who) pa.bypass[who - 1]++;
+    PA_REQ(who, 2, c * n);
+    p = __real__calloc_r(r, c, n);
+    PA_REQ(who, 0, 0);
+    if (who) pa.bypass[who - 1]--;
+    return p;
+}
+
+PA_CODE void* __wrap__realloc_r(struct _reent* r, void* p, size_t n) {
+    if (paMine(p)) {
+        size_t have = PA_SIZE((char*) p - 4) - 4;
+        if (n <= have) return p;
+        void* q = __wrap__malloc_r(r, n);
+        if (q) {
+            memcpy(q, p, have);
+            CtrArena_freeR(r, p);
+        }
+        return q;
+    }
+    if (!p) return __wrap__malloc_r(r, n); // E1: realloc(NULL) is malloc, so an audio thread's goes to the arena
+    int who = paWho();
+    if (who) pa.bypass[who - 1]++;
+    PA_REQ(who, 3, n);
+    void* q = __real__realloc_r(r, p, n);
+    PA_REQ(who, 0, 0);
+    if (who) pa.bypass[who - 1]--;
+    return q;
+}
+
+PA_CODE void* __wrap__memalign_r(struct _reent* r, size_t a, size_t n) {
+    int who = paWho();
+    void* p; // E1: devkitARM's malloc is _memalign_r(32) above 31 bytes; alignments up to 32 take an arena block
+    if (who && a <= 32 && !(a & (a - 1)) && n <= PA_SMALL && (p = paAlloc(r, who, n, a < 8 ? 8 : (uint32_t) a))) return p;
+    if (a <= 32 && n > PA_SMALL && (p = paBigTake(who, n))) return p; // E1b
+    if (who) pa.bypass[who - 1]++;
+    PA_REQ(who, 4, n);
+    void* q = __real__memalign_r(r, a, n);
+    PA_REQ(who, 0, 0);
+    if (who) pa.bypass[who - 1]--;
+    return q;
+}
+
+PA_CODE size_t CtrArena_usableSize(void* p) {
+    return paMine(p) ? PA_SIZE((char*) p - 4) - 4 : malloc_usable_size(p);
+}
+
+PA_CODE void CtrArena_freeR(struct _reent* r, void* p) {
+    if (!paMine(p)) {
+        if (p && paWho()) { // E1: freed by the game thread's next call (paHeapDrain)
+            char* head = __atomic_load_n(&pa.heapFreed, __ATOMIC_RELAXED);
+            do *(char**) p = head;
+            while (!__atomic_compare_exchange_n(&pa.heapFreed, &head, (char*) p, 1, __ATOMIC_RELEASE, __ATOMIC_RELAXED));
+            return;
+        }
+        __real__free_r(r, p);
+        paHeapDrain(r);
+    } else if (paWho()) {
+        paLockDrain();
+        paPut((char*) p - 4);
+        LightLock_Unlock(&pa.lock);
+    } else {
+        char* head = __atomic_load_n(&pa.deferred, __ATOMIC_RELAXED);
+        do *(char**) p = head;
+        while (!__atomic_compare_exchange_n(&pa.deferred, &head, (char*) p, 1, __ATOMIC_RELEASE, __ATOMIC_RELAXED));
+    }
+}
+#endif
+
+#if defined(ENABLE_WAD16)
+// gomusic (change omegaflowey, UNDERTALE only). The Flowey heart's first game over starts one song three times in one
+// game step, as three looping streams at one gain. On PC the copies start within a buffer of each other and
+// sound as one louder song. Here the opener thread opens streams
+// one at a time (60-350 ms each), so the copies started 134-536 ms apart: the song heard over itself, as an echo.
+// This code acts on that one song and no other (gomSong, by asset name: the name is equal on Steam and GOG). Every other
+// sound gets no stamp (gomRequested), so nothing below holds, plans, seeks or scales it.
+// Copies of the song asked for in one game step form a group (gomRequested, from startStream). A copy can start a
+// step or more after it was asked for: it waited for a stream context, or (the first play of a song in a session) for
+// the cache probe that finds the song too long to cache (CACHING_STREAMS_MAX). gomUpdate notes each step's last voice
+// serial, so such a copy still joins the step it was asked for in (gomStepOf). The first member to open plays at once
+// (the leader). Each later one opens paused (gomPhysPaused holds its first pause write), is sent to
+// the sample the leader will be at GOM_MARGIN DSP frames on, and is unpaused in the frame callback in which the leader
+// reaches that sample (gomDspCallback), so it joins sample-locked. Until then the leader's mix is scaled by the copies
+// still to join that will sound as it does (same pitch and gain: gomLeaderMix, through gomPhysMix), so the song is as
+// loud from its first sample as on PC, where every copy starts at once; at each join the leader's scale drops by one in
+// the callback that unpauses the copy.
+// Only exact copies join: same step, same pitch and gain (gomSame). The game sets those by separate calls after its
+// play, the second game over its pitches a step after, so nothing is held, planned or scaled until the step after the
+// request has ended (gomSettled). Anything else runs alone, as it did before this code: a copy that opens before then,
+// a different pitch or gain, an expired step, and any pause, gain or pitch change, seek or stop on a copy still waiting,
+// or on its leader. A copy that leaves goes back to its first sample, whether or not its plan's seek was taken, and
+// stays held until that is queued (gomLeave); a seek of the game's is kept.
+// The menu's pause (the suspend hook pauses the channels and leaves the voices as they are) is no time at all here: the
+// callback's clock and its plans, joins and bounds hold until the menu lets go, so a join goes on after it where it was.
+// One log line per copy, posted from the game thread (gomUpdate): when it was heard after the step that asked for it,
+// and the copies' measured offset.
+#define GOM_CODE __attribute__((noinline, noipa, optimize("Os"), section(".text_gomusic")))
+#define GOM_BSS __attribute__((section(".bss.gomusic_late")))
+#define GOM_MARGIN 30 // DSP frames (4.9 ms each) from a follower's plan to its join: its seek and first buffers
+#define GOM_LEAD 1 // frames from the callback that unpauses a channel to the first frame it plays
+#define GOM_TRIES 3 // plans before a follower runs alone
+#define GOM_HOLD_FRAMES 120 // a follower waits this long (about 590 ms) past its hold or planned join, then runs alone
+#define GOM_MEASURE 40 // frames after a join to measure the offset again
+#define GOM_UNSET (-2147483647 - 1)
+#define GOM_STEPS 32 // steps remembered (about 1 s): a copy that started later than that is not joined
+
+enum { GOM_NONE, GOM_LEADER, GOM_HELD, GOM_PLANNED, GOM_JOINED, GOM_DONE, GOM_LEAVING };
+
+typedef struct {
+    volatile uint32_t serial; // the owner voice's serial at the request
+    volatile int32_t owner, sound;
+    uint32_t batch0, batch1; // the game step: the audio window's start and frame count
+    volatile uint8_t group; // 0, or the group's first context + 1
+    volatile uint8_t phase;
+    uint8_t tries, logged;
+    int8_t phys; // physical channel + 1 while held; 0 otherwise (the zeroed BSS holds nothing)
+    uint8_t copy;
+    const char* said; // the log line's word for what it did
+    uint32_t target; // a follower's first sample
+    uint32_t joinFrame; // held: the callback it was held in; planned: the callback it joins at; joined: the one it joined in
+    int32_t residual, offset[2];
+    u64 cueTick, heardTick;
+    // the leader's position, for the opener's plans: written in the callback (gom.seq), read with a retry
+    uint32_t snapPos, snapFrame;
+    float snapStep;
+    float factor; // a leader's mix scale (gomLeaderMix); 0 until set
+} GomCtx;
+
+static struct {
+    GomCtx c[STREAM_CONTEXTS];
+    volatile uint32_t held; // physical channels held paused (bit p)
+    volatile uint32_t frame; // frame callbacks
+    volatile uint32_t seq; // odd while a leader snapshot is written
+    volatile uint8_t active; // a group is open
+    uint32_t stepNext; // steps noted (gomUpdate)
+    volatile uint32_t mixSet; // contexts whose mix gomPhysMix has kept (bit k)
+    volatile uint32_t logs; // contexts with a log line for gomUpdate to post (bit k)
+    float mix[STREAM_CONTEXTS][12]; // each stream's mix as the engine last set it
+    struct {
+        uint32_t batch0, batch1, serialEnd; // a step's audio window and the first voice serial after it
+    } steps[GOM_STEPS];
+} gom GOM_BSS;
+
+static const char gomJoinFormat[] __attribute__((section(".rodata.gomusic_in_text"))) =
+    "Audio: gomusic '%s' copy %u %s %.0f ms after its cue: sample %lu, residual %ld, offset %ld then %ld, %u plan(s)\n";
+// (named arrays: a string literal here would go to the file's .rodata.str1.1 and move the main rodata)
+static const char gomLed[] __attribute__((section(".rodata.gomusic_in_text"))) = "led, heard";
+static const char gomJoined[] __attribute__((section(".rodata.gomusic_in_text"))) = "joined, heard";
+static const char gomRanAlone[] __attribute__((section(".rodata.gomusic_in_text"))) = "ran alone, heard";
+static const char gomSong[] __attribute__((section(".rodata.gomusic_in_text"))) = "mus_gameover";
+
+GOM_CODE static int gomPhys(const StreamContext* s) {
+    int id = s->channel;
+    return utaMapped && id >= 0 && id < UTA_CHANNELS ? utaMap[id] : id;
+}
+
+// The sample a stream's channel plays from, as the DSP last reported it. Under s->lock.
+GOM_CODE static bool gomPos(const StreamContext* s, int p, uint32_t* out) {
+    if (!s->opened || !s->everQueued || (unsigned) p >= UTA_CHANNELS) return false;
+    u16 seq = UTA_PHYS_SEQ(p);
+    u32 pos = UTA_PHYS_POS(p);
+    for (int i = 0; i < STREAM_BUFFERS; i++) {
+        const StreamBuffer* b = &s->bufs[i];
+        if ((b->wb.status == NDSP_WBUF_PLAYING || b->wb.status == NDSP_WBUF_QUEUED) && b->wb.sequence_id == seq) {
+            uint64_t f = b->startFrame + pos;
+            if (s->totalFrames > 0) f %= s->totalFrames;
+            *out = (uint32_t) f;
+            return true;
+        }
+    }
+    return false;
+}
+
+GOM_CODE static bool gomStamped(CtrAudioSystem* ca, int k) {
+    const StreamContext* s = &ca->streams[k];
+    const GomCtx* g = &gom.c[k];
+    int owner = s->owner;
+    return owner >= 0 && owner < VOICE_COUNT && g->owner == owner && g->serial == ca->voices[owner].serial &&
+           s->state != CTX_FREE && s->state != CTX_DONE;
+}
+
+// Game thread, each audio update before the engine's own (the vtable's update entry): the voices played since the last
+// update (serials below serialCounter) were asked for in the step just run, in the audio window noted with them.
+#ifdef GOM_UPDATE_NEXT
+GOM_CODE static void gomUpdate(AudioSystem* audio, float deltaTime) {
+    CtrAudioSystem* ca = (CtrAudioSystem*) audio;
+    uint32_t i = gom.stepNext % GOM_STEPS;
+    gom.steps[i].batch0 = (uint32_t) ca->windowStart;
+    gom.steps[i].batch1 = ca->windowFrames;
+    gom.steps[i].serialEnd = ca->serialCounter;
+    gom.stepNext++;
+    uint32_t logs = __atomic_exchange_n(&gom.logs, 0u, __ATOMIC_ACQ_REL); // not from the callback: posting takes a lock
+    for (int k = 0; logs != 0 && k < STREAM_CONTEXTS; k++) {
+        if (!((logs >> k) & 1u)) continue;
+        const GomCtx* g = &gom.c[k];
+        utaPost(ca, gomJoinFormat, ca->streams[k].name, (unsigned) g->copy, g->said,
+                g->heardTick ? TICKS_TO_MS(g->heardTick - g->cueTick) : -1.0, (unsigned long) g->target, (long) g->residual,
+                (long) g->offset[0], (long) g->offset[1], (unsigned) g->tries);
+    }
+    GOM_UPDATE_NEXT(audio, deltaTime);
+}
+#endif
+
+// A request's voice asked for in an earlier step (it waited): that step's audio window, as if it had started there.
+// Its step is the oldest noted one whose serialEnd is above its serial. 1 when it found one, 0 when it was asked for
+// in this step, -1 when longer ago than GOM_STEPS (it joins no group).
+GOM_CODE static int gomStepOf(GomCtx* g) {
+    int found = -1;
+    uint32_t n = gom.stepNext < GOM_STEPS ? gom.stepNext : GOM_STEPS;
+    for (uint32_t i = 0; i < n; i++) {
+        uint32_t e = (gom.stepNext - 1 - i) % GOM_STEPS;
+        if ((int32_t) (g->serial - gom.steps[e].serialEnd) >= 0) break; // asked for after this step
+        found = (int) e;
+        if (i + 1 == n && gom.stepNext > GOM_STEPS) return -1; // older than the steps noted
+    }
+    if (found < 0) return 0;
+    g->batch0 = gom.steps[found].batch0;
+    g->batch1 = gom.steps[found].batch1;
+    return 1;
+}
+
+// The request's step and the one after it have ended, so the calls the game makes after its play have been made: gain
+// in the step itself, the second game over's pitches in the next (its alarm, set to 1 by the alarm that plays).
+GOM_CODE static bool gomSettled(const GomCtx* g) {
+    uint32_t n = gom.stepNext;
+    return n >= 2 && (int32_t) (gom.steps[(n - 2) % GOM_STEPS].serialEnd - g->serial) > 0;
+}
+
+// Two members that would sound as one from one position: same pitch and gain, neither paused.
+GOM_CODE static bool gomSame(const CtrAudioSystem* ca, int a, int b) {
+    const Voice* x = &ca->voices[gom.c[a].owner];
+    const Voice* y = &ca->voices[gom.c[b].owner];
+    return x->pitch == y->pitch && x->gain == y->gain && x->emitterGain == y->emitterGain && !x->paused && !y->paused &&
+           !x->spatial && !y->spatial;
+}
+
+// A context gives its hold up (any thread): the channel gets the engine's own pause state, through the room-load and
+// play-through holds, whoever owns it by now.
+GOM_CODE static void gomUnhold(CtrAudioSystem* ca, GomCtx* g) {
+    int p = __atomic_exchange_n(&g->phys, (int8_t) 0, __ATOMIC_ACQ_REL) - 1;
+    if (p < 0) return;
+    __atomic_fetch_and(&gom.held, ~(1u << p), __ATOMIC_ACQ_REL);
+    int i = *CtrLoadmix_legacy.mapped ? CtrLoadmix_legacy.inverse[p] : p;
+    const UtaChan* c = &CtrLoadmix_legacy.channels[p];
+    bool logical = c->state != UTA_IDLE ? c->paused : ca->suspended || ca->voices[i].paused;
+    // (The pause write's own entry: a direct call from here up to startStream makes GCC emit two existing late functions
+    // in another order, and check_layout refuses that. With the bit clear it goes straight on to ptPhysPaused.)
+    audofixPtPaused(p, logical || lmHeld());
+}
+
+GOM_CODE static void gomLog(int k, const char* said) {
+    gom.c[k].said = said;
+    gom.c[k].logged = 1;
+    __atomic_fetch_or(&gom.logs, 1u << k, __ATOMIC_ACQ_REL);
+}
+
+// A member leaves its group and runs alone, as it would without this code. (A leader never does: its copies leave it.)
+GOM_CODE static void gomAlone(CtrAudioSystem* ca, int k) {
+    GomCtx* g = &gom.c[k];
+    g->group = 0;
+    g->phase = GOM_DONE;
+    g->heardTick = svcGetSystemTick();
+    gomUnhold(ca, g);
+    gomLog(k, gomRanAlone);
+}
+
+// Game thread, in place of startStream's unlock: stamp the new request and group it with the streams of the same sound
+// asked for in the same step, then let the lock go, so the opener can't open a request nobody has stamped (it wakes by itself).
+GOM_CODE static void gomRequested(LightLock* lock) {
+    CtrAudioSystem* ca = utaCa;
+    for (int k = 0; ca != NULL && k < STREAM_CONTEXTS; k++) {
+        StreamContext* s = &ca->streams[k];
+        GomCtx* g = &gom.c[k];
+        if (s->state != CTX_OPEN_REQUESTED || s->owner < 0 || s->owner >= VOICE_COUNT || gomStamped(ca, k)) continue;
+        const Voice* v = &ca->voices[s->owner];
+        gomUnhold(ca, g); // a held copy stopped and this context reused before the callback saw it
+        g->group = 0;
+        g->phase = GOM_NONE;
+        g->tries = g->logged = g->copy = 0;
+        __atomic_fetch_and(&gom.logs, ~(1u << k), __ATOMIC_ACQ_REL);
+        if (strcmp(s->name, gomSong) != 0) { // any other sound: no stamp, so everything below passes it by
+            g->owner = -1;
+            continue;
+        }
+        g->target = 0;
+        g->residual = 0;
+        g->offset[0] = g->offset[1] = GOM_UNSET;
+        g->sound = v->soundIndex;
+        g->batch0 = (uint32_t) ca->windowStart;
+        g->batch1 = ca->windowFrames;
+        g->cueTick = svcGetSystemTick();
+        g->heardTick = 0;
+        g->snapStep = 0.0f;
+        g->factor = 0.0f;
+        __atomic_fetch_and(&gom.mixSet, ~(1u << k), __ATOMIC_ACQ_REL);
+        g->owner = s->owner;
+        g->serial = v->serial;
+        if (s->seekPending) continue; // a start position of its own: not a copy
+        int asked = gomStepOf(g); // asked for in an earlier step: that step's copies
+        if (asked < 0) { // too long ago to know its step: joins nothing, and nothing joins it
+            g->sound = -1;
+            continue;
+        }
+        bool waited = asked > 0;
+        uint8_t copies = 1;
+        for (int j = 0; j < STREAM_CONTEXTS; j++) {
+            GomCtx* h = &gom.c[j];
+            if (j == k || !gomStamped(ca, j) || h->sound != g->sound || h->batch0 != g->batch0 || h->batch1 != g->batch1 ||
+                ca->streams[j].seekPending || ca->streams[j].stopRequested)
+                continue;
+            if (waited) g->cueTick = h->cueTick; // heard: from the step's first request
+            if (h->group == 0) {
+                h->copy = 1;
+                h->group = (uint8_t) (j + 1);
+            }
+            g->group = h->group;
+            copies++;
+        }
+        if (g->group != 0) {
+            g->copy = copies;
+            gom.active = 1;
+#ifdef CTR_AUDIO_CAPTURE_WRAP_H
+            CtrCap_trigger();
+#endif
+        }
+    }
+    LightLock_Unlock(lock);
+}
+
+// The group's leader: the member that opened first (a member that opened before its group formed counts).
+GOM_CODE static int gomLeader(CtrAudioSystem* ca, int group, int self) {
+    for (int j = 0; j < STREAM_CONTEXTS; j++) {
+        if (j != self && gom.c[j].group == group && gom.c[j].phase == GOM_LEADER && gomStamped(ca, j)) return j;
+    }
+    for (int j = 0; j < STREAM_CONTEXTS; j++) {
+        if (j != self && gom.c[j].group == group && gom.c[j].phase == GOM_NONE && ca->streams[j].opened && gomStamped(ca, j)) {
+            gom.c[j].phase = GOM_LEADER;
+            return j;
+        }
+    }
+    return -1;
+}
+
+// A follower's plan: the sample the leader will be at when the callback `margin` frames on unpauses it, as a seek.
+// Under the follower's lock; needs the leader's snapshot (false when there is none yet).
+GOM_CODE static bool gomPlan(CtrAudioSystem* ca, int k, int leader, uint32_t margin) {
+    GomCtx* g = &gom.c[k];
+    const GomCtx* l = &gom.c[leader];
+    StreamContext* s = &ca->streams[k];
+    uint32_t pos, frame;
+    float step;
+    for (;;) {
+        uint32_t seq = gom.seq;
+        __atomic_thread_fence(__ATOMIC_ACQUIRE);
+        pos = l->snapPos;
+        frame = l->snapFrame;
+        step = l->snapStep;
+        __atomic_thread_fence(__ATOMIC_ACQUIRE);
+        if (!(seq & 1u) && seq == gom.seq) break;
+    }
+    if (step <= 0.0f || s->sampleRate == 0) return false;
+    uint32_t join = gom.frame + margin;
+    double target = (double) pos + (double) (join - frame + GOM_LEAD) * step;
+    if (s->totalFrames > 0) target = fmod(target, (double) s->totalFrames);
+    g->target = (uint32_t) (target + 0.5);
+    g->joinFrame = join;
+    g->tries++;
+    s->seekPending = true;
+    s->seekSeconds = ((double) g->target + 0.5) / (double) s->sampleRate;
+    g->phase = GOM_PLANNED;
+    return true;
+}
+
+// A leader's mix scale: itself plus each copy still to join (not opened, held or planned) whose voice has its pitch and
+// gain, so it sounds as all of them would together. Written when it changes. Under the leader's lock.
+GOM_CODE static void gomLeaderMix(CtrAudioSystem* ca, int k) {
+    GomCtx* l = &gom.c[k];
+    if (!((gom.mixSet >> k) & 1u) || l->owner < 0 || l->owner >= VOICE_COUNT || !gomSettled(l)) return;
+    float f = 1.0f;
+    for (int j = 0; j < STREAM_CONTEXTS; j++) {
+        const GomCtx* h = &gom.c[j];
+        if (j == k || h->group != l->group || !gomStamped(ca, j) || ca->streams[j].stopRequested) continue;
+        if (h->phase != GOM_NONE && h->phase != GOM_HELD && h->phase != GOM_PLANNED) continue;
+        if (gomSame(ca, j, k)) f += 1.0f;
+    }
+    if (f == l->factor || (l->factor == 0.0f && f == 1.0f)) return;
+    l->factor = f;
+    float m[12];
+    for (int i = 0; i < 12; i++) m[i] = gom.mix[k][i] * f;
+    GOM_MIX_NEXT(gomPhys(&ca->streams[k]), m);
+}
+
+// utaChnSetMix's physical mix write (game or opener thread, under the stream's lock), through gomMixLink: keeps a
+// stream's mix and scales a leader's.
+GOM_CODE void gomPhysMix(int p, float mix[12]) {
+    CtrAudioSystem* ca = utaCa;
+    for (int k = 0; ca != NULL && k < STREAM_CONTEXTS; k++) {
+        const StreamContext* s = &ca->streams[k];
+        if (s->channel < 0 || gomPhys(s) != p || !gomStamped(ca, k)) continue;
+        memcpy(gom.mix[k], mix, sizeof(gom.mix[k]));
+        __atomic_fetch_or(&gom.mixSet, 1u << k, __ATOMIC_ACQ_REL);
+        float f = gom.c[k].factor;
+        if (f > 1.0f) {
+            float m[12];
+            for (int i = 0; i < 12; i++) m[i] = mix[i] * f;
+            GOM_MIX_NEXT(p, m);
+            return;
+        }
+        break;
+    }
+    GOM_MIX_NEXT(p, mix);
+}
+
+// lmPaused's physical pause write (any thread), before the play-through hold. A group member's first write is the
+// opener's (openStream, under the stream's lock): a follower is held from there.
+GOM_CODE void gomPhysPaused(int p, bool paused) {
+    CtrAudioSystem* ca = utaCa;
+    if ((unsigned) p < 32 && ((gom.held >> p) & 1u)) {
+        paused = true;
+    } else if (gom.active && ca != NULL && (unsigned) p < UTA_CHANNELS) {
+        for (int k = 0; k < STREAM_CONTEXTS; k++) {
+            StreamContext* s = &ca->streams[k];
+            GomCtx* g = &gom.c[k];
+            if (g->group == 0 || g->phase != GOM_NONE || s->state != CTX_OPENING || s->opened || gomPhys(s) != p ||
+                !gomStamped(ca, k))
+                continue;
+            int leader = gomLeader(ca, g->group, k);
+            if (leader < 0) {
+                g->phase = GOM_LEADER; // plays at once, at the group's gain
+                gomLeaderMix(ca, k);
+                break;
+            }
+            if (s->seekPending || ca->streams[leader].seekPending || !gomSettled(g) || !gomSame(ca, k, leader)) {
+                gomAlone(ca, k);
+                break;
+            }
+            g->phys = (int8_t) (p + 1);
+            g->phase = GOM_HELD;
+            g->joinFrame = gom.frame;
+            s->sampleRate = s->decoder.sampleRate;
+            s->totalFrames = s->decoder.totalFrames;
+            gomPlan(ca, k, leader, GOM_MARGIN); // seeks before the decode thread fills a buffer; else the callback plans
+            __atomic_fetch_or(&gom.held, 1u << p, __ATOMIC_ACQ_REL);
+            paused = true;
+            break;
+        }
+    }
+    ptPhysPaused(p, paused);
+}
+
+// The callback's release of a held channel, at its join.
+GOM_CODE static void gomRelease(CtrAudioSystem* ca, GomCtx* g, uint32_t now) {
+    g->phase = GOM_JOINED;
+    g->joinFrame = now;
+    g->heardTick = svcGetSystemTick();
+    gomUnhold(ca, g);
+}
+
+// A seek that is not this code's plan, on a copy still waiting. Under s->lock.
+GOM_CODE static bool gomSeekedAway(const StreamContext* s, const GomCtx* g) {
+    if (g->phase == GOM_HELD) return s->seekPending;
+    if (s->seekPending) return s->seekSeconds != ((double) g->target + 0.5) / (double) s->sampleRate;
+    return s->everQueued && s->bufs[0].startFrame != g->target;
+}
+
+// A copy still waiting leaves its group. The base path has it at its first sample, so its plan, taken or not, gives way
+// to a seek there, and it stays held until that is queued (GOM_LEAVING). A seek of the game's stays. Under s->lock.
+GOM_CODE static void gomLeave(CtrAudioSystem* ca, int k, uint32_t now) {
+    GomCtx* g = &gom.c[k];
+    StreamContext* s = &ca->streams[k];
+    if (g->phase != GOM_PLANNED || gomSeekedAway(s, g)) {
+        gomAlone(ca, k);
+        return;
+    }
+    s->seekPending = true;
+    s->seekSeconds = 0.0;
+    g->phase = GOM_LEAVING;
+    g->joinFrame = now;
+    LightEvent_Signal(&ca->event);
+}
+
+// Buffers queued to start from. Under s->lock.
+GOM_CODE static bool gomReady(const StreamContext* s) {
+    if ((s->state != CTX_PLAYING && s->state != CTX_DRAINING) || !s->opened || s->seekPending || !s->everQueued) return false;
+    int queued = 0;
+    for (int i = 0; i < STREAM_BUFFERS; i++) {
+        u8 st = s->bufs[i].wb.status;
+        if (st == NDSP_WBUF_QUEUED || st == NDSP_WBUF_PLAYING) queued++;
+    }
+    return queued >= 2 || s->state == CTX_DRAINING;
+}
+
+// Leader minus follower, in samples, as the DSP last reported both. Under the follower's lock.
+GOM_CODE static bool gomOffset(CtrAudioSystem* ca, int leader, const StreamContext* s, int p, int32_t* out) {
+    if (leader < 0 || LightLock_TryLock(&ca->streams[leader].lock) != 0) return false;
+    uint32_t lpos, fpos;
+    bool ok = gomPos(&ca->streams[leader], gomPhys(&ca->streams[leader]), &lpos) && gomPos(s, p, &fpos);
+    LightLock_Unlock(&ca->streams[leader].lock);
+    if (ok) *out = (int32_t) (lpos - fpos);
+    return ok;
+}
+
+// The DSP frame callback, first in the chain: then the play-through hold's, audofix's and the engine's.
+GOM_CODE static void gomDspCallback(void* data) {
+    ptDspCallback(data);
+    CtrAudioSystem* ca = (CtrAudioSystem*) data;
+    // (menuHeld too: the menu's own sounds clear the suspend flag for a moment.) A stop still gives its channel back below.
+    bool frozen = ca->suspended || menuHeld != 0;
+    if (!frozen) gom.frame++;
+    if (!gom.active) return;
+    uint32_t now = gom.frame;
+    bool open = false;
+    for (int k = 0; k < STREAM_CONTEXTS; k++) {
+        GomCtx* g = &gom.c[k];
+        if (g->group == 0 || g->phase == GOM_DONE) continue;
+        StreamContext* s = &ca->streams[k];
+        if (!gomStamped(ca, k) || s->stopRequested) { // stopped or gone: its channel is the engine's again
+            gomUnhold(ca, g);
+            g->phase = GOM_DONE;
+            continue;
+        }
+        open = true;
+        if (frozen) continue;
+        if (g->phase == GOM_NONE) {
+            // opened unheld (before its group formed): the leader, or, behind another leader, left as it plays
+            if (s->opened && gomLeader(ca, g->group, -1) != k) g->phase = GOM_DONE;
+            continue;
+        }
+        if (LightLock_TryLock(&s->lock) != 0) continue;
+        int p = gomPhys(s);
+        if (g->phase == GOM_LEADER) {
+            uint32_t pos;
+            if (gomPos(s, p, &pos)) {
+                if (!g->heardTick && pos > 0) g->heardTick = svcGetSystemTick();
+                gom.seq++;
+                __atomic_thread_fence(__ATOMIC_RELEASE);
+                g->snapPos = pos;
+                g->snapFrame = now;
+                g->snapStep = 160.0f * CtrLoadmix_legacy.channels[p].rate / (float) NDSP_SAMPLE_RATE;
+                __atomic_thread_fence(__ATOMIC_RELEASE);
+                gom.seq++;
+            }
+            if (g->heardTick && !g->logged) gomLog(k, gomLed);
+            bool pending = false; // the leader's snapshot serves its group's held and joining members
+            for (int j = 0; j < STREAM_CONTEXTS; j++) {
+                uint8_t ph = gom.c[j].phase;
+                if (j != k && gom.c[j].group == g->group && (ph == GOM_NONE || ph == GOM_HELD || ph == GOM_PLANNED || ph == GOM_JOINED))
+                    pending = true;
+            }
+            if (g->logged && !pending) g->phase = GOM_DONE;
+        } else if (g->phase == GOM_HELD || g->phase == GOM_PLANNED) {
+            int leader = gomLeader(ca, g->group, k);
+            uint32_t lpos = 0;
+            bool have = false;
+            if (leader >= 0 && LightLock_TryLock(&ca->streams[leader].lock) == 0) {
+                have = gomPos(&ca->streams[leader], gomPhys(&ca->streams[leader]), &lpos);
+                LightLock_Unlock(&ca->streams[leader].lock);
+            }
+            bool late = (int32_t) (now - g->joinFrame) > GOM_HOLD_FRAMES;
+            bool differs = leader < 0 || ca->streams[leader].seekPending || !gomSame(ca, k, leader) || gomSeekedAway(s, g);
+            if (late || (differs && (g->phase == GOM_HELD || s->seekPending || s->everQueued))) {
+                gomLeave(ca, k, now); // the leader stopped or never got there, or either copy changed: no longer a copy
+            } else if (differs) {
+                // a seek just taken with nothing queued from it: whose it was shows in a moment
+            } else if (g->phase == GOM_HELD) {
+                if (gomPlan(ca, k, leader, GOM_MARGIN)) LightEvent_Signal(&ca->event);
+            } else if (have && (int32_t) (now - g->joinFrame) >= 0) {
+                float step = gom.c[leader].snapStep;
+                int32_t half = (int32_t) (step * 0.5f);
+                int32_t residual = (int32_t) (g->target - (lpos + (uint32_t) ((float) GOM_LEAD * step + 0.5f)));
+                bool ready = gomReady(s) && s->bufs[0].startFrame == g->target;
+                g->residual = residual;
+                if (ready && residual <= half && residual >= -half) {
+                    gomRelease(ca, g, now);
+                } else if (ready && residual > half) {
+                    // the leader is behind its plan (held by a room load, say): wait for it
+                } else if (g->tries < GOM_TRIES) {
+                    gomPlan(ca, k, leader, GOM_MARGIN << g->tries);
+                    LightEvent_Signal(&ca->event);
+                } else {
+                    gomLeave(ca, k, now);
+                }
+            }
+        } else if (g->phase == GOM_LEAVING) {
+            if (gomReady(s) || (int32_t) (now - g->joinFrame) > GOM_HOLD_FRAMES) gomAlone(ca, k);
+        } else if (g->phase == GOM_JOINED) {
+            uint32_t since = now - g->joinFrame;
+            int leader = gomLeader(ca, g->group, k);
+            if (g->offset[0] == GOM_UNSET && since >= GOM_LEAD + 3) gomOffset(ca, leader, s, p, &g->offset[0]);
+            else if (g->offset[0] != GOM_UNSET && g->offset[1] == GOM_UNSET && since >= GOM_MEASURE)
+                gomOffset(ca, leader, s, p, &g->offset[1]);
+            if (leader < 0 || since > GOM_MEASURE + 20 || g->offset[1] != GOM_UNSET) {
+                gomLog(k, gomJoined);
+                g->phase = GOM_DONE;
+            }
+        }
+        LightLock_Unlock(&s->lock);
+    }
+    // After every join above: a leader's scale drops in the callback that unpauses the copy, so both reach the same
+    // DSP frame.
+    for (int k = 0; k < STREAM_CONTEXTS; k++) {
+        GomCtx* g = &gom.c[k];
+        if (g->group == 0 || (g->phase != GOM_LEADER && !(g->factor > 1.0f)) || !gomStamped(ca, k) || ca->streams[k].stopRequested)
+            continue;
+        if (LightLock_TryLock(&ca->streams[k].lock) != 0) continue;
+        gomLeaderMix(ca, k);
+        LightLock_Unlock(&ca->streams[k].lock);
+    }
+    uint32_t held = gom.held;
+    for (int p = 0; held != 0 && p < UTA_CHANNELS; p++) {
+        if ((held >> p) & 1u) UTA_PHYS_PAUSED(p, true); // after every other writer in this callback
+    }
+    if (!open && held == 0) gom.active = 0;
+}
+#endif
+
+#if defined(ENABLE_WAD16) && defined(CTRPORT_TARGET_O3DS)
+// sfxshed (z_utstall.c's utshedFinish, UNDERTALE Old): every sound of the room's plan (4 bytes an entry: sound, size) counts
+// as just played from here to CtrAudioSystem_keepPlanEnd, so its shed and its passes keep them all (shedVictim's rule).
+// flowend's list holds the plan's first FLOWEND_KEEP only. played: a play time an entry; on the game thread, as every play.
+__attribute__((noinline, noipa, section(".text_sfxshed"))) void CtrAudioSystem_keepPlan(const uint8_t* plan, uint32_t count, uint64_t* played) {
+    CtrAudioSystem* ca = gShutdownTarget;
+    u64 now = svcGetSystemTick();
+    for (uint32_t i = 0; ca != NULL && count > i; i++) {
+        uint16_t sound;
+        memcpy(&sound, plan + (size_t) i * 4, 2);
+        if (sound >= ca->soundCount) continue;
+        played[i] = ca->sfxCache[sound].lastPlayTick;
+        ca->sfxCache[sound].lastPlayTick = now;
+    }
+}
+
+// The play times back, last first (a sound planned twice gets the time it had before both).
+__attribute__((noinline, noipa, section(".text_sfxshed"))) void CtrAudioSystem_keepPlanEnd(const uint8_t* plan, uint32_t count, const uint64_t* played) {
+    CtrAudioSystem* ca = gShutdownTarget;
+    for (uint32_t i = count; ca != NULL && i-- > 0;) {
+        uint16_t sound;
+        memcpy(&sound, plan + (size_t) i * 4, 2);
+        if (sound < ca->soundCount) ca->sfxCache[sound].lastPlayTick = played[i];
+    }
+}
+#endif
+
+// audpar: UT 1.08 includes paused instances in audio_is_playing (PC audpar-pause-01).
+// Music controllers use that membership to avoid starting another copy while a
+// track is paused. Keep audofixIsPlaying's menu hold handling and its call target.
+// The old 132 B query slot becomes a 4 B jump, with an unreachable 128 B tail.
+#if defined(ENABLE_WAD16)
+__attribute__((noinline, noipa, optimize("Os"), section(".text.late.audpar")))
+bool audparIsPlaying(AudioSystem* audio, int32_t soundOrInstance) {
+    CtrAudioSystem* ca = (CtrAudioSystem*) audio;
+    for (int i = 0; i < VOICE_COUNT; i++) {
+        if (voiceMatches(ca, i, soundOrInstance)) return true;
+    }
+    return false;
+}
+#if defined(__3DS__) && defined(NDEBUG)
+__asm__(".pushsection .text.ctrIsPlaying, 1\n.space 128\n.popsection");
+#endif
+#endif
+
+// audpar: PC UT stores asset positions as future-play offsets. Put the defaults
+// after the existing length cache in the same allocation, so normal destruction
+// owns them and stop-all / game_restart do not reset them. No struct layout moves.
+#if defined(ENABLE_WAD16)
+#define AUDPAR_OFFSET_CODE __attribute__((noinline, noipa, section(".text.late.audpar.offset")))
+AUDPAR_OFFSET_CODE void* audparLengthStorage(size_t bytes, const char* file, int line) {
+    void* p = safeMallocFunction(bytes * 2u, file, line);
+    memset((uint8_t*) p + bytes, 0, bytes);
+    return p;
+}
+
+AUDPAR_OFFSET_CODE void audparClearVoice(Voice* v, CtrAudioSystem* ca, int32_t soundIndex) {
+    memset(v, 0, sizeof(*v));
+    v->ctx = -1;
+    if (soundIndex >= 0 && (uint32_t) soundIndex < ca->soundCount) {
+        float offset = ca->soundLengths[ca->soundCount + (uint32_t) soundIndex];
+        v->startPosition = offset;
+        v->clockSeconds = offset;
+        v->virtualSeconds = offset;
+    }
+}
+
+AUDPAR_OFFSET_CODE
+float audparGetTrackPosition(AudioSystem* audio, int32_t soundOrInstance) {
+    CtrAudioSystem* ca = (CtrAudioSystem*) audio;
+    if (soundOrInstance >= 0 && (uint32_t) soundOrInstance < ca->soundCount)
+        return ca->soundLengths[ca->soundCount + (uint32_t) soundOrInstance];
+    for (int i = 0; i < VOICE_COUNT; i++) {
+        if (!voiceMatches(ca, i, soundOrInstance)) continue;
+        return GetTime_virtualClockOn() ? clockPosition(ca, &ca->voices[i]) : voicePosition(ca, i);
+    }
+    return 0.0f;
+}
+
+AUDPAR_OFFSET_CODE
+void audparSetTrackPosition(AudioSystem* audio, int32_t soundOrInstance, float positionSeconds) {
+    CtrAudioSystem* ca = (CtrAudioSystem*) audio;
+    if (soundOrInstance >= 0 && (uint32_t) soundOrInstance < ca->soundCount) {
+        ca->soundLengths[ca->soundCount + (uint32_t) soundOrInstance] = positionSeconds < 0.0f ? 0.0f : positionSeconds;
+        return;
+    }
+    u64 t0 = svcGetSystemTick();
+    if (positionSeconds < 0.0f) positionSeconds = 0.0f;
+    for (int i = 0; i < VOICE_COUNT; i++) {
+        if (!voiceMatches(ca, i, soundOrInstance)) continue;
+        Voice* v = &ca->voices[i];
+        v->clockSeconds = positionSeconds;
+        if (v->kind == VOICE_SFX) {
+            ndspChnWaveBufClear(i);
+            queueSfxBuffers(v, i, (uint32_t) (positionSeconds * (float) v->sfx->sampleRate));
+        } else if (v->kind == VOICE_STREAM) {
+            StreamContext* s = &ca->streams[v->ctx];
+            LightLock_Lock(&s->lock);
+            s->seekPending = true;
+            s->seekSeconds = positionSeconds;
+            LightLock_Unlock(&s->lock);
+            v->lastPosition = positionSeconds;
+            LightEvent_Signal(&ca->event);
+        } else if (v->kind == VOICE_VIRTUAL) {
+            v->virtualSeconds = positionSeconds;
+        } else if (v->kind == VOICE_PENDING) {
+            v->startPosition = positionSeconds;
+        }
+    }
+    ca->frameTicks += svcGetSystemTick() - t0;
+}
+
+#undef AUDPAR_OFFSET_CODE
+#if defined(__3DS__) && defined(NDEBUG) && !defined(CTR_AUDIO_PCM_HASH)
+__asm__(".pushsection .text.ctrGetTrackPosition, 1\n.space 980\n.popsection\n"
+        ".pushsection .text.ctrSetTrackPosition, 1\n.space 396\n.popsection\n");
+#endif
+#endif
+
+#if defined(ENABLE_WAD16) && defined(CTRPORT_TARGET_O3DS) && defined(CTRPORT_HAVE_TREMOR)
+// ===[ gounder: copies of the song at unequal pitches share one decode (late code, UNDERTALE Old) ]===
+// The heart's Alarm 8, the second game over, plays the song three times in one step, gain 0.45, and its Alarm 5 sets the
+// pitches a step later: 2.81, 3 and 2.64. Alarm 6 ends it 190 steps on, so it lasts about 6.3 s. Three decoders ask for
+// 8.45 audio seconds per second, at about 250 ms per audio second on an Old model: about 211% of the decode thread, so
+// about 125 underrun lines a run on the o2ds (New has 0).
+// All three play one file from its first sample, so they want one stream of samples, each at its own speed. So one
+// decoder fills a ring and each copy's reads copy out of the ring. The fastest copy's read is what decodes: pitch 3's
+// demand, about 75% of the thread, and a memcpy for the others. Every copy gets the decoder's samples byte for byte.
+// The ring only has to hold what lies between the slowest copy and the fastest: (3 - 2.64) * 6.33 s = 2.28 s = 100,600
+// frames, plus up to 16,384 frames each read position is ahead of what is heard. GUN_RING_FRAMES holds 160,000, which
+// lasts as long as the game over runs at 21 frames a second or better.
+// The copies after the first open no decoder, read-ahead ring or file, so they start with the first instead of 400 and
+// 1,500 ms behind it on the o2ds.
+// Only copies gomusic has grouped (same song, gomSong, same step) and not joined: the first game over's are equal and
+// stay gomusic's, and a lone game over has no group. Whether they are unequal is known once gomSettled says so, so the
+// first copy's open waits for that, usually not at all: its open takes longer than two steps on these models.
+// A copy that can't go on here goes back to a decoder of its own at the same sample, then runs as it would have: a game
+// seek, the song's end, the ring having moved past it, the decoding copy stopped. In the game only a stop happens, of all
+// three, at once. Threads: the opener opens, the decode thread reads and closes. The last copy to go frees the ring: it is
+// in the heap, never linear memory (640 KB; a failed allocation leaves the base path), for as long as the copies last.
+// statsLock keeps a join and the free apart. shutdownAudio's close, past both joins, retires any group still there.
+// gomusic's state and helpers are reached by asm aliases, and nothing of gomusic's calls this block: a direct use adds
+// call-graph edges, and GCC then emits audofix's, pcmwait's and gomusic's functions in another order (check_layout).
+#define GUN_CODE __attribute__((noinline, noipa, optimize("Os"), section(".text_gounder")))
+#define GUN_BSS __attribute__((section(".bss.gounder_late")))
+#define GUN_RING_FRAMES 160000u
+#define GUN_SETTLE_TRIES 30 // 5 ms each: a stalled game thread can't hold the song's first sound longer than this
+#define GUN_LOG_STEP 32000u // a log line each time the slowest copy falls this much further behind (about 0.7 s)
+
+static struct {
+    int16_t* volatile ring;
+    volatile uint32_t members; // contexts reading from the ring (bit k)
+    volatile int32_t source; // the context whose decoder fills it + 1; 0 once it no longer does
+    uint32_t head; // frames decoded; the ring holds [head - GUN_RING_FRAMES, head)
+    uint32_t lagPeak, lagLog;
+    uint32_t channels, sampleRate;
+    uint64_t totalFrames;
+    uint32_t batch0, batch1;
+    uint8_t group, copies;
+} gun GUN_BSS;
+
+extern __typeof__(gom) gunGom;
+bool gunGomStamped(CtrAudioSystem* ca, int k);
+bool gunGomSettled(const GomCtx* g);
+bool gunGomSame(const CtrAudioSystem* ca, int a, int b);
+
+static const char gunBeginFormat[] __attribute__((section(".rodata.gounder_in_text"))) =
+    "Audio: gounder '%s' shared decode: %u KB ring, waited %d ms for the pitches\n";
+static const char gunJoinFormat[] __attribute__((section(".rodata.gounder_in_text"))) =
+    "Audio: gounder context %d shares the decode, head %lu\n";
+static const char gunLagFormat[] __attribute__((section(".rodata.gounder_in_text"))) =
+    "Audio: gounder slowest copy %lu frames behind, head %lu\n";
+static const char gunLeftFormat[] __attribute__((section(".rodata.gounder_in_text"))) =
+    "Audio: gounder context %d left at sample %lu, head %lu\n";
+static const char gunEndFormat[] __attribute__((section(".rodata.gounder_in_text"))) =
+    "Audio: gounder done: %u copies, %lu frames decoded, slowest %lu frames behind\n";
+static const char gunNoMemory[] __attribute__((section(".rodata.gounder_in_text"))) =
+    "Audio: gounder no memory for the ring, the copies decode apart\n";
+
+// A stream's decoder: its context, or -1 for any other decoder.
+GUN_CODE static int gunContext(const CtrAudioSystem* ca, const CtrDecoder* dec) {
+    if (ca == NULL) return -1;
+    uintptr_t off = (uintptr_t) dec - (uintptr_t) &ca->streams[0].decoder;
+    uint32_t k = off / sizeof(StreamContext);
+    return off % sizeof(StreamContext) == 0 && k < STREAM_CONTEXTS ? (int) k : -1;
+}
+
+// The ring's decoder can still be read. Decode thread, the only one that closes a playing stream's decoder.
+GUN_CODE static bool gunSourceLive(const CtrAudioSystem* ca) {
+    int src = gun.source - 1;
+    if (src < 0) return false;
+    const StreamContext* s = &ca->streams[src];
+    if (((gun.members >> src) & 1u) && s->state == CTX_PLAYING && !s->stopRequested) return true;
+    gun.source = 0;
+    return false;
+}
+
+// A copy has gone. The last takes the ring with it. Each thread only drops its own copy, and a read needs its copy's bit.
+GUN_CODE static void gunDrop(CtrAudioSystem* ca, int k) {
+    int16_t* freed = NULL;
+    unsigned copies = 0;
+    uint32_t head = 0, lag = 0;
+    LightLock_Lock(&ca->statsLock);
+    __atomic_fetch_and(&gun.members, ~(1u << k), __ATOMIC_ACQ_REL);
+    if (gun.source == k + 1) gun.source = 0;
+    if (gun.members == 0) {
+        freed = gun.ring;
+        gun.ring = NULL;
+        gun.source = 0;
+        copies = gun.copies;
+        head = gun.head;
+        lag = gun.lagPeak;
+    }
+    LightLock_Unlock(&ca->statsLock);
+    if (freed != NULL) { // the opener may have begun another group by now
+        free(freed);
+        utaPost(ca, gunEndFormat, copies, (unsigned long) head, (unsigned long) lag);
+    }
+}
+
+// A copy goes on with a decoder of its own, at its sample. dec->positionFrames is that sample throughout. The decoding
+// copy has its decoder already, at the ring's head; the others open one, on the calling thread. False when it can't.
+GUN_CODE static bool gunLeave(CtrAudioSystem* ca, int k, CtrDecoder* dec) {
+    StreamContext* s = &ca->streams[k];
+    uint64_t at = dec->positionFrames;
+    uint32_t head = gun.head; // this group's: once it has dropped, the opener may begin another
+    utaPost(ca, gunLeftFormat, k, (unsigned long) at, (unsigned long) head);
+    gunDrop(ca, k);
+    if (dec->vorbisOpen) return at == head || (CtrDecoder_seek)(dec, at);
+    if (s->path == NULL || !GUN_OPEN_FILE_NEXT(dec, s->path)) return false;
+    CtrDecoder_startReadAhead(dec);
+    return at == 0 || (CtrDecoder_seek)(dec, at);
+}
+
+// The stream layer's read (utaDecRead; any thread, but only the decode thread reads a member's decoder).
+GUN_CODE int32_t gunRead(CtrDecoder* dec, int16_t* out, uint32_t maxFrames) {
+    uint32_t members = gun.members;
+    if (members == 0) return GUN_READ_NEXT(dec, out, maxFrames);
+    CtrAudioSystem* ca = utaCa;
+    int k = gunContext(ca, dec);
+    if (k < 0 || !((members >> k) & 1u)) return GUN_READ_NEXT(dec, out, maxFrames);
+    uint32_t at = (uint32_t) dec->positionFrames, ch = gun.channels;
+    if (at == gun.head && gunSourceLive(ca)) {
+        CtrDecoder* d = &ca->streams[gun.source - 1].decoder;
+        uint64_t mine = d->positionFrames;
+        uint32_t w = gun.head % GUN_RING_FRAMES;
+        d->positionFrames = gun.head;
+        int32_t got = GUN_READ_NEXT(d, gun.ring + w * ch, GUN_RING_FRAMES - w);
+        d->positionFrames = mine;
+        if (got > 0) gun.head += (uint32_t) got;
+        else gun.source = 0; // the song's end or a decode error: its copy finds the same on its own decoder
+    }
+    uint32_t lag = gun.head - at;
+    if (lag == 0 || lag > GUN_RING_FRAMES) return gunLeave(ca, k, dec) ? GUN_READ_NEXT(dec, out, maxFrames) : -1;
+    if (lag > gun.lagPeak) {
+        gun.lagPeak = lag;
+        if (lag >= gun.lagLog) {
+            gun.lagLog = lag + GUN_LOG_STEP;
+            utaPost(ca, gunLagFormat, (unsigned long) lag, (unsigned long) gun.head);
+        }
+    }
+    uint32_t r = at % GUN_RING_FRAMES, n = lag < maxFrames ? lag : maxFrames;
+    if (n > GUN_RING_FRAMES - r) n = GUN_RING_FRAMES - r;
+    memcpy(out, gun.ring + r * ch, n * ch * sizeof(int16_t));
+    dec->positionFrames = at + n;
+    return (int32_t) n;
+}
+
+// The stream layer's seek: a copy's own decoder serves it.
+GUN_CODE bool gunSeek(CtrDecoder* dec, uint64_t frame) {
+    uint32_t members = gun.members;
+    if (members != 0) {
+        CtrAudioSystem* ca = utaCa;
+        int k = gunContext(ca, dec);
+        if (k >= 0 && ((members >> k) & 1u) && !gunLeave(ca, k, dec)) return false;
+    }
+    return GUN_SEEK_NEXT(dec, frame);
+}
+
+// Opener thread, the first copy just opened: the ring, if its group's copies turn out unequal.
+GUN_CODE static void gunBegin(CtrAudioSystem* ca, int k, const CtrDecoder* dec) {
+    StreamContext* s = &ca->streams[k];
+    const GomCtx* g = &gunGom.c[k];
+    int waited = 0;
+    while (!gunGomSettled(g) && waited < GUN_SETTLE_TRIES && !s->stopRequested) {
+        svcSleepThread(5000000LL);
+        waited++;
+    }
+    if (!gunGomSettled(g) || s->stopRequested || s->seekPending || s->path == NULL || !gunGomStamped(ca, k)) return;
+    bool differs = false;
+    for (int j = 0; j < STREAM_CONTEXTS; j++) {
+        if (j != k && gunGom.c[j].group == g->group && gunGomStamped(ca, j) && !ca->streams[j].stopRequested && !gunGomSame(ca, j, k))
+            differs = true;
+    }
+    if (!differs) return;
+    bool allowed = CtrMemory_allowRelief(false); // an optional ring: it never goes to linear memory for want of heap
+    int16_t* ring = (int16_t*) malloc(GUN_RING_FRAMES * dec->channels * sizeof(int16_t));
+    CtrMemory_allowRelief(allowed);
+    if (ring == NULL) {
+        utaPost(ca, gunNoMemory);
+        return;
+    }
+    LightLock_Lock(&ca->statsLock);
+    gun.head = 0;
+    gun.lagPeak = 0;
+    gun.lagLog = GUN_LOG_STEP;
+    gun.channels = dec->channels;
+    gun.sampleRate = dec->sampleRate;
+    gun.totalFrames = dec->totalFrames;
+    gun.group = g->group;
+    gun.batch0 = g->batch0;
+    gun.batch1 = g->batch1;
+    gun.copies = 1;
+    gun.source = k + 1;
+    gun.ring = ring;
+    __atomic_store_n(&gun.members, 1u << k, __ATOMIC_RELEASE);
+    LightLock_Unlock(&ca->statsLock);
+    utaPost(ca, gunBeginFormat, s->name, (unsigned) (GUN_RING_FRAMES * dec->channels * sizeof(int16_t) / 1024u), waited * 5);
+}
+
+// Opener thread, a later copy of the group sharing the decode: the context's decoder only holds the song's format and
+// the copy's position (no file, no Tremor state: CtrDecoder_close has nothing to do for it, and the read below serves it).
+GUN_CODE static bool gunJoin(CtrAudioSystem* ca, int k, CtrDecoder* dec) {
+    const StreamContext* s = &ca->streams[k];
+    const GomCtx* g = &gunGom.c[k];
+    bool ok = false;
+    LightLock_Lock(&ca->statsLock);
+    int src = gun.source - 1;
+    if (gun.ring != NULL && src >= 0 && src != k && g->group != 0 && g->group == gun.group && g->batch0 == gun.batch0 &&
+        g->batch1 == gun.batch1 && gun.head <= GUN_RING_FRAMES && ((gun.members >> src) & 1u) && ca->streams[src].state == CTX_PLAYING &&
+        !ca->streams[src].stopRequested && !s->seekPending && !s->stopRequested && s->path != NULL) {
+        memset(dec, 0, sizeof(*dec));
+        dec->kind = CTR_DECODER_VORBIS;
+        dec->channels = gun.channels;
+        dec->sampleRate = gun.sampleRate;
+        dec->totalFrames = gun.totalFrames;
+        gun.copies++;
+        __atomic_fetch_or(&gun.members, 1u << k, __ATOMIC_ACQ_REL);
+        ok = true;
+    }
+    LightLock_Unlock(&ca->statsLock);
+    if (ok) utaPost(ca, gunJoinFormat, k, (unsigned long) gun.head);
+    return ok;
+}
+
+// The stream layer's opens (utaDecOpenFile, utaDecOpenMemory). A context opening again has left whatever it read before.
+GUN_CODE bool gunOpenFile(CtrDecoder* dec, const char* path) {
+    CtrAudioSystem* ca = utaCa;
+    int k = gunContext(ca, dec);
+    if (k < 0) return GUN_OPEN_FILE_NEXT(dec, path);
+    if ((gun.members >> k) & 1u) gunDrop(ca, k);
+    if (ca->opener == NULL || threadGetCurrent() != ca->opener || !gunGomStamped(ca, k)) return GUN_OPEN_FILE_NEXT(dec, path);
+    if (gunJoin(ca, k, dec)) return true;
+    bool ok = GUN_OPEN_FILE_NEXT(dec, path);
+    if (ok && dec->kind == CTR_DECODER_VORBIS && gun.ring == NULL && gunGom.c[k].group != 0) gunBegin(ca, k, dec);
+    return ok;
+}
+
+GUN_CODE bool gunOpenMemory(CtrDecoder* dec, const uint8_t* data, uint32_t size) {
+    int k = gunContext(utaCa, dec);
+    if (k >= 0 && ((gun.members >> k) & 1u)) gunDrop(utaCa, k);
+    return GUN_OPEN_MEMORY_NEXT(dec, data, size);
+}
+
+// finishStream's close, on the decode thread: a copy's way out. The decoder's own close has nothing to do for a copy that
+// reads the ring, and the decoding copy's closes its decoder.
+GUN_CODE void gunClose(CtrDecoder* dec) {
+    if (gun.members != 0) {
+        CtrAudioSystem* ca = utaCa;
+        int k = gunContext(ca, dec);
+        if (k >= 0 && ((gun.members >> k) & 1u)) gunDrop(ca, k);
+    }
+    CtrDecoder_close(dec);
+}
+__asm__(".set gunOpenFileLink, gunOpenFile\n.set gunOpenMemoryLink, gunOpenMemory\n.set gunReadLink, gunRead\n"
+        ".set gunSeekLink, gunSeek\n.set gunCloseLink, gunClose\n.set gunGom, gom\n.set gunGomStamped, gomStamped\n"
+        ".set gunGomSettled, gomSettled\n.set gunGomSame, gomSame\n");
 #endif

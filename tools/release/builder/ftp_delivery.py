@@ -569,6 +569,15 @@ def send_product(value, product, artifacts, folder, work, parts=None, *, cancell
             if current is None:
                 raise ValueError('Invalid installer inventory path')
             names = [entry['path'] for entry in current['files']]
+            transfer = Transfer(ftp, cancelled=cancelled, progress=progress)
+            try:
+                install_record.check_retained_models(product, names,
+                    {entry['path']: entry['sha256'] for entry in current['files']
+                     if PurePosixPath(entry['path']).name.casefold() == 'data.win'},
+                    previous=previous, present=lambda name: size(ftp, remote_path(name)) is not None,
+                    digest=lambda name: transfer.hash_remote(remote_path(name), size(ftp, remote_path(name)))[0])
+            except install_record.ModelInputMismatch as exc:
+                raise TransferError(str(exc)) from exc
             # Transfer invalidates these receipts for every data.win it checks.
             removed = [str(PurePosixPath(name).parent / 'cache/data-version.txt')
                        for name in names if PurePosixPath(name).name.casefold() == 'data.win']
@@ -579,7 +588,7 @@ def send_product(value, product, artifacts, folder, work, parts=None, *, cancell
                 present=lambda name: size(ftp, remote_path(name)) is not None, removed=removed)
             items = [deliver.CopyItem(str(p), p.relative_to(saved.root).as_posix(), p.stat().st_size)
                      for p in Path(saved.root).rglob('*') if p.is_file()]
-            Transfer(ftp, cancelled=cancelled, progress=progress).send(items)
+            transfer.send(items)
     finally:
         ftp.close()
     return saved

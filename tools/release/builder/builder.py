@@ -1,22 +1,22 @@
 #!/usr/bin/env python3
-"""The builder app: turns your own purchased UNDERTALE (or DELTARUNE) into a personal 3DS build on this PC.
+"""The builder app: turns your own UNDERTALE (or DELTARUNE) into a personal 3DS build on this PC.
 
     builder.py                      the wizard (window)
     builder.py --dry-run            print every detection result, URL, pinned hash and command it would run; changes
                                     nothing (the support tool)
-    builder.py --cli --sd E:\\      the same steps without a window
+    builder.py --cli --sd {sd_example}  the same steps without a window
 
 Options:
     --game undertale|deltarune      fix the game (each public repo's launcher passes its own)
-    --work DIR                      work folder (default %LOCALAPPDATA%\\u3ds\\w, or C:\\u3ds)
-    --devkitpro DIR                 devkitPro folder (default C:\\devkitPro)
-    --folder DIR                    game folder instead of searching (it still has to pass the install record check)
+    --work DIR                      work folder (default {work_default})
+    --devkitpro DIR                 devkitPro folder (default {devkitpro_default})
+    --folder DIR                    game folder instead of searching (supported game-file checks still apply)
     --target n3ds|o3ds|both         (--cli) console model, default both (New and Old 3DS)
     --cia                           (--cli) also make a .cia
     --chapters 1,3                  (--cli) DELTARUNE chapters to build; default all checked chapters
     --openh264                      (--cli) build the software video decoder
     --sd DIR                        (--cli) SD card to copy to; without it the build stays in <work>/out
-    --save-dir DIR                  PC save folder instead of %LOCALAPPDATA%\\<GAME> (read-only)
+    --save-dir DIR                  PC save folder (default for {game}: {save_default}; read-only)
     --import-saves                  (--cli) copy PC saves to the 3DS (with --sd or --ftp)
     --overwrite-saves               (--cli) replace existing 3DS saves (backs them up first)
     --ftp IP:PORT                  (--cli) install over Wi-Fi using ftpd (default port 5000)
@@ -56,6 +56,26 @@ import toolchain  # noqa: E402
 FIXED_GAME = None
 
 
+def help_text(platform=None, env=None, game=None):
+    """Use the same defaults as the build and save discovery, including environment overrides."""
+    import saves
+    platform = sys.platform if platform is None else platform
+    env = os.environ if env is None else env
+    game = FIXED_GAME or game or 'undertale'
+    if game not in products.PRODUCTS:
+        game = 'undertale'
+    values = dict(sd_example='E:\\' if platform == 'win32' else
+                  '/Volumes/SD' if platform == 'darwin' else '/media/SD',
+                  work_default=pipeline.default_work_dir(env=env, platform=platform),
+                  devkitpro_default=toolchain.candidate_roots(env=env, platform=platform)[0],
+                  game=products.PRODUCTS[game].title,
+                  save_default=saves.default_pc_save_dir(game, env=env, platform=platform))
+    text = __doc__
+    for name, value in values.items():
+        text = text.replace('{' + name + '}', value)
+    return text
+
+
 def parse(argv):
     o = {"game": FIXED_GAME, "work": None, "devkitpro": None, "folder": None, "target": "both", "cia": False,
          "sd": None, "ftp": None, "save_dir": None, "import_saves": False, "overwrite_saves": False, "wifi": False,
@@ -69,11 +89,13 @@ def parse(argv):
               "--target": "target", "--sd": "sd", "--save-dir": "save_dir", "--autopilot": "autopilot",
               "--registry-export": "reg", "--chapters": "chapters", "--ftp": "ftp"}
     i = 0
+    show_help = False
     while i < len(argv):
         a = argv[i]
         if a in ("-h", "--help"):
-            print(__doc__)
-            sys.exit(0)
+            show_help = True
+            i += 1
+            continue
         if a in flags:
             k, v = flags[a]
             o[k] = v
@@ -82,8 +104,11 @@ def parse(argv):
             o[values[a]] = argv[i + 1]
             i += 2
         else:
-            print("unknown or incomplete option: %s\n%s" % (a, __doc__), file=sys.stderr)
+            print("unknown or incomplete option: %s\n%s" % (a, help_text(game=o['game'])), file=sys.stderr)
             sys.exit(2)
+    if show_help:
+        print(help_text(game=o['game']))
+        sys.exit(0)
     if o["game"] and o["game"] not in products.PRODUCTS:
         print("--game must be one of: %s" % ", ".join(products.PRODUCTS), file=sys.stderr)
         sys.exit(2)
@@ -197,13 +222,32 @@ MODEL = {"n3ds": "New 3DS", "o3ds": "Old 3DS"}
 
 # The window's messages name its buttons. The command line has none, so it says what to do there instead (B2).
 CLI_WORDING = (
+    ("Use Install beside the 3DS tools on the compiler page. "
+     "Or click Try again and tick 3DS Development in the installer.",
+     "Run the devkitPro installer again and select 3DS Development, then run the same command again."),
+    ("Click Check again. If devkitPro is still missing, click Try again "
+     "and select Minimal System and 3DS Development in the installer.",
+     "Run the same command again. If devkitPro is still missing, run its installer again "
+     "and select Minimal System and 3DS Development."),
+    ("Click Copy log to report the error.", "Report the error with the log named below."),
+    ("Go back to choose the game files.", "Then run the same command again."),
+    ("Click Try again and tick 3DS Development in the installer.",
+     "Run the devkitPro installer again and select 3DS Development."),
+    ("Or use Install beside the 3DS tools on the compiler page.",
+     "Then install the 3DS compiler using the builder's setup steps."),
+    ("then click Check again.", "then run the same command again."),
+    ("Then click Check again.", "Then run the same command again."),
+    ("Click Update devkitPro to refresh it", "Update devkitPro to refresh it"),
+    ("Click Try again, or Check again on the compiler page.", "Run the same command again."),
     ("Click Try again, or click Copy log to report the error.",
      "Run the same command to try again, or report the error with the log named below."),
     ("Click Try again when ready.", "Run the same command again when ready."),
     ("Click Copy log to report the error, then try again with a repaired builder.",
      "Report the error with the log named below, then try again with a repaired builder."),
     ("Untick .cia on Options or set up the .cia tools.",
-     "Leave out --cia, or set up the .cia tools in the builder window first."),
+     "Leave out --cia, or run this builder with --dry-run to see the builder's setup steps and .cia availability."),
+    ("Click Update devkitPro on the compiler page, then try the build again.",
+     "Update devkitPro, then run the same build command again. Use --dry-run to see the builder's setup steps."),
     ("Click Copy to card to try again.", "Run the same command to copy again."),
     ("Click Save files to try again.", "Run the same command to save them again."),
     ("then click Send to pick up where it left off.", "then run the same command to pick up where it left off."),
@@ -239,6 +283,7 @@ def cli(o, out=print):
     out(("OK: " if v.accepted else "REFUSED: ") + v.message)
     if not v.accepted:
         return 1
+    folder = v.result.folder
     parts = v.parts
     if game == 'deltarune' and o['chapters'] is not None:
         if not set(o['chapters']) <= set(v.parts):
@@ -252,7 +297,7 @@ def cli(o, out=print):
             return 1
     # The first step that touches the work folder: another builder using it must finish first (AUD-15).
     try:
-        lease = pipeline.claim_work(work)
+        lease = pipeline.claim_work(work, devkitpro=o['devkitpro'])
     except pipeline.WorkLockError as exc:
         out(str(exc))
         return 1
@@ -318,13 +363,23 @@ def _build_and_deliver(o, out, game, product, work, probes, folder, v, parts):
             if notice not in shown:
                 shown.add(notice)
                 out(notice)
+
+    def delivery_log(text):
+        # Keep technical texture diagnostics in the last target's build log. Delivery also returns a plain
+        # first-start notice when PC texture preparation isn't available.
+        with open(b.log_path, "a", encoding="utf-8", newline="\n") as log:
+            log.write(text + "\n")
+        if not text.startswith(("texprep:", "building texprep from source")):
+            out(text)
+
     saves_res = None
     if o.get('ftp'):
         import ftp_delivery
         import ftp_saves
         import preferences
         try:
-            ftp_delivery.send_product(o['ftp'], product, arts, folder, work, parts or None, log=out)
+            saved = ftp_delivery.send_product(o['ftp'], product, arts, folder, work, parts or None, log=delivery_log)
+            out(saved.textures.message)
             preferences.save(work, preferences.load(work)['boring'], console=o['ftp'])
             if o['import_saves']:
                 existing = ftp_saves.inspect(o['ftp'], product)
@@ -337,7 +392,7 @@ def _build_and_deliver(o, out, game, product, work, probes, folder, v, parts):
         try:
             items = deliver.plan_sd_copy(o["sd"], product, arts, folder, parts or None)
             copied, skipped, nbytes, tex = deliver.copy_with_textures(o["sd"], items, product, folder, work,
-                                                                      parts or None, log=out,
+                                                                      parts or None, log=delivery_log,
                                                                       textures=o["texprep"])
         except (deliver.DeliverError, OSError) as e:
             out(str(e))
@@ -362,7 +417,7 @@ def _build_and_deliver(o, out, game, product, work, probes, folder, v, parts):
             out(deliver.DSP_MESSAGE)
     else:
         try:
-            saved = deliver.save_files(product, arts, folder, work, parts or None, log=out, textures=o["texprep"])
+            saved = deliver.save_files(product, arts, folder, work, parts or None, log=delivery_log, textures=o["texprep"])
         except (deliver.DeliverError, OSError) as e:
             out(str(e))
             return 1

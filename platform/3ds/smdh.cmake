@@ -1,6 +1,7 @@
 # Packaging metadata only: never include this file in a compiler command.
 # HOME Menu text (maintainer, 2026-11-04: "trim the name down"): the long description is the game's name; the publisher
-# line says what this is: "Unofficial port - v<version> - <model>" only for a release tree (no .git, and no source
+# line says "3lit3hax - Unofficial port" for UNDERTALE releases, or "Unofficial port - v<version> - <model>" for
+# DELTARUNE releases, only from a release tree (no .git, and no source
 # identity from the builder), else "Unofficial port - <label> <commit> - <model>", which says which source it was
 # built from. An unofficial source build never shows the release version (R204):
 # - a Git checkout: git's own commit and status. Lab builds may set CTRPORT_SMDH_BUILD_TAG=stage73 (or cand27); an
@@ -95,6 +96,10 @@ if(GIT_EXECUTABLE AND EXISTS "${ROOT}/.git")
     endif()
 endif()
 set(publisher "Unofficial port - ${build} - ${model_name}")
+set(UNDERTALE_RELEASE_PUBLISHER "3lit3hax - Unofficial port")
+if(GAME STREQUAL "undertale" AND NOT checkout_marker AND NOT DEFINED ENV{CTRPORT_SMDH_SOURCE})
+    set(publisher "${UNDERTALE_RELEASE_PUBLISHER}")
+endif()
 # All components are ASCII. SMDH has 128 UTF-16 code units for the description and 64 for the publisher, NULs included.
 string(LENGTH "${description}" length)
 if(length GREATER 127)

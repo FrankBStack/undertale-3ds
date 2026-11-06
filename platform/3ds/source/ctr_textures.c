@@ -3553,3 +3553,70 @@ void __wrap_CtrPack_removeFile(uint32_t pageId) {
     CtrPackWorker_racefixPageRemoved(readerGameCache != nullptr ? readerGameCache->worker : nullptr);
     __real_CtrPack_removeFile(pageId);
 }
+
+#if defined(ENABLE_WAD16) && defined(CTRPORT_TARGET_O3DS)
+// sfxshed (z_utstall.c's utshedFinish, UNDERTALE Old): what rlfPassesBody would load were linear memory no object, for the
+// wanted missing tiles as they stand: its page and tile conditions in its order, and its stop at the budget. No swap counts:
+// this runs after the room load's first passes, in the same frame, where rlSwapBegin allows none. Nor does pass 0's eviction
+// for the first frame (the first passes have made it). Tiles and bytes for all of them; ofSet: one of the set's is among them.
+__attribute__((noinline, noipa, section(".text_sfxshed"))) void CtrTextures_shedWalk(const CtrTextureCache* cache, uint64_t deadline,
+                                                                                     const uint8_t* entries, uint32_t count,
+                                                                                     uint64_t* outBytes, uint32_t* outTiles, bool* ofSet) {
+    uint64_t resident = cache->residentBytes;
+    uint64_t at = nowNanos();
+    uint64_t total = 0;
+    uint32_t tilesAll = 0;
+    bool full = false, found = false;
+    for (int pass = 0; 3 > pass && !full; pass++) {
+        for (uint32_t pageId = 0; cache->pageCount > pageId && !full; pageId++) {
+            const CtrPage* page = &cache->pages[pageId];
+            if (!page->layoutKnown || page->failed || page->retryFrame > cache->frame || page->tiles == nullptr) continue;
+            if (pass == 0 && !page->wantedNow) continue;
+            bool finished = page->read != nullptr && cache->reader != nullptr && CtrTileReader_finished(cache->reader, page->read);
+            bool readDone = finished && page->read->headerOk;
+            if (pass == 0 && page->packed == nullptr && page->read == nullptr && page->cacheFile != CTR_CACHE_FILE_VALID) continue;
+            if (pass == 1 && page->packed == nullptr && !readDone) continue;
+            if (pass == 2 && (page->packed != nullptr || readDone || page->cacheFile != CTR_CACHE_FILE_VALID || page->read != nullptr)) continue;
+            uint32_t wantedBytes = 0, fileBytes = 0, requested = 0;
+            bool mine = false;
+            int32_t tiles = page->tilesX * page->tilesY;
+            for (int32_t t = 0; tiles > t; t++) {
+                const CtrTile* tile = &page->tiles[t];
+                bool missing = !tile->valid && (!page->formatsKnown || tile->format != CTR_TILE_EMPTY);
+                if (!tile->wanted || !missing) continue;
+                if (pass == 0 ? !tile->now : tile->now) continue;
+                if (pass == 1 && page->packed == nullptr && page->read->tileAt[t] == CTR_READ_NOT_READ) continue;
+                uint32_t bytes = tile->format == CTR_TILE_EMPTY ? 0
+                    : (uint32_t) page->tileW * (uint32_t) page->tileH * CtrPack_texelBytes((CtrTileFormat) tile->format);
+                uint64_t keep = pass == 0 ? 0 : ROOMLOAD_SPRITE_HEADROOM_BYTES;
+                if (resident + wantedBytes + bytes + keep > cache->budgetBytes) {
+                    full = true;
+                    break;
+                }
+                wantedBytes += bytes;
+                fileBytes += page->packInfo ? tile->size : ROOMLOAD_FILE_TILE_BYTES;
+                requested++;
+                for (uint32_t i = 0; !mine && count > i; i++) { // (tiles of other rooms' wants load too, but are no reason to shed)
+                    uint32_t entry;
+                    memcpy(&entry, entries + (size_t) i * 4, 4);
+                    mine = ROOM_TILE_PAGE(entry) == pageId && ROOM_TILE_INDEX(entry) == t;
+                }
+            }
+            if (requested == 0) continue;
+            if (pass == 0 && page->packed == nullptr && page->cacheFile != CTR_CACHE_FILE_VALID && finished && !readDone) continue;
+            if (pass == 2) { // a smaller page may still fit
+                uint64_t end = at + ROOMLOAD_FILE_FIXED_NANOS + (uint64_t) fileBytes * ROOMLOAD_FILE_NANOS_PER_KB / 1024u;
+                if (end > deadline) continue;
+                at = end;
+            }
+            resident += wantedBytes;
+            total += wantedBytes;
+            tilesAll += requested;
+            found = found || mine;
+        }
+    }
+    *outBytes = total;
+    *outTiles = tilesAll;
+    *ofSet = found;
+}
+#endif

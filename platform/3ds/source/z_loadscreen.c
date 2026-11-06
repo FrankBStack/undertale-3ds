@@ -41,6 +41,8 @@
 #include "runner.h"
 #include "sandbox_file_system.h"
 #include "vm.h"
+#include "ctr_r216_ut.h" // R216: UNDERTALE only (R216_PICK, R216_UT)
+#line 44
 
 #define LS_CODE __attribute__((noinline, section(".text.late.loadscreen")))
 #define LS_RO __attribute__((section(".rodata.loadscreen_in_text")))
@@ -387,7 +389,7 @@ CTR_H1_LS("asgborder") static void lsSaveShot(const LsCanvas* c, uint32_t ms) {
     }
     fclose(f);
 }
-
+R216_UT(static void lsDraw(int32_t, int32_t, bool), psDraw(int32_t, int32_t), lsSwapTop(gfxScreen_t, bool);) // crash halt, file end
 // Draws what changed into the back buffer and shows it. Under the lock.
 #ifdef ENABLE_WAD16
 LS_CODE static void lsPresent(int32_t fillW, int32_t frame, bool force) {
@@ -424,7 +426,7 @@ LS_CODE static void lsPresent(int32_t fillW, int32_t frame, bool force) {
             ls.shotNext++;
         }
     }
-    Loadgame_swap(GFX_TOP, stereo);
+    lsSwapTop(GFX_TOP, stereo);
 }
 #else
 LS_CODE static void lsPresent(int32_t fillW, int32_t frame, bool force) {
@@ -550,7 +552,7 @@ CTR_H1_LS("utstall") static void lsStep(bool force) {
     if (t > ls.shown) ls.shown += (t - ls.shown + 3) / 4;
     int32_t frame = 0;
     if (ls.frames != nullptr && ls.frameMs > 0) frame = (int32_t) ((lsMs(ls.loadStart, now) / ls.frameMs) % ls.frameCount);
-    Loadgame_present((int32_t) ((uint32_t) ls.fillMax * ls.shown / 1000u), frame, force);
+    lsDraw((int32_t) ((uint32_t) ls.fillMax * ls.shown / 1000u), frame, force);
 }
 #else
 CTR_H1_LS("utstall") static void lsStep(bool force) {
@@ -838,7 +840,7 @@ CTR_H1_LS("utloop") static void lsFinish(void) {
     uint32_t before = ls.shown;
     if (!ls.paused) {
         ls.shown = 1000;
-        Loadgame_present(ls.fillMax, ls.frame < 0 ? 0 : ls.frame, true);
+        lsDraw(ls.fillMax, ls.frame < 0 ? 0 : ls.frame, true);
     }
     ls.running = false;
     LightLock_Unlock(&ls.lock);
@@ -1531,7 +1533,7 @@ PS_CODE static void psPresent(int32_t fillW, int32_t frame) {
             ls.shotNext++;
         }
     }
-    Loadgame_swap(GFX_TOP, stereo);
+    lsSwapTop(GFX_TOP, stereo);
 }
 #else
 PS_CODE static void psPresent(int32_t fillW, int32_t frame) {
@@ -1654,7 +1656,7 @@ PS_CODE static void lsPackRun(const DataWin* dataWin) {
             LightLock_Lock(&ls.lock);
             int32_t frame = psDogKey((uint32_t) ((tick - ls.loadStart) / LS_TICKS_PER_MS));
             barAt = (uint32_t) (LS_CAP * share / 1000u);
-            psPresent((int32_t) ((uint32_t) ls.fillMax * barAt / 1000u), frame);
+            psDraw((int32_t) ((uint32_t) ls.fillMax * barAt / 1000u), frame);
             LightLock_Unlock(&ls.lock);
             lastDisplay = tick;
         }
@@ -1936,8 +1938,9 @@ LG_CODE static void Loadgame_layout(void) {
 #endif
     }
 }
+bool Loadgame_delayFirst(bool force);
 LG_CODE static void Loadgame_present(int32_t fillW,int32_t frame,bool force) {
-    if(force ? !ls.pictures : lsMs(ls.loadStart,svcGetSystemTick())<200) return;
+    if(Loadgame_delayFirst(force)) return;
     lsPresent(fillW,frame,force);
 }
 LG_CODE static void Loadgame_saveShot(const LsCanvas* c,uint32_t ms) {
@@ -1954,5 +1957,72 @@ LG_CODE void Loadgame_swap(gfxScreen_t ignored, bool stereo) {
         void CtrScreens_pacerShow(gfxScreen_t);
         CtrScreens_pacerShow(GFX_BOTTOM);
     } else __real_gfxScreenSwapBuffers(GFX_TOP, stereo);
+}
+// Top keeps its original immediate first picture. Only chosen-bottom startup
+// needs the delay that lets its format/buffer policy settle before painting.
+__attribute__((noinline, noipa, section(".text.dlgtopfix_late")))
+bool Loadgame_delayFirst(bool force) {
+    return ls.firstBelow && (force ? !ls.pictures : lsMs(ls.loadStart,svcGetSystemTick())<200);
+}
+#endif
+
+#ifdef ENABLE_WAD16 // SCOURS4-005: UNDERTALE only (ctr_r216_ut.h)
+#line 1559
+// SCOURS4-005: the crash report's halt and the gate it closes (R188e..R188i; R216b: on the 1.0 layout). Every draw of
+// the bar (lsStep on its thread, lsFinish on the game's, and the setup bar's psPresent in lsPackRun on the game's, all
+// under ls.lock) goes through lsDraw or psDraw, which start one only while no halt has come, by putting the thread's
+// TLS pointer in lsGate, and clear it after the draw's last swap (or its early return); bit 0 is the halt's. The halt
+// sets that bit, then waits for a draw already started to end. It returns true when none is left, or when the calling
+// thread is the one drawing (it faulted there and can't go on); false when a draw on another thread is still live
+// after about 50 ms (a deadline on the system tick, polled each 1 ms sleep). A drawing thread can't block on ls.lock
+// (it holds it), but it could on something else the faulting thread holds. Every crash-screen paint goes through
+// argcrashPaintGated (z_argcrash.c), which asks again while a draw is live and paints once it ends (one live a second
+// after the first refusal is stuck: the crash screen paints over it). No ls.lock, no join: the faulting thread may
+// hold the lock (then none will start). UNDERTALE's bar still draws through Loadgame_present and swaps through
+// Loadgame_swap (the bar on the bottom screen when the game is there). At the file's end so no __LINE__ above it
+// moves; own sections, appended in late_reserve.ld after every other late input. UNDERTALE only (R216d).
+#define LS_HALT_TEXT __attribute__((noinline, section(".text_lshalt")))
+static uintptr_t lsGate __attribute__((section(".bss.lshalt_late")));
+
+LS_HALT_TEXT static void lsDraw(int32_t fillW, int32_t frame, bool force) {
+    uintptr_t idle = 0;
+    if (!__atomic_compare_exchange_n(&lsGate, &idle, (uintptr_t) getThreadLocalStorage(), false, __ATOMIC_ACQUIRE,
+                                     __ATOMIC_RELAXED)) return;
+    Loadgame_present(fillW, frame, force);
+    __atomic_fetch_and(&lsGate, (uintptr_t) 1, __ATOMIC_RELEASE);
+}
+
+LS_HALT_TEXT static void psDraw(int32_t fillW, int32_t frame) {
+    uintptr_t idle = 0;
+    if (!__atomic_compare_exchange_n(&lsGate, &idle, (uintptr_t) getThreadLocalStorage(), false, __ATOMIC_ACQUIRE,
+                                     __ATOMIC_RELAXED)) return;
+    psPresent(fillW, frame);
+    __atomic_fetch_and(&lsGate, (uintptr_t) 1, __ATOMIC_RELEASE);
+}
+
+LS_HALT_TEXT bool CtrLoadscreen_halt(void) {
+    uintptr_t drawing = __atomic_fetch_or(&lsGate, (uintptr_t) 1, __ATOMIC_SEQ_CST) & ~(uintptr_t) 1;
+    if (drawing == (uintptr_t) getThreadLocalStorage()) return true;
+    uint64_t end = svcGetSystemTick() + 50ull * LS_TICKS_PER_MS;
+    while (drawing != 0 && end > svcGetSystemTick()) {
+        svcSleepThread(1000000);
+        drawing = __atomic_load_n(&lsGate, __ATOMIC_ACQUIRE) & ~(uintptr_t) 1;
+    }
+    return drawing == 0;
+}
+
+// R188e: whether a bar draw is live now, without waiting (argcrashPaintGated asks this each frame while its crash
+// screen is over a stuck draw, and calls the halt again only once that draw has ended).
+LS_HALT_TEXT bool CtrLoadscreen_drawing(void) {
+    return (__atomic_load_n(&lsGate, __ATOMIC_ACQUIRE) & ~(uintptr_t) 1) != 0;
+}
+
+// R188f: lsPresent's and psPresent's swap. Once the halt has come (a crash report is painting, or about to), the bar
+// shows nothing more: a draw still live then, one the crash screen took over from a second later included, skips its
+// swap. Its pixel writes already under way can still land in the buffer it was given (the crash screen's, once
+// painted); its loadshot.txt picture can still be written; it can't swap, present or start another draw.
+__attribute__((noipa)) LS_HALT_TEXT static void lsSwapTop(gfxScreen_t screen, bool hasStereo) {
+    if ((__atomic_load_n(&lsGate, __ATOMIC_ACQUIRE) & 1) == 0)
+        Loadgame_swap(screen, hasStereo);
 }
 #endif

@@ -8,6 +8,7 @@ LICENSE
 README.md
 THIRD_PARTY_NOTICES
 VERSION
+pytest.ini
 docs/release/build-contract.json
 docs/release/credits-port.txt
 engine/LICENSE
@@ -35,8 +36,19 @@ engine/src/colline_gm14.h
 engine/src/collision.h
 engine/src/colexact_bbox.h
 engine/src/z_colexact.c
+engine/src/z_room_name_bounds.c
 tools/buildcache/colexact_compile.py
 tools/buildcache/test_colexact_compile.py
+# Native RNG mappings and retained release entry slots
+engine/src/rngexact.h
+engine/src/rngexact_entries.inc
+engine/src/z_rngexact.c
+engine/src/z_rngexact_vm.c
+tools/buildcache/rngexact_compile.py
+tools/buildcache/test_rngexact_compile.py
+# UT paused-query retained position-table compiler adapter
+tools/buildcache/audpar_compile.py
+tools/buildcache/test_audpar_compile.py
 engine/src/collision_compat.c
 engine/src/collision_gm14.c
 engine/src/collision_gm14.h
@@ -196,6 +208,7 @@ platform/3ds/cia/n3ds.rsf
 platform/3ds/cia/o3ds.rsf
 platform/3ds/cold/ctr_readback.c
 platform/3ds/compiler_policy.cmake
+platform/3ds/release_guard.h
 platform/3ds/data_versions.inc
 platform/3ds/hotpin/check_hot.cmake
 platform/3ds/hotpin/check_knfuse_size.cmake
@@ -208,6 +221,7 @@ platform/3ds/source/ctr_aot_module.c
 platform/3ds/source/ctr_aot_module.h
 platform/3ds/source/ctr_apt_trace.c
 platform/3ds/source/ctr_apt_trace.h
+platform/3ds/source/z_trace_wake.c
 platform/3ds/source/ctr_argui.c
 platform/3ds/source/ctr_asgprobe.c
 platform/3ds/source/ctr_adpcm_metrics.h
@@ -273,6 +287,7 @@ platform/3ds/source/ctr_data_version.c
 platform/3ds/source/z_builderx_receipt.c
 docs/release/builder-version-receipts.md
 platform/3ds/source/ctr_data_version.h
+platform/3ds/source/ctr_data_version_mem.h
 platform/3ds/source/ctr_dialogue.c
 platform/3ds/source/ctr_dialogue.h
 platform/3ds/source/ctr_display.c
@@ -324,6 +339,7 @@ platform/3ds/source/z_itemfront.c
 platform/3ds/source/z_inputlate.c
 platform/3ds/source/ctr_lab.c
 platform/3ds/source/ctr_lab.h
+platform/3ds/source/ctr_r216_ut.h
 platform/3ds/source/ctr_lab_proto.c
 platform/3ds/source/ctr_lab_proto.h
 platform/3ds/source/ctr_language.c
@@ -423,6 +439,7 @@ platform/3ds/source/shaders/render2d_texgen.v.pica
 platform/3ds/source/stb_impl.c
 platform/3ds/source/vine_old_observer.inc
 platform/3ds/source/z_argcrash.c
+platform/3ds/source/z_argcrash_sd.h
 platform/3ds/source/z_btnprompt_ctr.c
 platform/3ds/source/z_builderx_review.c
 platform/3ds/source/z_chapterleak.c
@@ -435,6 +452,7 @@ platform/3ds/source/z_roomload.c
 platform/3ds/source/z_roomload_trace.c
 platform/3ds/source/z_roomload_trace.h
 platform/3ds/source/z_roomplan.c
+platform/3ds/source/z_rosabl.c
 platform/3ds/source/z_utpolish_audio.c
 platform/3ds/source/z_utpolish_bench.c
 platform/3ds/source/z_utpolish_bench.h
@@ -626,6 +644,7 @@ tools/aot/aot_select.py
 tools/aot/btnprompt.py
 tools/aot/builtin_audit.py
 tools/aot/corpus.py
+tools/aot/private_game.py
 tools/aot/credits.py
 tools/aot/data_versions.py
 tools/aot/fontverdict.py
@@ -738,6 +757,8 @@ tools/release/builder/pipeline.py
 tools/release/builder/products.py
 tools/release/builder/preferences.py
 tools/release/builder/toolchain.py
+tools/release/builder/library_pins.py
+tools/release/test_builder_library_pins.py
 tools/release/builder/undertale-3ds-builder.cmd
 # Builder kit source closure (2026-10-21); findings remain visible.
 engine/src/z_utdust.c
@@ -792,6 +813,7 @@ tools/texprep/shim/citro3d.h
 tools/texprep/shim/malloc.h
 tools/texprep/sources.py
 tools/texprep/texprep.c
+tools/texprep/texprep_paths.h
 tools/texprep/texprep_host.h
 # The builder's HOME Menu art
 # argcrash
@@ -883,6 +905,7 @@ tools/aot/stmenu.py
 engine/src/z_utkill_vapor.c
 engine/src/z_utkill_swarm.c
 engine/src/z_utring.c
+engine/src/z_sansspawn.c
 engine/src/z_utkill_waver.c
 tools/release/import_closure.py
 tools/release/test_import_closure.py
@@ -891,7 +914,10 @@ platform/3ds/source/z_swkbd.c
 # smartcut item verdicts (fontverdict.py's build mode writes them)
 platform/3ds/source/z_itemverdict.c
 tools/aot/itemverdict.py
-# phaseplan (utflowey): its builder (build.sh names it, and runs it for DELTARUNE only), and its source (CMake
+# thinart: private build-time artwork generator and hidden-entry loader; no assets
+tools/aot/inkart.py
+platform/3ds/source/z_thinart.c
+# phaseplan (change utflowey): its builder (build.sh names it, and runs it for DELTARUNE only), and its source (CMake
 # names it to leave it out of UNDERTALE builds)
 # utold scalar3: the lava's numeric draw_sprite_part call (UNDERTALE only)
 platform/3ds/source/z_utold_scalar.c
@@ -948,6 +974,8 @@ tools/aot/textcase.py
 tools/aot/test_textcase.py
 # writerfirst (change codeclose, lever 2): a text writer's first Draw takes writerfront's front (UNDERTALE Old only)
 platform/3ds/source/z_writerfirst.c
+# bulletsplit (change creddodge): the credits bullets' text drawn after their run (UNDERTALE Old only)
+platform/3ds/source/z_bulletsplit.c
 
 # freebies restart preload: restarting the room into another planned scene gets the room load (UNDERTALE only;
 # compiled empty for DELTARUNE, listed for the build inputs)
@@ -973,6 +1001,9 @@ tools/release/test_smdh_metadata.py
 
 # utfade: a door's room change shows black while the new room loads (empty translation unit outside UNDERTALE)
 platform/3ds/source/z_utfade.c
+
+# pacealign (auditfixe): [pace] lines at each bench window's edges; ctr_benchmark.c calls it in UNDERTALE builds
+platform/3ds/source/z_pacealign.c
 
 # fpsbox: displayed-frame sampler and transparent menu underlay (both games).
 platform/3ds/source/ctr_fpsbox.c
@@ -1069,3 +1100,38 @@ tools/buildcache/loadgame_compile.py
 tools/buildcache/test_loadgame_compile.py
 # datarefuse (auditfixe, playblocker #8): UNDERTALE warns about a data.win that isn't its build input (UT; empty in DR)
 platform/3ds/source/z_datarefuse.c
+platform/3ds/hotpin/check_ut_hot.cmake
+platform/3ds/hotpin/undertale-o3ds.hot
+platform/3ds/hotpin/undertale-n3ds.hot
+# Optional lab qualification policy; player builds default OFF.
+platform/3ds/hotpin/ut_hot_policy.cmake
+tools/analysis/test_dlgtop_carry.py
+tools/release/test_dlgtop_player.py
+tools/analysis/run_dlgtop_player_gates.py
+tools/analysis/check_dlgtop_ut_layout.py
+tools/analysis/check_layout.py
+tools/analysis/arm_got_permutation.py
+
+# Public UT ignores leftover lab file triggers (empty in DR).
+platform/3ds/source/z_public_benchfile.c
+tools/buildcache/public_benchfile_compile.py
+tools/buildcache/test_public_benchfile_compile.py
+tools/buildcache/devkit_tools.py
+# utcredepi: room-load promotion intent; empty outside UNDERTALE Old
+platform/3ds/source/z_utcredepi.c
+platform/3ds/source/z_saveaudit.c
+platform/3ds/source/z_saveaudit_format.c
+platform/3ds/source/z_saveaudit_scan.c
+platform/3ds/source/z_fatalgfx.inc
+
+tools/release/builder/sdk-stack-pins.json
+
+tools/release/builder/certs/cacert.pem
+
+tools/release/builder/certs/LICENSE.certifi
+
+tools/release/builder/gui_test_support.py
+
+tools/release/test_builder_tk_required.py
+
+tools/release/test_builder_first_paint.py

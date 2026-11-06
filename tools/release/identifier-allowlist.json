@@ -30,7 +30,7 @@
     {
       "member": "tools/aot/selection/undertale.txt",
       "class": "aot-selection",
-      "sha256": "16fbc34e7486a9f02209d9e55d1402a096ccc0979a0e9d126b7a0d408b385998",
+      "sha256": "04f0219b4f99e791cbe3b1d34ee3d65c6022d4b44a820fb9fc9e0707b3eb8b1e",
       "justification": "Names-only selection keys for compiling the players own code."
     },
     {
@@ -42,7 +42,7 @@
     {
       "member": "tools/aot/selection/undertale-o3ds-padrefs.txt",
       "class": "aot-selection",
-      "sha256": "ee542a14bd7cd3f9b8d5a12166e88c28696db1537243b4838781186c6e866f21",
+      "sha256": "df406186d76ede92f0635f417523132cbbe8163f014b40b8fe22661875636929",
       "justification": "Names-only section-placement keys for compiling the player's own code; no generated code or game content."
     },
     {
@@ -60,7 +60,7 @@
     {
       "member": "tools/release/music-versions.json",
       "class": "music-versions",
-      "sha256": "25b26afea8452edac74a63696cbcefe62688586da5dfc828623bf7beec9a8a1c",
+      "sha256": "03fc07e068cbcab9bf75e3fbe2b01c009f56c46f6def932154d4abbcaae0350d",
       "justification": "File names, sizes and digests verify the players own music depot."
     },
     {
@@ -72,13 +72,13 @@
     {
       "member": "tools/release/verify_game.py",
       "class": "data-versions",
-      "sha256": "6260d7203d0b9b30101b0448bd0396a268219657fda868439e83cce088e9cd53",
+      "sha256": "d658e6ec21b9174d06428f3f998c59af390589987fa0550778a3003c22b55027",
       "justification": "Sizes and digests select verified player data and compile-time profiles."
     },
     {
       "member": "tools/release/generate_music_manifest.py",
       "class": "data-versions",
-      "sha256": "d49b9005f095e683d929fc6392ac6a7d3a05d999fa4a75bc9b0f64a47c1ead9b",
+      "sha256": "6723b0a747a2708f3b31bd4d635eb5e6afc01ddc18e65b30272ff4a29d3942e5",
       "justification": "Sizes and digests select verified player data and compile-time profiles."
     },
     {
@@ -120,7 +120,7 @@
     {
       "member": "engine/src/runner.c",
       "class": "engine-lookups",
-      "sha256": "c2b53bb483a1a014b3912487cc4312cc8e9af3fcca6c934e94fbf9aa88291d08",
+      "sha256": "67e09ab53096c75c00cb92410215b9c521eb127ab93b20be077f6852a7713c56",
       "justification": "Object and variable lookup examples explain runner initialization and dispatch.",
       "evidence_sha256": [
         "e21b4a0970f25e43698b263730323baeaa930e9907f1661a433985a117c25dc1"
@@ -138,10 +138,19 @@
     {
       "member": "platform/3ds/source/ctr_audio_selftest.c",
       "class": "engine-lookups",
-      "sha256": "225b62dac5c3a5268fdc1a6cae9282285c7d75592176f384107681a3d9c3627f",
+      "sha256": "2f993d420d102f62d7e3a6e546c0e6602d10ccdf82c47f7dc8b8047e2a6ff52e",
       "justification": "Sound and music lookup names select player assets for the audio self-test.",
       "evidence_sha256": [
         "c9848bd17ce0237625ca52b260727310cf3cbb11cabff331645938c52c87f8cd"
+      ]
+    },
+    {
+      "member": "platform/3ds/source/ctr_audio_system.c",
+      "class": "engine-lookups",
+      "sha256": "c69a369a87ed38d34a406a89f5d595bb595e3a3a86111fc0bd90691445987e5b",
+      "justification": "One sound lookup name: the game-over music fence recognises this stream by its name at runtime.",
+      "evidence_sha256": [
+        "9b7906afa34fd7378c77b13fc0e94b5b9afac4944fce6a70064bf387c8751674"
       ]
     },
     {
@@ -156,7 +165,7 @@
     {
       "member": "platform/3ds/source/ctr_benchmark.c",
       "class": "engine-lookups",
-      "sha256": "38655f578a9268c961e08bf7e35e21998d31030faf181b9d19aa1a536643f0ed",
+      "sha256": "45569a6f374e4baf009b7ee3319411b84ae84b75e788a1b516e26253977b26bc",
       "justification": "Room, object and script lookup names select harness setup in player data.",
       "evidence_sha256": [
         "2b5bc4fa300c8eb091e9e80ba7df656563bd895c75a5e7b06f4a4104ea59a29b"
@@ -165,7 +174,7 @@
     {
       "member": "platform/3ds/source/ctr_benchmark.h",
       "class": "engine-lookups",
-      "sha256": "e06cf1c7892f439d6b4a411167f4ae88ff711c42b211b2aee981a5b1d3f85d7f",
+      "sha256": "fc03e761d56c8a3d11acdadeed03dc8b8db95d8904d3da55e8bd2941e5db8e26",
       "justification": "Player setup entry names document benchmark API calls.",
       "evidence_sha256": [
         "ddb78a42c893a85fc1eb39a7b4d08b02a38ed5343cf84ac07ee616e39bcc3b33"
@@ -183,7 +192,7 @@
     {
       "member": "platform/3ds/source/ctr_renderer.c",
       "class": "engine-lookups",
-      "sha256": "980477b8195eb7833012fffbbe8266773763133c306a55607e6697f861ee95b9",
+      "sha256": "25d0aee174057664f335b76b221440974093b16683021ca78ca255c7bb25267d",
       "justification": "Shader, object and sprite lookup names select renderer compatibility paths.",
       "evidence_sha256": [
         "b47ae0eeb50b4a01adfe2722ac27cb04c8fa69e3e88b357925af0ed56f2163c2"
@@ -210,7 +219,7 @@
     {
       "member": "platform/3ds/source/main.c",
       "class": "engine-lookups",
-      "sha256": "d95ce2406ff9baaf5e8704865f8955881642624ec26ba14bbc02c851fbf6e10c",
+      "sha256": "f5347f6c35d23e2fe2600dfe72d253756790646979e2f325819bbabcfcb0e10e",
       "justification": "Intro and title room names select startup rooms in player data.",
       "evidence_sha256": [
         "beff7c970aaeadca3f94aedfe4901d446f31340c60d5b22c361461f1f3cc2cdc"
@@ -228,7 +237,7 @@
     {
       "member": "tools/aot/corpus.py",
       "class": "engine-lookups",
-      "sha256": "71b9ae2f8092bdbf4e447b2c04db55c778c4d6c3e4d92908f5bc400e2071c34d",
+      "sha256": "8167f41856925686684c6e00b3e3957cef72ee929affee487669e96ede3f399d",
       "justification": "Room, object and script lookup names support corpus discovery in player data.",
       "evidence_sha256": [
         "a259dbdeda9d8b93d5c06945f79e230adee65c56c19ae6389cfacd770cae8176"
@@ -237,7 +246,7 @@
     {
       "member": "tools/release/test_builder.py",
       "class": "engine-lookups",
-      "sha256": "cb7b62bfba559aeb297849438144c3d7b547a34f240e4dadd5eaa84068c87457",
+      "sha256": "f9431deaf9d24f8755e6ad31c4c33e33d8cd9dc46205c95f7f6fed4d48bb7471",
       "justification": "Existing synthetic compiler/music fixtures and player cursor lookup; new tests only require private generator source closure in the exported builder.",
       "evidence_sha256": [
         "e1013ccac9297ff1f3205e0d2e1e0966f75c9b7b570515dedc2026aba40ade7b"
@@ -246,7 +255,7 @@
     {
       "member": "tools/release/builder/gui.py",
       "class": "engine-lookups",
-      "sha256": "2f4c0d2829627eda9e47c5bf964e988f6b7e279e16f92b76bb9768324d2a12c5",
+      "sha256": "498ba5ddacba47115e7cc61a5f3a73c2bbda579136d53f6bbf72f89dc0f5bf0d",
       "justification": "A sprite lookup extracts the cursor from the players own game.",
       "evidence_sha256": [
         "1b62cafb12b9229024771f28d5dab2c6ebfe350c96bb76639a061bf6de96155d"
@@ -255,7 +264,7 @@
     {
       "member": "tools/release/builder/products.py",
       "class": "engine-lookups",
-      "sha256": "76c927f9396f1d1767012e051feaf0fcc16ac362e630e8a561fc8fbd6190b874",
+      "sha256": "b1a3e390bb5c8edd2a761889057d124eddbe28241bfdb61f10c3d33807d12392",
       "justification": "Track filename case mapping supports both Windows and Mac player depots.",
       "evidence_sha256": [
         "f4747b5ca76b5dda5b5f4e2ba9f1783c74eca18666906150e028c939ace8e9c8"
@@ -345,7 +354,7 @@
     {
       "member": "tools/release/builder/home_art.py",
       "class": "engine-lookups",
-      "sha256": "aada9af67be791bec582eefa0c9b37713f8c379f4f9f242724a64bef1f8f32b3",
+      "sha256": "1226220edc7278f64413de5c872b774f6d1ec9d3377b87cf29a4bb1881f01dd0",
       "justification": "Sound and sprite lookups extract HOME art from the players own files.",
       "evidence_sha256": [
         "a17328b239059f37c7f1c49a8dc11f244525b455c14b9269b427c74f452fab4d"
@@ -372,7 +381,7 @@
     {
       "member": "platform/3ds/source/z_loadscreen.c",
       "class": "engine-lookups",
-      "sha256": "1721cf504677517a76443a8d206cced67a1683db5af4ad1592fc50a8a579e814",
+      "sha256": "cde3749036923de2336503e499aeb931cb7034791d0b46df9e2b4303c947236c",
       "justification": "Source asset names document loading art extracted privately from player data. The DR cold chapter hash callback reuses that existing UI; identifier evidence is unchanged.",
       "evidence_sha256": [
         "af267ff21c3f4923516026bbfb91dc4fb53532535d95b783ebc4ccb02d985c62"
@@ -399,7 +408,7 @@
     {
       "member": "engine/src/sandbox_file_system.c",
       "class": "engine-symbols",
-      "sha256": "2e2455ccd0c043036f23c844a1f1437423a6216251073110ee606f51471d6868",
+      "sha256": "ef9e95424bbac0db654775581301a88e69bdf571858142896f7117596116f121",
       "justification": "Reviewed parser limits, format fields, settings or upstream APIs; prefix overlap is not a game asset.",
       "evidence_sha256": [
         "f4d8d125c95da0a3abfeea00ec7c1aa4076cb9f819c965d9049f51802a090640"
@@ -435,7 +444,7 @@
     {
       "member": "platform/3ds/source/ctr_file_system.c",
       "class": "engine-symbols",
-      "sha256": "d0a5182eae5000d0382d9c9840915319c0ae3e0024b12b82dbd52839bf2c2048",
+      "sha256": "99b657e3763ba1cb2e4ca3fed4db59894d8beb31af01a57e87e71c2d9b3aaf37",
       "justification": "Reviewed parser limits, format fields, settings or upstream APIs; prefix overlap is not a game asset.",
       "evidence_sha256": [
         "f4d8d125c95da0a3abfeea00ec7c1aa4076cb9f819c965d9049f51802a090640"
@@ -444,7 +453,7 @@
     {
       "member": "platform/3ds/source/ctr_textures.c",
       "class": "engine-symbols",
-      "sha256": "554d6f6e5c1712408c94f0a28ba1768b3f68787659e2a658a1d693e385429c49",
+      "sha256": "80bce314427adb01c76dcfa9cee93ca9fd3b5144868fe224e3e207f1731c4d42",
       "justification": "Reviewed parser limits, format fields, settings or upstream APIs; prefix overlap is not a game asset.",
       "evidence_sha256": [
         "fa3195d59833c0bb17ff059283d9ea5552a7023e68e0cb575a13476296cd56a0"
@@ -489,7 +498,7 @@
     {
       "member": "tools/release/test_check_release.py",
       "class": "synthetic-fixture",
-      "sha256": "005181b665e0b6fd16946c6eb8e944550950f5bef9327d0deecb3e4c7e620e18",
+      "sha256": "0d44224b2d1470d10b384f1036a3a03432e7caf7b51c864b9efc1fbf570bc581",
       "justification": "Existing made-up detector probes; provenance assertions bind the unchanged PRESS source and its 10 B original glyph, reject source hash/size drift and never clear identifiers.",
       "evidence_sha256": [
         "4d20e7e76169194511c1fc489bbb9aa5753317c101b1fc7079ea64eaeb2c2d3c"
@@ -498,7 +507,7 @@
     {
       "member": "tools/release/test_texcache.py",
       "class": "gating-hashes",
-      "sha256": "1977ce63d0fa2580041195435cf6e789685998194ff7dd709363c2e181021422",
+      "sha256": "b8e86d51aa7c527af7867f12cd9a3a3cdd1a10e409987191749a4b504c60264a",
       "justification": "A known player-data digest tests compile-time cache profile selection with fixture input.",
       "evidence_sha256": [
         "dcf99176f5beeab6da7c76142996000867d039c9fffd11c97f64eb2640957c09"
@@ -507,7 +516,7 @@
     {
       "member": "tools/roomplan/records.py",
       "class": "roomplan-tool",
-      "sha256": "f23cd282c732e151f8a6d22de0f72536e3c149fe3e87c393a7fd541564726b22",
+      "sha256": "ed99e6c17b9adafc78c02dba8fa851ec1bd1b742c8e6f949830b166e464d01ac",
       "justification": "Roomplan schema fields, format limits and lookup names build hash-gated plans from player data.",
       "evidence_sha256": [
         "714972a7fa43d8174964730d7bbd4fe0c122ec016afdb52b64a28068ebb5f93e"
@@ -593,8 +602,8 @@
     {
       "member": "tools/roomplan/records/undertale-steam-1.08.json",
       "class": "roomplan-record",
-      "sha256": "e2214a07f6b5003c3d82bf2a755dc729b5deeaf9670aa199a2305deacf17553e",
-      "justification": "Owner-approved hash-gated indices and source rectangles recorded during our own playthroughs.",
+      "sha256": "4cdfbcc00055e291ee0398280161a1995887fb8cd8d674468088e895eabec4af",
+      "justification": "Room 166 extended with recorded numeric items and parts by tools/analysis/news_plan_data.py (lane omegaflowey, lead brief 2026-11-06). Owner-approved hash-gated playthrough indices and rectangles, extended by trace-attributed numeric whole-set coverage derived with tools/analysis/torielin_utplan_data.py (lead R338 ruling, 2026-11-06); return-room sprite items additionally checked per store for equal metadata, masks and RGBA with torielin_return_utplan_data.py; opening portrait items additionally bound to literal state and checked per store with torielin_opening_utplan_data.py; opening room code entry 3150 added by number, same index and group in both stores (tools/roomplan/README.md); title fade item added by number, same page and tile in both stores (tools/roomplan/README.md); first Froggit items added by number, same sprites in both stores (tools/roomplan/README.md); Undying handoff tiles added to group 91 by number, computed per store from group 92's plan with undyhold_g91_data.py (tools/roomplan/README.md); no pixels or game code.",
       "evidence_sha256": [
         "dcf99176f5beeab6da7c76142996000867d039c9fffd11c97f64eb2640957c09",
         "6955750dde82dd376341835b49ccfddc12b5789c39f68ae57e6c9a1461e9a310"
@@ -651,7 +660,7 @@
     {
       "member": "engine/src/vm_builtins.c",
       "class": "engine-symbols",
-      "sha256": "58954e22207e23e35fe9c6a6ba8f77aee231a6aeedca1caf0950786da9eb6bdc",
+      "sha256": "b346ba91bced0a8bb05d941968909c41aa0d42d4b32c713b73370b6bf922f8c4",
       "justification": "Generic GameMaker room API names and argument placeholders only; game-specific comment examples removed, with no native game bodies remaining.",
       "evidence_sha256": [
         "e4e79ad2fa93fd7259698723d25e590113b4ad6e849a82ee5240fc890c43d313"
@@ -750,7 +759,7 @@
     {
       "member": "platform/3ds/source/z_smalltext.c",
       "class": "engine-lookups",
-      "sha256": "cd3c34d02eba932926b48f8aa9f4a95f05d28c7d70e3e463ae8b62b419fd4803",
+      "sha256": "41a4b616ce40b292731a5d5fbace8874e46a41775d48377162e680e10d1334a6",
       "justification": "The KR label's sprite name finds the frame that Crisp text draws sharp (UNDERTALE only; part of the Smoothing menu's choices). Speech bubbles (bubbleclip; integrate21, approved by the lead 2026-10-27): the text writer object and the four bubble border objects find the writer and the bubble edges so Crisp text stays inside the bubble.",
       "evidence_sha256": [
         "db903e39c5e3b4b4503b85492d4397b9c79fb2534f86197307ffd9a0e012f190"
@@ -802,8 +811,8 @@
     {
       "member": "tools/roomplan/records/undertale-gog-1.08.json",
       "class": "roomplan-record",
-      "sha256": "5e70b9dadb67fa34b0c8dcef8ec37baf70b9f6f516c0932d16cf9ba9e6c6a395",
-      "justification": "Lead-approved GOG hash-gated record, reprojecting our recorded playthrough indices through equal metadata and RGBA.",
+      "sha256": "56fbbe7925e02f52eb22be18377c3aabb5f6f2539066742d4e247cb9b8ccc4a8",
+      "justification": "Room 166 extended with recorded numeric items and parts by tools/analysis/news_plan_data.py (lane omegaflowey, lead brief 2026-11-06). Lead-approved GOG hash-gated playthrough coverage mapped through equal metadata/RGBA, with trace-attributed tutorial coverage derived from private per-store sprite metadata and proven equal late-tile page bytes; return-room sprite items resolved independently per store after equal metadata, masks and RGBA; opening portrait items bound to literal state and resolved with torielin_opening_utplan_data.py; opening room code entry 3150 added by number, same index and group in both stores (tools/roomplan/README.md); title fade item added by number, same page and tile in both stores (tools/roomplan/README.md); first Froggit items added by number, same sprites in both stores (tools/roomplan/README.md); Undying handoff tiles added to group 91 by number, computed per store from group 92's plan with undyhold_g91_data.py (tools/roomplan/README.md); preserve independent GOG group edits.",
       "evidence_sha256": [
         "ea1289ef94f5f714e142d7cb8c4e851dc4326e625c48c21bb9639130497f6b5e",
         "6955750dde82dd376341835b49ccfddc12b5789c39f68ae57e6c9a1461e9a310"
@@ -842,7 +851,7 @@
     {
       "member": "tools/aot/gmlaot.py",
       "class": "engine-lookups",
-      "sha256": "92b760c2693969eca9704075390a95d8031ddc52a78845a4135cd2b35c6b9753",
+      "sha256": "09188524c1f322fcd287df21d17d90bb54fb42f82bc9c8b9d18d77b1b71d7e97",
       "justification": "One lava script lookup selects an audited generic sprite-part builtin redirect. No game body, game instruction sequences or generated code from them, resource IDs, assets or text are embedded: the native bodies (UTF_NATIVE) and the text front (GETTEXT_FAST) are matched by SHA-256 or FNV digests computed from the player's data.win at build time; the only instruction words left are the VM's generic opcode encodings the compiler decodes.",
       "evidence_sha256": [
         "ec6d5c493df4c8b53e57dd4a2ce27ce563d52ee9ccf95083c9135cec002574aa"
@@ -855,7 +864,7 @@
       "evidence_sha256": [
         "ec6d5c493df4c8b53e57dd4a2ce27ce563d52ee9ccf95083c9135cec002574aa"
       ],
-      "sha256": "0b2998b280f5bfbbbde152aaca863ac6267150c97ffda2f9a5bb2ff0b126a0aa"
+      "sha256": "3a875beb2b5e64cc0f5655868f2667044cb129bc7bd152c19738c4bb98a6c181"
     },
     {
       "member": "tools/aot/stpack.py",
@@ -869,7 +878,7 @@
     {
       "member": "tools/aot/stmenu.py",
       "class": "engine-lookups",
-      "sha256": "850765fb3feba5cd55f68c017a43bde89ee13917039b38a228e4e9492d61a411",
+      "sha256": "8a218e1895f83fd7b0d107bd27028b813e8e65ea765dacb059be856851c60c43",
       "justification": "The Smoothing menu's build file names the soul, bone and damage-number sprites it finds in the player's own data (Crisp souls, the parts kept sharp, the menu previews, and Mettaton EX's break card drawn with Text Crisp; UNDERTALE only). The bubble clip (bubbleclip; integrate21, approved by the lead 2026-10-27) names the text writer object and its Draw event so the writer draws inside its bubble.",
       "evidence_sha256": [
         "b9da11cdd2ea6e4877d934accf9acb8365c3b630390d68a38987735ccf9673dd"
@@ -935,7 +944,7 @@
     {
       "member": "platform/3ds/source/z_utstall.c",
       "class": "engine-lookups",
-      "sha256": "5e6bae3e588d13f0fbf55e84c705e0dce0ff17ea17b9552f20433ce468b0d776",
+      "sha256": "907c5d9a2d86cdb8cb6fe0132ac04978c780dd22f1d55330872c63ff4c8cad6d",
       "justification": "Code entry names the UNDERTALE Old first room load reads ahead (utflDialogueCode: the first textbox's dialogue scripts), and comments naming the room and object that reach it.",
       "evidence_sha256": [
         "b30b6f9c0118c69e23e46614e45ed7de416e68c19a4c370b7d27cbd96df15c05"
@@ -948,7 +957,7 @@
       "evidence_sha256": [
         "3cfbae877b520b53eb7eeb2fd1751cd681efa5a6e1b348a62ad279880fb037de"
       ],
-      "sha256": "28932f1d328e2bdee571f7e7c25f59457f15d63367a3044123b79f32972d8cd9"
+      "sha256": "3a856f4c88b0c040d07bac524e2bccdc0d85ff9185dde293953162442480a285"
     },
     {
       "member": "platform/3ds/source/z_knightnew_history.c",
@@ -1027,7 +1036,7 @@
     {
       "member": "platform/3ds/source/z_dlghold.c",
       "class": "dialogue-objects",
-      "sha256": "3563a5be2ae78a59597531d167ee1595310be446026da24e732d5c4acc065faf",
+      "sha256": "527a5b32c609d84e38b3d95d65f8c29b1fcde1cbe8ef521170cdffd4cd247793",
       "justification": "Names-only menu object lookups end dialogue replay when a game menu takes over; no game code or assets."
     },
     {
@@ -1061,6 +1070,52 @@
       "justification": "Two code-entry lookup keys select player-owned Create/Draw bodies for builder-generated event wrappers. Original game bodies stay in private generated modules. Only the measured revision from the pinned public registry enables wrappers; an unknown revision or metadata mismatch leaves the effect off. No duplicate player-data digest or game instruction sequence is embedded.",
       "evidence_sha256": [
         "f5e69ec4d8582c3d80b8a89977da23fd875b39b91efd6b2901ef8b5c46a72c61"
+      ]
+    },
+    {
+      "member": "tools/aot/inkart.py",
+      "class": "gating-hashes",
+      "sha256": "ed7d5b9a114d12488b792bd0f3be1171d1e88a2f2123be26a2a716c57d239d90",
+      "justification": "Lead GO 2026-11-03, Steam/GOG support reviewed 2026-11-04: full player-data SHA-256 gates private compile-time LA4 derivation per revision; no texels or game content in source.",
+      "evidence_sha256": [
+        "dcf99176f5beeab6da7c76142996000867d039c9fffd11c97f64eb2640957c09",
+        "ea1289ef94f5f714e142d7cb8c4e851dc4326e625c48c21bb9639130497f6b5e"
+      ]
+    },
+    {
+      "member": "platform/3ds/source/z_thinart.c",
+      "class": "engine-lookups",
+      "sha256": "4d97226d9ba9862adbc164aeb7291cc53eb40e9901da3339727fa35d68ffe86e",
+      "justification": "Lead GO 2026-11-03 and review fixes 2026-11-04: one room-name lookup selects the EX battle-entry loader; identifier only, no game content.",
+      "evidence_sha256": [
+        "0dd2ae8faf2a32113f9c52491903b8d12d333bf2fd5199478d48a6a861ba4fee"
+      ]
+    },
+    {
+      "member": "engine/src/z_room_name_bounds.c",
+      "class": "engine-symbols",
+      "sha256": "9958a02e7f4c0604735b5473eccff43cd3261ebb10ba19d85034b8a4027febe5",
+      "justification": "auditfixg-r2's own section-attribute macro names for its bounds helper; port names only, no game body, resource ID, constant or asset.",
+      "evidence_sha256": [
+        "5989e2956191e58c8b1d485a52c822d2effd4775c24bad5931ae753f064bd987"
+      ]
+    },
+    {
+      "member": "tools/buildcache/colexact_compile.py",
+      "class": "engine-symbols",
+      "sha256": "06a5d978ce2f3f4fb7fbaf838061223d6661bab22ff6adbfdcd5e66cf3b685e3",
+      "justification": "Two generic GameMaker builtin names as they appear in the engine's compiled builtin string pool, and this tool's own constant and receipt key; no game data.",
+      "evidence_sha256": [
+        "109947d9fd2b2bdfeab17a79b864c7806a43d9414d3734fb8c0d7073de9b6186"
+      ]
+    },
+    {
+      "member": "tools/buildcache/test_colexact_compile.py",
+      "class": "synthetic-fixture",
+      "sha256": "98da50fa90e146dddfa50a4d1152dc247242137d3e313a6ef11734eec7a60cbd",
+      "justification": "Synthetic assembler fixture of the engine's builtin string pool and the tool's receipt key; no game data.",
+      "evidence_sha256": [
+        "335d121af0ef2ad1b02de2e4393b31819c35cba20bf20e25d2488e96cf010844"
       ]
     }
   ],

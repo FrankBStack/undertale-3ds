@@ -502,7 +502,7 @@ SECTIONS
     *(.text.late.utasgore)
     /* Any other late text (round 14 dropped the wildcard ahead of the host table: it placed nothing). Not
        ctr_renderer.c's or z_itemverdict.c's, whose smartcut sections come last (round 17). */
-    *(SORT_BY_NAME(EXCLUDE_FILE (*z_utlife.o *z_dlghold.o *z_redpix.o *z_labcut.o *ctr_fpsbox.o *ctr_legal.o *ctr_legal_romfs.o *z_colexact.o *z_utwindow.o *z_asrtext* *z_adpcm* *ctr_adpcm_probe.o *source/ctr_audio_system.o *z_knightnew_history.o *source/z_flowcode.o *ctr_data_version.o *z_gogut* *ctr_pixgrid* *z_builderx_review* *z_builderx_new* *z_builderx_old* *z_builderx_receipt* *runner.o *z_loadscreen.o *z_symverdict* *z_smalltext_dr* *z_utstall* *z_sdmigrate* *source/ctr_renderer.o *source/z_itemverdict.o *z_phaseplan* *z_utold_scalar* *source/ctr_benchmark.o *z_sdlat* *vm_builtins.o *z_gamedir* *ctr_flowervramg_promotion.o *ctr_memory.o *ctr_flowervramg_palette.o *ctr_textures.o *z_hashmenu.o *state_hash.o) .text.late.*))
+    *(SORT_BY_NAME(EXCLUDE_FILE (*z_utlife.o *z_rngexact* *z_thinart.o *z_dlghold.o *z_redpix.o *z_labcut.o *ctr_fpsbox.o *ctr_legal.o *ctr_legal_romfs.o *z_colexact.o *z_utwindow.o *z_asrtext* *z_adpcm* *ctr_adpcm_probe.o *source/ctr_audio_system.o *z_knightnew_history.o *source/z_flowcode.o *ctr_data_version.o *z_gogut* *ctr_pixgrid* *z_builderx_review* *z_builderx_new* *z_builderx_old* *z_builderx_receipt* *runner.o *z_loadscreen.o *z_symverdict* *z_smalltext_dr* *z_utstall* *z_sdmigrate* *source/ctr_renderer.o *source/z_itemverdict.o *z_phaseplan* *z_utold_scalar* *source/ctr_benchmark.o *z_sdlat* *vm_builtins.o *z_gamedir* *ctr_flowervramg_promotion.o *ctr_memory.o *ctr_flowervramg_palette.o *ctr_textures.o *z_hashmenu.o *state_hash.o *random.o *z_saveaudit.o *z_saveaudit_format.o *z_saveaudit_scan.o) .text.late.*))
     /* builderx UT-only adapters, after every round-14 fixed section. DR excludes this object. */
     *z_builderx_review*(.text .text.* .rodata .rodata.*)
     *(.text.h1hole.bxreview)
@@ -1221,7 +1221,8 @@ SECTIONS
        pending seek clears its stream's channel only while the stream still owns it (F2), and a played-out stream's
        context is freed before a live stream is stopped for one (S2) (ctr_audio_system.c's end). Named outside
        .text.late.* so no catch-all above takes it; last, so no earlier late function moves. */
-    *(.text.audofix_late)
+    /* audpar: split only the existing tail helpers to retain their original order and bytes. */
+    *(.text.audofix_late .text.audofix_late_dsp .text.audofix_late_boundary)
     /* hitbox (hitbox 11-01; last, after audofix, merge order; both games, UNDERTALE's path only does work): a
        non-precise sprite's stored collision mask kept at load (DataWin_sep0Masks) and GMS 1.4's sprite_collision_mask
        (collision_gm14.c's end), then its builtin name. Named outside .text.* so collision_gm14.o's line above leaves
@@ -1489,16 +1490,12 @@ SECTIONS
        z_overlayread.c's CtrFileSystem_readWhole (readSaveFile's and readIndexed's whole-file read). Appended. */
     *(.text_overlayread_fs)
     /* credclip (auditfixe CREDPOP-001, after wrapfix, merge order; UNDERTALE, empty in DELTARUNE): the menu font
-       painter's wrap that keeps the Credits roll's rows outside its window black (z_credclip.c, reached through
-       --wrap), then that file's out-of-line copies of header functions; appended. */
-    *(.text_credclip)
+       painter's wrap that kept the Credits roll's rows outside its window black (z_credclip.c; retired by credroll
+       below, it keeps its slot as credclipRetired_text, never called), then that file's out-of-line copies of header
+       functions; appended. KEEP (CREDCLIP-002): nothing refers to the retired wrap, and the slot must keep its bytes. */
+    KEEP(*(.text_credclip))
     *z_credclip.o(.text .text.* .rodata .rodata.*)
-    /* lshalt (auditfixe2 SCOURS4-005, parked for 1.0, so empty; after spdmemo, merge order, before the repack
-       test sections; both games): CtrLoadscreen_halt, the crash report's stop of the loading bar's drawing, CtrLoadscreen_drawing, and
-       lsDraw and psDraw, the gate every bar draw goes through (z_loadscreen.c's end). Named outside .text.late.* so the catch-alls leave it here;
-       appended, so no earlier late code moves. */
-    *(.text_lshalt)
-    /* codeverify (auditfixe2 AUD-16, after lshalt, merge order, before the repack test sections; UNDERTALE Old
+    /* codeverify (auditfixe2 AUD-16, after credclip, merge order, before the repack test sections; UNDERTALE Old
        only, empty elsewhere): rename's wrap, which reads the bytecode file back on the boot that writes it, the
        move's hook that names that file (z_btlentry.c's end), then its mode string ("rb"). Named outside
        .text.late.*; appended. */
@@ -1509,8 +1506,9 @@ SECTIONS
        .text.late.*; appended, so CtrLegalui_update keeps its size (RULES 3adf7ac34). */
     *(.text_legalheld)
     /* argcrashfix (auditfixe2 SCOURS4-004, after legalheld, merge order; both games): the crash screen's
-       painter with the look-ahead wrap and the pixel bound (z_argcrash.c's end; SCOURS4-005's gate is parked). Named outside .text.late.*; appended, so .text.late.argcrash keeps its
-       size and every symbol its place (RULES 3adf7ac34). */
+       painter with the look-ahead wrap and the pixel bound (z_argcrash.c's end; SCOURS4-005's gate is .text_argcrashgate,
+       after dlgtop). Named outside .text.late.*; appended, so .text.late.argcrash keeps its size and every symbol its
+       place (RULES 3adf7ac34). */
     *(.text_argcrashfix)
     /* utfade (utfade, after overlayread R195c; UNDERTALE only, empty in DELTARUNE): a door's room change
        shows black while the room loads: the room change link (z_utfade.c) and the pacer's black (ctr_frame_pacer.c's
@@ -1550,6 +1548,165 @@ SECTIONS
        GOG's code so every GOG late address stays; its address differs between Steam and GOG builds. */
     *(.text_datarefuse_warn)
     *z_datarefuse.o(.text .text.*)
+    /* rosabl (rosafreeze3 bug 2, after the datarefuse warn, merge order; both games): the Rosalina watcher's
+       buttons through the combo's hold and the app's bottom power-off that the hold keeps back (z_rosabl.c, reached
+       through names CMakeLists.txt changes in ctr_rosalina.c and ctr_screens.c), then that file's out-of-line copies
+       of header functions and its constants; named outside .text.late.*, so the catch-alls leave it here. After
+       GOG's block (AFTER_GOGUT); appended, so every earlier late symbol keeps its place. */
+    *(.text_rosabl)
+    *z_rosabl.o(.text .text.* .rodata .rodata.*)
+    /* thinart r4: reviewed private EX-entry artwork, appended after landing inputs. */
+    *(.text.late.thinart)
+    /* auditfixg-r2 SCOURS3-004: save-provided room-name bounds helper and its
+       fallback string, in code space so the late-rodata reserve is untouched. */
+    *(.auditfixg_r2_room_text)
+    *(.rodata.auditfixg_r2_room_in_text)
+    /* auditfixg-r2 SCOURS4-003: shared initial rule-file load and signed OBJT
+       bounds refusal; original offkill/doom input sections retain their extents. */
+    *(.auditfixg_r2_offrules_text)
+    /* auditfixg-r2 SCOURS2-009: owned heartbeat creation, bounded joins and
+       the exit-owner adapter; no additional per-frame operations or strings. */
+    *(.auditfixg_r2_heartbeat_text)
+    /* regaudit F2: wakeable heartbeat waits and nonblocking fatal exit. */
+    *(.auditfixg_f2_heartbeat_text)
+    /* Newly reachable libctru timeout adapter (40 B, discarded in all four
+       frozen R2 links). Keep its first live copy out of the frozen warm text. */
+    *libctru.a:synchronization.o(.text.syncArbitrateAddressWithTimeout)
+    /* pacer A + E1 (after auditfixg, merge order; UNDERTALE Old only, empty elsewhere): the audio threads' arena
+       allocator (ctr_audio_system.c's end) and its log formats. Own names bypass every catch-all. Appended after
+       the latest release input (AFTER_GOGUT), so every earlier Steam and GOG late address stays put. */
+    *(.pacer_arena)
+    *(.pacer_arena_ro)
+    /* rngexact (after pacer E1, merge order; both games): native RNG mappings and builtin wrappers, including
+       header helpers and constants. Appended after the latest release input (AFTER_GOGUT), so every earlier
+       Steam and GOG late address stays put. */
+    *z_rngexact*(.text .text.* .rodata .rodata.*)
+    /* utsdread (auditfixe2 UTSCOURD-001, after rngexact, merge order; UNDERTALE only, empty in DELTARUNE): the crash screen's SD card read
+       title: argcrashSdOut, which notes whether the latest fatal line is an SD read, and argcrashPaintSd, which paints
+       that title (z_argcrash.c's end), then its constants. Named outside .text.late.*. After GOG's block and dlgtop's
+       lines (R238 placement fix, 11-05: above GOG's block it moved GOG's late code and constants in GOG builds),
+       so no earlier late address moves in any build (RULES 3adf7ac34). */
+    *(.text_utsdread)
+    *(.rodata.utsdread_in_text)
+    /* utsdmem (auditfixe2 UTSCOURD F4, regaudit F4, after utsdread; UNDERTALE only, empty in DELTARUNE): the
+       data.win check's buffer allocation, noted (ctr_data_version.c's CtrDataVersion_buffer), and the crash screen's
+       paint call that shows its failure as out of memory (z_argcrash.c's argcrashPaintMem). */
+    *(.text_utsdmem)
+    /* auditfixg r1 port (after utsdmem, merge order; UNDERTALE only): cold reseed and isolated health/lives dispatch.
+       Preserve all earlier owners, including the GOG block and dlgtop KEPT inputs. */
+    *random.o(.text.late.auditfixg)
+    *runner.o(.text.late.auditfixg)
+    /* pacealign (auditfixe Option A, after the auditfixg r1 port, merge order; UNDERTALE only, empty in DELTARUNE): a bench
+       window's edges cut and log the pacer's numbers (z_pacealign.c, ctr_benchmark.c's and ctr_frame_pacer.c's
+       ends), then its log lines. Named outside .text.late.* and .rodata.* so no catch-all takes them; appended, so no
+       earlier late code moves. */
+    *(.text_pacealign)
+    *(.rodata.pacealign_in_text)
+    /* SCOURS4-005 and the fatal claim's guards (auditfixe2 R216b, after pacealign, merge order; R216d: UNDERTALE
+       only, all empty in DELTARUNE: source/ctr_r216_ut.h), appended so no earlier late code or constant moves (RULES
+       3adf7ac34): the loading bar's
+       draw gate and the crash report's halt of it (z_loadscreen.c's end: lsDraw, psDraw, CtrLoadscreen_halt,
+       CtrLoadscreen_drawing, lsSwapTop), the gate every crash-screen paint goes through and the painter's release
+       when its thread parks for good (z_argcrash.c's end: argcrashPaintGated, argcrashLcdSkip, CtrArgcrash_labSleep),
+       the fatal claim's clock (ctr_lab.c's end: CtrLab_fatalAt, and since R216b4 the claimants' way-in clock
+       trampolines), the save guard (ctr_file_system.c's end: no save after a fatal claim, a deadline for those
+       before it), and the Rosalina watcher's stop before a crash screen paints (R240 F1, ctr_rosalina.c's end:
+       CtrRosalina_quiet; R216b5: CtrRosalina_dark and CtrRosalina_threadPub there, and z_argcrash.c's
+       CtrArgcrash_quiet; R216c: its CtrArgcrash_depart; R216d: CtrRosalina_watchRun, the watcher's thread, which
+       lights the bottom after a crash stop). Named outside .text.late.* so the
+       catch-alls leave them here. No constants (no late rodata). */
+    *(.text_lshalt)
+    *(.text_argcrashgate)
+    *(.text_labfatal)
+    *(.text_saveguard)
+    *(.text_rosaquiet)
+    /* leftcode (auditfixe R295, after R216's .text_rosaquiet, merge order; UNDERTALE Old only, empty elsewhere): the room's
+       object code that the room load's first step left, read after the whole room load (z_roomload.c's end, reached
+       through ctr_argui.c's call by a name CMakeLists.txt changes), then its log line. Named outside .text.late.*;
+       appended (AFTER_GOGUT), so every earlier late symbol keeps its place. No statics of its own (rl's). */
+    *(.text_leftcode)
+    *(.rodata.leftcode_in_text)
+    /* codeclose's wrap after review R300b (auditfixe, after leftcode, merge order; UNDERTALE Old only, empty
+       elsewhere): ccRoomCode, the body the wrap's kept place in .text.codeclose_late branches to (z_roomload.c's
+       end). Appended (AFTER_GOGUT), so every earlier late symbol keeps its place. No constants or statics of its own. */
+    *(.text_ccfix)
+    /* dlgtop F3/F7 (after codeclose's .text_ccfix, merge order): cold console carry backup and bottom-only
+       first-picture gate. */
+    *(.text.dlgtopfix_late)
+    /* R270: guarded cold carry bodies, appended after the reviewed player text. */
+    *(.text.late.dlgtopguard)
+    /* P5-1 (after dlgtop's .text.late.dlgtopguard, merge order): public UT's file-trigger refusal, appended
+       after every landing input. */
+    *(.text_p51)
+    *(.rodata.p51_in_text)
+    /* utcredepi R327 (after P5-1's .rodata.p51_in_text, merge order; UNDERTALE Old only, empty elsewhere):
+       __wrap_CtrTextures_roomLoadedOld, room-load promotion intent. Appended (AFTER_GOGUT). */
+    *(.text_utcredepi)
+    /* credroll (creddodge CREDCLIP-002, after utcredepi, merge order; UNDERTALE, empty in DELTARUNE): the menu
+       font painter's wrap that draws the Credits roll to the screen's top and bottom edges (z_credclip.c, reached
+       through --wrap; CREDPOP-001's wrap keeps its slot above as credclipRetired_text). Named outside .text.late.*
+       and outside z_credclip.o's catch-all; appended, so no earlier late code moves. */
+    *(.text_credroll)
+    /* dlglinger (UNDERTALE only): reject stale missing-draw dialogue replay. */
+    *(.text.late.dlglinger)
+    /* Shared fatal exit (saveaudit R339, after dlglinger, merge order): disable painting before graphics release; no state. */
+    *(.text_fatalgfx)
+    /* crispgap (after fatalgfx, merge order; UNDERTALE only, empty in DELTARUNE): Crisp text's even gaps (z_smalltext.c's
+       end). Named outside .text.* so no catch-all takes it; appended, so no earlier late code moves. */
+    *(.text_crispgap)
+    /* smoothdef (after crispgap, merge order; UNDERTALE only, empty in DELTARUNE): settings.ini's Smoothing part lines
+       as they were meant when saved (z_smalltext.c's stReadFileParts), and the help lines that say Recommended. */
+    *(.text_smoothdef)
+    *(.text_smoothdef_str)
+    /* thinart edge (R336, after smoothdef, merge order): UT battle-border coverage; outside .text.late.* so the
+       earlier catch-all cannot move existing inputs. Inside edge (R336b): PC coverage for the star attack's
+       backing outline. */
+    *(.text.thinart_edge_late)
+    *(.text.thinart_outline_late)
+    /* bulletsplit (creddodge, after thinart outline, merge order; UNDERTALE Old writerfront builds only, empty elsewhere):
+       the credits bullets' text drawn after their run (z_bulletsplit.c), its constants and that file's out-of-line
+       copies of header functions. Named outside .text.late.* so no catch-all takes it; appended, so no earlier late
+       code moves. */
+    *(.text_bulletsplit)
+    *(.rodata.bulletsplit_in_text)
+    *z_bulletsplit.o(.text .text.* .rodata .rodata.*)
+    /* saveaudit: strict UNDERTALE startup directory reads and backup recovery. */
+    KEEP(*z_saveaudit.o(.text.late.saveaudit))
+    /* saveaudit: native UT text/INI serialization and its out-of-line helpers. */
+    *z_saveaudit_format.o(.text .text.*)
+    /* R333: bounded foreign-entry skips and explicit startup error text. */
+    *z_saveaudit_scan.o(.text .text.*)
+    *(.text_saveauditfatal)
+    *(.rodata_saveauditfatal)
+    /* gomusic (omegaflowey Bug 1, after saveaudit, merge order; UNDERTALE only, empty in DELTARUNE): copies of one
+       song started in one step join sample-locked (ctr_audio_system.c's end), then their log line. Named outside
+       .text.late.* and .rodata.* so no catch-all takes them; appended, so no earlier late code moves. */
+    *(.text_gomusic)
+    *(.rodata.gomusic_in_text)
+    /* sfxshed (omegaflowey, after gomusic, merge order; UNDERTALE Old only, empty elsewhere): a whole set's room
+       load sheds cached sound effects for the set tiles the linear floor stopped (z_utstall.c's end, utshedFinish; R4's
+       call goes there, its only change), then its log line. Named outside .text.* and .rodata.* so no catch-all takes
+       them; appended, so no earlier late code moves. */
+    *(.text_sfxshed)
+    *(.rodata.sfxshed_in_text)
+    /* audpar (last, merge order; UNDERTALE only): paused audio query membership. */
+    *(.text.late.audpar)
+    *(.text.late.audpar.offset)
+    /* gounder (gounder, after audpar, merge order; UNDERTALE Old only, empty elsewhere): copies of the song at unequal
+       pitches share one decode (ctr_audio_system.c's end), then its log lines. Named as gomusic's, for the same reason. */
+    *(.text_gounder)
+    *(.rodata.gounder_in_text)
+    /* sansspawn (after gounder, merge order; UNDERTALE Old only, empty elsewhere): draw_self_border_true's first call
+       on an instance (z_sansspawn.c, and aot_table.c's aotuf_<k>). Named outside .text.late.*, so no catch-all takes
+       it; appended, so no earlier late code moves. No constants, no statics. */
+    *(.text_sansspawn)
+    /* crisphud (after sansspawn, merge order; UNDERTALE only, empty in DELTARUNE): the battle HUD out of crispgap's even
+       gaps (z_smalltext.c's end). Named outside .text.*, so no catch-all takes it; appended, so no earlier late code moves. */
+    *(.text_crisphud)
+    /* credwait (crispgap, after crisphud, merge order; UNDERTALE only, empty in DELTARUNE): a moved Legal or Credits
+       page waits for its screen's vblank before the copy (z_credclip.c's end, reached from ctr_legal.c's wrap). Named
+       outside .text.* so z_credclip.o's catch-all leaves it here; appended, so no earlier late code moves. */
+    *(.text_credwait)
     /* repack test install (repacka, 11-02; build.sh repacktest= test builds only, empty in every release build):
        diag/ctr_repack_test.c's code and constants, last, so a test build keeps every late address of the release
        build. Keep these two lines last in late text. */
@@ -1565,7 +1722,8 @@ SECTIONS
      then layerfix (6.4 KB) and roomload (about 15.2 KB) overflowed
      UNDERTALE's 128 KiB on Old and New (15.7 and 17.0 KB were left), with argtower (8.3 KB) and the engine levers
      still to come (bigger code is fine when it is faster). Growing this moves .rodata, .data and .bss by whole pages only (no text
-     address changes): check with check_layout.py --expect-shift and tools/analysis/shiftproof.py.
+     address changes): check_layout.py --expect-shift verifies section-uniform OBJECT page moves;
+     inspect all remaining failures (TLS separately), and require tools/analysis/shiftproof.py PROVEN.
      DELTARUNE gets two more 4 KiB pages, 200 KiB: Old had 3223 B
      left with bggrid (4045 B) and crispart (5162 B) still to merge, and New 4491 B after bggrid with crispart to
      come. CMakeLists.txt replaces the marked size for DELTARUNE only, so UNDERTALE keeps 192 KiB and its addresses. */
@@ -1715,7 +1873,7 @@ SECTIONS
     *(.rodata.late.pacer)
     /* oomport (integrate round 15, after pacer): checked optional renderer/history arrays. */
     *(.rodata.late.oomport)
-    *(SORT_BY_NAME(EXCLUDE_FILE (*z_dlghold.o *z_redpix.o *ctr_legal.o *z_utwindow.o *z_asrtext* *z_adpcm* *ctr_adpcm_probe.o *source/ctr_audio_system.o *z_knightnew_history.o *source/z_flowcode.o *ctr_flowervramg_promotion.o *ctr_flowervramg_palette.o *z_gogut* *z_builderx_new* *z_builderx_receipt* *z_sdlat*) .rodata.late.*))
+    *(SORT_BY_NAME(EXCLUDE_FILE (*z_saveaudit.o *z_saveaudit_format.o *z_saveaudit_scan.o *z_thinart.o *z_dlghold.o *z_redpix.o *ctr_legal.o *z_utwindow.o *z_asrtext* *z_adpcm* *ctr_adpcm_probe.o *source/ctr_audio_system.o *z_knightnew_history.o *source/z_flowcode.o *ctr_flowervramg_promotion.o *ctr_flowervramg_palette.o *z_gogut* *z_builderx_new* *z_builderx_receipt* *z_sdlat*) .rodata.late.*))
     *(.rodata.late.builderxnew)
     *(.rodata.late.builderxreceipt)
     *(.rodata.late.gogut)
@@ -1799,13 +1957,22 @@ SECTIONS
     /* datarefuse warn (R243b): the warning's text and the UNSUPPORTED line's format, after R215's two. */
     *(.rodata.datarefuse_warn)
     *z_datarefuse.o(.rodata .rodata.*)
+    /* thinart r4: reviewed private EX-entry artwork, appended after landing inputs. */
+    *(.rodata.late.thinart)
+    *(.rodata.utcredepi_late)
+    /* saveaudit: startup error messages, after every existing constant. */
+    *z_saveaudit.o(.rodata.late.saveaudit)
+    *z_saveaudit_format.o(.rodata .rodata.*)
+    *z_saveaudit_scan.o(.rodata .rodata.*)
+    *(.rodata.late.audpar)
     __late_rodata_end = ABSOLUTE(.);
   }
   /* 8 KiB (at first 4 KiB): late code's constants are mostly log formats; heapfrag's are 472 B, and
      screens' 3.4 KB had to go into late text instead. UNDERTALE n3DS had 1.2 KB left. */
   /* CMake substitutes 0x4000 in its build-local copy for profile/reachgate only, and 0x3000 for UNDERTALE Old 3DS
      (45 B were left). Growing this moves .data and .bss by whole pages
-     only: check with check_layout.py --expect-shift and tools/analysis/shiftproof.py. */
+     only: check_layout.py --expect-shift verifies section-uniform OBJECT page moves; inspect remaining
+     failures (including TLS separately) and require tools/analysis/shiftproof.py PROVEN. */
   __late_rodata_limit = ALIGN(__late_rodata_start, 0x1000) + /* TEST_RODATA_RESERVE */ 0x2000;
   .late.rodata.reserve :
   {
@@ -1867,7 +2034,7 @@ SECTIONS
     *(.data.late.pacer_vc)
     /* utold lava (integrate round 16): its data. */
     *(.data.late.utlava)
-    *(SORT_BY_NAME(EXCLUDE_FILE (*z_labcut.o *ctr_fpsbox.o *z_utwindow.o *z_asrtext* *z_adpcm* *ctr_adpcm_probe.o *source/ctr_audio_system.o *z_knightnew_history.o *source/z_flowcode.o *z_gogut* *z_builderx_new* *z_builderx_old* *z_loadscreen.o *source/ctr_benchmark.o *z_sdlat*) .data.late.*))
+    *(SORT_BY_NAME(EXCLUDE_FILE (*z_thinart.o *z_labcut.o *ctr_fpsbox.o *z_utwindow.o *z_asrtext* *z_adpcm* *ctr_adpcm_probe.o *source/ctr_audio_system.o *z_knightnew_history.o *source/z_flowcode.o *z_gogut* *z_builderx_new* *z_builderx_old* *z_loadscreen.o *source/ctr_benchmark.o *z_sdlat*) .data.late.*))
     *(.data.late.builderxnew)
     *(.data.late.builderxold)
     *(.data.late.builderxoldconst)
@@ -1915,6 +2082,11 @@ SECTIONS
     *(.data.pacer_km5_late)
     /* pacer C3 (last, after KM rev 5, merge order; UNDERTALE Old only): the codebook share's lock and slots. */
     *(.pacer_share_data)
+    /* thinart r4: reviewed private EX-entry artwork, appended after landing inputs. */
+    *(.data.late.thinart)
+    /* pacer A (last, after thinart, merge order; UNDERTALE Old only): the audio arena's lock, lists and counters. */
+    *(.pacer_arena_data)
+    *(.data.utcredepi_late)
     __late_data_end = ABSOLUTE(.);
   }
   __late_data_limit = __late_data_start + 0x1000;
@@ -2078,7 +2250,7 @@ SECTIONS
     *(.bss.late.bootlog)
     /* utasgore (round 17, after bootlog, before the catch-all): the steady path's plan cache (utaKeys). */
     *(.bss.late.utasgore)
-    *(SORT_BY_NAME(EXCLUDE_FILE (*z_labcut.o *ctr_fpsbox.o *z_utwindow.o *z_asrtext* *z_adpcm* *ctr_adpcm_probe.o *source/ctr_audio_system.o *z_knightnew_history.o *source/z_flowcode.o *z_gogut* *z_loadscreen.o *z_symverdict* *z_smalltext_dr* *z_utstall* *z_sdmigrate* *libswkbd_late.a:* *source/ctr_renderer.o *source/z_itemverdict.o *z_phaseplan* *z_sdlat* *z_gamedir* *ctr_flowervramg_palette.o) .bss.late.*))
+    *(SORT_BY_NAME(EXCLUDE_FILE (*z_thinart.o *z_labcut.o *ctr_fpsbox.o *z_utwindow.o *z_asrtext* *z_adpcm* *ctr_adpcm_probe.o *source/ctr_audio_system.o *z_knightnew_history.o *source/z_flowcode.o *z_gogut* *z_loadscreen.o *z_symverdict* *z_smalltext_dr* *z_utstall* *z_sdmigrate* *libswkbd_late.a:* *source/ctr_renderer.o *source/z_itemverdict.o *z_phaseplan* *z_sdlat* *z_gamedir* *ctr_flowervramg_palette.o *z_saveaudit_format.o) .bss.late.*))
     /* packscreen (integrate round 16, after the catch-all, merge order): the setup line it draws. */
     *(.bss.late.packscreen)
     /* symverdict (after packscreen; UNDERTALE only): the table's bits. */
@@ -2420,15 +2592,9 @@ SECTIONS
     /* overlayread (auditfixe3, SCOURSOL3-002, after sleepflush; both games): its copy of the overlay vtable and
        the original's address (z_overlayread.c). */
     *(.bss.overlayread_late)
-    /* lshalt (auditfixe2 SCOURS4-005, parked for 1.0, so empty; after spdmemo, merge order; both games): lsGate, the bar's draw gate
-       (z_loadscreen.c's end; named outside .bss.late.* so the catch-alls leave it here). */
-    *(.bss.lshalt_late)
-    /* codeverify (auditfixe2 AUD-16, after lshalt, merge order; UNDERTALE Old only): its 12 B of state
+    /* codeverify (auditfixe2 AUD-16, after overlayread, merge order; UNDERTALE Old only): its 12 B of state
        (z_btlentry.c's end; named outside .bss.late.* so the catch-alls leave it here). */
     *(.bss.codeverify_late)
-    /* argcrashfix (auditfixe2 SCOURS4-005 R188e, parked for 1.0, so empty; after codeverify, merge order;
-       both games): the crash-screen gate's state (z_argcrash.c's end; named outside .bss.late.* so the catch-alls leave it here). */
-    *(.bss.argcrashfix_late)
     /* utfade (utfade, after overlayread; UNDERTALE only): z_utfade.c's statics (none in release builds; the
        probe's flag in utfadeprobe test builds). */
     *z_utfade.o(.bss .bss.* COMMON)
@@ -2439,6 +2605,65 @@ SECTIONS
        data.win's line for crash and hang reports, and the warning test's frame count in its test builds
        (z_datarefuse.c). */
     *(.bss.datarefuse_late)
+    /* rosabl (rosafreeze3 bug 2, after the datarefuse warn, merge order; both games): the watcher's pad copy, the
+       combo, the hold and the held-back power-off flag (z_rosabl.c; named outside .bss.late.*). */
+    *(.bss.rosabl_late)
+    /* thinart r4: reviewed private EX-entry artwork, appended after landing inputs. */
+    *(.bss.late.thinart)
+    /* auditfixg-r2 SCOURS2-009: two owned thread handles and the create/exit handshake. */
+    *(.bss_auditfixg_r2_heartbeat)
+    *(.bss_auditfixg_f2_heartbeat)
+    /* utsdread (auditfixe2 UTSCOURD-001, after auditfixg F2, merge order; UNDERTALE only): whether the latest fatal
+       line was an SD card read (z_argcrash.c's end; named outside .bss.late.* so the catch-alls leave it here). */
+    *(.bss.utsdread_late)
+    /* utsdmem (auditfixe2 UTSCOURD F4, after utsdread; UNDERTALE only): whether the data.win check's buffer
+       allocation failed (ctr_data_version.c's end). */
+    *(.bss.utsdmem_late)
+    /* pacealign (auditfixe R278b, after utsdmem, merge order; UNDERTALE only): the bench window edges waiting
+       for the pacer's cut (z_pacealign.c; named outside .bss.late.* so the catch-alls leave it here). */
+    *(.bss.pacealign_late)
+    /* SCOURS4-005 and the fatal claim's guards (auditfixe2 R216b, after pacealign, merge order; R216d: UNDERTALE
+       only, empty in DELTARUNE):
+       lsGate, the bar's draw gate (z_loadscreen.c's end), the crash-screen gate's state (z_argcrash.c's end), the
+       fatal claim's clock (ctr_lab.c's end) and the save guard's state (ctr_file_system.c's end). Named outside
+       .bss.late.* so the catch-alls leave them here; appended. */
+    *(.bss.lshalt_late)
+    *(.bss.argcrashfix_late)
+    *(.bss.labfatal_late)
+    *(.bss.saveguard_late)
+    /* R216b5 (UNDERTALE only; empty in DELTARUNE): the Rosalina watcher's published handle and its create mark, and
+       (R216d) its entry and the crash-stop mark (ctr_rosalina.c's end), appended; named outside .bss.* so the file's
+       own catch-all above leaves it here. */
+    *(.bss_rosaquiet_late)
+    /* R216c (UNDERTALE only; empty in DELTARUNE): the departing crash screen's repaint deadline (z_argcrash.c's end,
+       CtrArgcrash_depart), appended the same way. */
+    *(.bss_argdepart_late)
+    /* R270: whether this LCD move actually preserved a console page; outside
+       .bss.late.* so the earlier sorted catch-all cannot move existing state. */
+    *(.bss.dlgtopguard_late)
+    /* utcredepi R327 (after R270's .bss.dlgtopguard_late, merge order): empty in release builds. */
+    *(.bss.utcredepi_late)
+    /* credroll (creddodge CREDCLIP-002, after utcredepi, merge order; UNDERTALE only): the Credits page drawn
+       last, its roll position and its latest line (z_credclip.c; named outside .bss.late.*). */
+    *(.bss.credroll_late)
+    /* thinart edge (R336, after credroll, merge order): semantic border lookup, 12 B. */
+    *(.bss.thinart_edge_late)
+    /* bulletsplit (creddodge, after thinart edge, merge order; UNDERTALE Old writerfront builds only): the waiting text
+       (z_bulletsplit.c; named outside .bss.late.* so the catch-alls leave it here). */
+    *(.bss.bulletsplit_late)
+    *z_bulletsplit.o(.bss .bss.* COMMON)
+    /* saveaudit: original builtin pointers, after all existing statics. */
+    *z_saveaudit_format.o(.bss .bss.* COMMON)
+    *(.bss.saveauditfatal_late)
+    /* gomusic (omegaflowey Bug 1, after saveaudit, merge order; UNDERTALE only): the song-copy groups
+       (ctr_audio_system.c's end; named outside .bss.late.* so the catch-alls leave it here). */
+    *(.bss.gomusic_late)
+    /* sfxshed (omegaflowey R325b, after gomusic, merge order; UNDERTALE Old only): the room's sound plan as asked
+       for (z_utsfx.c, read by utshedFinish; named outside .bss.late.* so the catch-alls leave it here). */
+    *(.bss.sfxshed_late)
+    /* gounder (gounder, after audpar, merge order; UNDERTALE Old only): the shared decode's state
+       (ctr_audio_system.c's end; named outside .bss.late.* so the catch-alls leave it here). */
+    *(.bss.gounder_late)
     /* 3dsxtool refuses a segment whose size isn't a multiple of 4 ("The segments is not word-aligned!"), and this
        block ends the RW segment: late statics of odd sizes (bools) would end it off a word. */
     . = ALIGN(4);

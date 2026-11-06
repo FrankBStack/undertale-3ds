@@ -344,7 +344,28 @@ __attribute__((noinline, optimize("Os"), section(".text.omegaflowey_late"))) sta
     const uint8_t* entries = UtSfx_scene(us.plan, (uint32_t) runner->pendingRoom, (int32_t) UTSFX_STREAM_SUB, &count, &sub, &first);
     if (sub == (int32_t) UTSFX_STREAM_SUB) logInfo(usStreams, (unsigned) CtrAudioSystem_streamPlan(entries, count), (unsigned) count);
 }
-#define UTSFX_PRELOAD usPreloadOld
+// sfxshed (z_utstall.c's utshedFinish): the plan usPreload just asked for, noted whole. The chain's keep list holds 8 of it.
+static struct {
+    const uint8_t* entries;
+    uint32_t count;
+} usNow __attribute__((section(".bss.sfxshed_late")));
+__attribute__((noinline, noipa, section(".text_sfxshed"))) static void usPreloadShed(Runner* runner) {
+    usPreloadOld(runner);
+    DataWin* dw = runner->dataWin;
+    int32_t room = runner->pendingRoom;
+    if (dw == NULL || 0 > room || (uint32_t) room >= dw->room.count || us.plan == NULL) return; // as usPreload: no new plan
+    uint32_t count = 0, first = 0;
+    int32_t sub = -1;
+    const uint8_t* entries = UtSfx_scene(us.plan, (uint32_t) room, usBattleGroup(runner), &count, &sub, &first);
+    usNow.entries = entries;
+    usNow.count = entries != NULL ? count : 0;
+}
+const uint8_t* UtSfx_planNow(uint32_t* count) __attribute__((noinline, noipa, section(".text_sfxshed")));
+const uint8_t* UtSfx_planNow(uint32_t* count) {
+    *count = usNow.count;
+    return usNow.entries;
+}
+#define UTSFX_PRELOAD usPreloadShed
 #else
 #define UTSFX_PRELOAD usPreload
 #endif

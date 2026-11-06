@@ -83,6 +83,7 @@ def build_input(game, data, cache_folder, out=None, err=None):
     import prepare  # prepare imports this module; import it only here
     folder = prepare.find_data(game, data)
     if not folder:
+        print("Could not find the game files.", file=err)
         return BUILD_INPUT_NO_DATA, None
     path = Path(folder) / "data.win"
     revision, known = load_table()

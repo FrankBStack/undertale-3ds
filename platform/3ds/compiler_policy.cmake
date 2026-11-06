@@ -18,3 +18,10 @@ function(release_compiler_policy contract_file)
     endif()
     set(CTRPORT_LAYOUT_PINS_ENABLED "${enabled}" PARENT_SCOPE)
 endfunction()
+
+# Check the effective macro at compile time, including custom flags and -UNDEBUG.
+# The header emits no code/data; Debug and diagnostic configurations keep working.
+function(release_require_ndebug target)
+    target_compile_options(${target} PRIVATE
+        "$<$<AND:$<CONFIG:Release>,$<COMPILE_LANGUAGE:C>>:SHELL:-include \"${CMAKE_CURRENT_FUNCTION_LIST_DIR}/release_guard.h\">")
+endfunction()

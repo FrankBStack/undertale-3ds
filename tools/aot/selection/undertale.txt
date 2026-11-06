@@ -206,7 +206,6 @@ root gml_Script_scr_drawtext_icons_multiline
 root gml_Object_blt_sweatdrop_Draw_0
 root gml_Object_obj_ultimabullet_Step_0
 root gml_Object_obj_xbullet_Step_0
-root gml_Object_blt_vegbullet_Step_2
 root gml_Object_obj_waterdivot_test_Step_0
 root gml_Object_obj_boxsiner_Draw_0
 root gml_Object_blt_4sidebullet_Draw_0
@@ -231,7 +230,6 @@ root gml_Object_obj_conveyorl_Step_2
 root gml_Object_obj_mettb_body_Draw_0
 root gml_Object_blt_icicle_Draw_0
 root gml_Object_obj_mettattackgen_Draw_0
-root gml_Object_obj_umbrellamask_Step_2
 root gml_Object_obj_blockbullet_Draw_0
 root gml_Object_obj_dialoguer_Draw_0
 root gml_Object_obj_vulkincloud_Draw_0
@@ -249,7 +247,6 @@ root gml_Object_obj_whimsalot_body_Draw_0
 root gml_Object_obj_spearbullet_follow_Draw_0
 root gml_Object_obj_megaflybullet_Draw_0
 root gml_Object_obj_mettfodder_Step_0
-root gml_Object_blt_icicle_Step_2
 root gml_Object_obj_floweyx_flame_Step_0
 root gml_Object_obj_hotland_rededge_x_Draw_0
 root gml_Object_obj_glowfly1_Draw_0
@@ -323,7 +320,6 @@ root gml_Object_obj_risespearbullet_Draw_0
 root gml_Object_obj_spearblocker_Draw_0
 root gml_Object_obj_backgrounder_pillar_Draw_0
 root gml_Object_obj_piper_bluejet_Draw_0
-root gml_Object_obj_mkid_actor_Step_1
 root gml_Object_obj_mettleg_l_Draw_0
 root gml_Object_blt_dummybullet_Step_0
 root gml_Object_obj_backgrounder_lastruins_Other_10
@@ -333,7 +329,6 @@ root gml_Object_obj_gyftrotgift_Step_0
 root gml_Object_obj_stromboli_Step_0
 root gml_Object_obj_stormstar_Step_0
 root gml_Object_obj_vulkinbody_Draw_0
-root gml_Object_obj_bouncetilecontoller_Step_0
 root gml_Object_obj_mettattackgen_Step_0
 root gml_Object_obj_moldsmalx_part_Draw_0
 root gml_Script_scr_battlemenu_cursor_y
@@ -344,10 +339,8 @@ root gml_Object_obj_elev_floorsign_Draw_0
 root gml_Object_obj_starker_Step_2
 root gml_Object_obj_rainbowbolt_Step_0
 root gml_Object_obj_temnpc_Step_1
-root gml_Object_obj_handbullet_new_Step_2
 root gml_Object_obj_sansbox_Step_1
 root gml_Object_obj_discoball_pl_Draw_0
-root gml_Object_obj_asrielb_Draw_0
 root gml_Object_blt_butterfly1_Step_0
 root gml_Object_obj_rainbowbolt_Draw_0
 root gml_Object_obj_floweynukesplosion_Step_0
@@ -386,9 +379,18 @@ root gml_Object_obj_wizardbody_Draw_0
 root gml_Object_obj_mettatonb_body_Draw_0
 root gml_Object_obj_carrotshot_Step_0
 root gml_Object_obj_blueswitch_1_Step_1
-root gml_Object_obj_genericfire_Create_0
 # Pinwheel spawn: three real interpreter events, 1,000 instructions on a
 # twenty-name spawn frame. Append only: existing entry indexes stay fixed.
 root gml_Object_obj_creditbullet_Create_0
 root gml_Object_obj_creditboss_Other_10
 root gml_Object_obj_creditbullet_Alarm_0
+# Save and credits epilogue (change auditfixe, R281 ruling 2026-11-05): the SAVE menu runs scr_save -> scr_saveprocess
+# (obj_overworldcontroller_Draw_0, every save point; 14.3-14.9 ms on the Old 3DS save frame on Azahar) and the
+# credits epilogue draws obj_mhd_Draw_0. They came in for obj_mkid_actor_Step_1 (Waterfall Monster Kid, 83-89
+# interpreted ops a frame in the rooms it runs in) and, so the string pool ends where the base build's does, seven
+# entries that run at most 13 interpreted ops a frame, each in its own few rooms or battles: blt_vegbullet_Step_2,
+# obj_umbrellamask_Step_2, blt_icicle_Step_2, obj_bouncetilecontoller_Step_0, obj_handbullet_new_Step_2,
+# obj_asrielb_Draw_0 and obj_genericfire_Create_0 (aotsave's results). The two adds'
+# reference arrays are padrefs (undertale-o3ds-padrefs.txt).
+root gml_Object_obj_mhd_Draw_0
+root gml_Script_scr_saveprocess

@@ -761,6 +761,23 @@ class HalfArt(unittest.TestCase):
 
 @unittest.skipUnless(real_binary(), "no texprep binary (TEXPREP_TEST_BINARY)")
 class RealTool(unittest.TestCase):
+    def test_source_folder_is_readonly_even_when_requested_as_output(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            game = Path(tmp) / 'source'
+            game.mkdir()
+            source = game / 'data.win'
+            source.write_bytes(data_win())
+            cache = game / 'cache'
+            cache.mkdir()
+            (cache / 'complete').write_bytes(b'leave this alone')
+            before = {p.relative_to(game): p.read_bytes() for p in game.rglob('*') if p.is_file()}
+            for output in (game, cache, cache / 'nested'):
+                result = subprocess.run([real_binary(), str(source), str(output)], stdin=subprocess.DEVNULL,
+                                        capture_output=True, text=True, timeout=15)
+                self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
+                self.assertIn('outside the source game folder', result.stderr)
+                self.assertEqual(before, {p.relative_to(game): p.read_bytes() for p in game.rglob('*') if p.is_file()})
+
     def test_unicode_and_spaces_produce_identical_cache_bytes(self):
         tool = texcache.Tool(real_binary(), "pinned", "test")
         with tempfile.TemporaryDirectory() as tmp:

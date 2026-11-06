@@ -27,6 +27,57 @@ TARGETS = {
 TARGET_HINT = "A New 3DS has a C-stick nub above the face buttons and ZL/ZR shoulder buttons."
 
 
+# Decimal MB: shared by Options and the pre-build free-space gate. Delivery is checked separately.
+UNDERTALE_WORK_MB = 1000
+
+
+def _comparison_path(path):
+    path = os.path.normcase(path)
+    if os.name == 'nt':
+        if path.startswith('\\\\?\\unc\\'):
+            path = '\\\\' + path[8:]
+        elif path.startswith('\\\\?\\'):
+            path = path[4:]
+            if not re.match(r'^[a-z]:\\', path):
+                raise ValueError('Cannot compare source and output roots; choose a plain local or UNC path.')
+        elif path.startswith('\\\\.\\'):
+            raise ValueError('Cannot compare source and output roots; choose a plain local or UNC path.')
+    return os.path.normpath(path)
+
+
+def require_output_outside_game(folder, output):
+    """Refuse source-folder writes, including through a symlink or junction."""
+    if folder is None:
+        return
+    # Resolve whole input files before taking their parents: data.win can itself
+    # be a link outside the selected folder. Protect the visible bundle as well.
+    folders = [folder] + [os.path.join(folder, 'chapter%d_windows' % n) for n in range(1, 6)
+                          if os.path.isdir(os.path.join(folder, 'chapter%d_windows' % n))]
+    sources = set()
+    for candidate in folders:
+        roots = [os.path.realpath(candidate)] + [os.path.dirname(os.path.realpath(os.path.join(candidate, name)))
+                                               for name in ('data.win', 'game.ios')]
+        for root in roots:
+            if re.fullmatch(r'chapter[1-5]_windows', os.path.basename(root), re.IGNORECASE):
+                root = os.path.dirname(root)
+            sources.add(_comparison_path(root))
+    target = _comparison_path(os.path.realpath(output))
+    for source in sources:
+        if os.name == 'nt':
+            left, right = os.path.splitdrive(source)[0], os.path.splitdrive(target)[0]
+            # Resolved, distinct local drive letters are provably disjoint.
+            # UNC/device roots cannot be assumed disjoint from a local drive.
+            if re.fullmatch(r'[a-z]:', left) and re.fullmatch(r'[a-z]:', right) and left != right:
+                continue
+        try:
+            inside = os.path.commonpath((source, target)) == source
+        except ValueError as exc:
+            raise ValueError('Cannot compare source and output roots; refusing a possible source-folder write. '
+                             'Copy or install the game on a local drive and choose a local work/output folder.') from exc
+        if inside:
+            raise ValueError('Choose a work/output folder outside the source game folder; game files are read-only.')
+
+
 @dataclasses.dataclass(frozen=True)
 class Product:
     key: str                 # verify_game.GAMES key and build.sh game argument
@@ -45,6 +96,16 @@ class Product:
     @property
     def game(self) -> verify_game.Game:
         return verify_game.GAMES[self.key]
+
+    def work_disk_mb(self, targets):
+        """Planning allowance in decimal MB, excluding delivery copies and installed tools."""
+        if self.key == 'undertale':
+            # R268 Windows both-model work: 833,062,635 B including about 196 MB
+            # exported delivery files, so about 637 MB source/build/cache. Round
+            # up for working space; this is not a measured transient peak. Use
+            # the same allowance for one model until separately measured.
+            return UNDERTALE_WORK_MB
+        return sum(self.disk_mb[target] for target in targets) + 30
 
     def sd_app_dir(self) -> str:
         return "3ds/" + self.app_name
@@ -115,66 +176,74 @@ def load_music_manifest(version, *, store='steam', platform='windows'):
     return entries
 
 
-def music_check(product: Product, folder: str, version: str | None, *, store='steam', platform='windows', parts=None):
+def load_credits_manifest(version, *, store='steam', platform='windows'):
+    record = read_music_manifest()['releases'][store][platform][version]['credits']
+    if (not isinstance(record['size'], int) or record['size'] <= 0
+            or not re.fullmatch(r'[0-9a-f]{64}', record['sha256'])):
+        raise ValueError('Invalid credits file record')
+    return dict(record, name='credits.txt')
+
+
+def music_check(product: Product, folder: str, version: str | None, *, store='steam', platform='windows', parts=None,
+                log=lambda message: None):
     """Verify every UNDERTALE music file by size and SHA-256; check DELTARUNE's music folder."""
     if product.key == "undertale":
         try:
             names = os.listdir(folder)
-        except OSError as e:
-            return False, "Could not list %s (%s)." % (folder, e)
-        oggs = [n for n in names if n.lower().endswith(".ogg") and os.path.isfile(os.path.join(folder, n))]
-        credits = os.path.join(folder, "credits.txt")
-        want = product.music_counts.get(version or "")
-        problems = []
-        if not os.path.isfile(credits) or os.path.getsize(credits) == 0:
-            problems.append("credits.txt is missing (the true ending's credits need it)")
-        if want is not None and len(oggs) < want:
-            problems.append("only %d of the %d music files (.ogg) are there" % (len(oggs), want))
-            try:
-                missing = [entry['name'] for entry in load_music_manifest(version, store=store, platform=platform)
-                           if not os.path.isfile(os.path.join(folder, entry['name']))]
-                if missing:
-                    problems.append('missing music: ' + ', '.join(missing[:3]))
-            except (OSError, ValueError, KeyError, TypeError):
-                pass  # The count failure already stops the build.
-        elif not oggs:
-            problems.append("the music files (.ogg) are missing")
-        restore = ('Use Steam\'s "Verify integrity of game files"' if store == 'steam'
-                   else 'Use GOG Galaxy\'s Verify / Repair, or reinstall your GOG copy')
-        if problems:
-            return False, "%s: %s. %s to restore them, then try again." % (folder, "; ".join(problems), restore)
-        repair = restore + ' to restore the music, then try again. Move custom music out of the game folder first.'
+        except OSError:
+            return False, "Could not open the game folder. Check folder access, then try again."
         try:
             entries = load_music_manifest(version, store=store, platform=platform)
-        except (OSError, ValueError, KeyError, TypeError) as exc:
-            return False, '%s. Download and unpack the current builder, then try again.' % exc
+            credits_entry = load_credits_manifest(version, store=store, platform=platform)
+            if not entries:
+                raise ValueError('Empty music manifest')
+        except (OSError, ValueError, KeyError, TypeError):
+            return False, "This builder could not check the game's music and credits. Download and unpack the complete builder again."
         expected = {entry['name'].casefold() for entry in entries}
-        for name in oggs:
-            if name.casefold() not in expected:
-                return False, 'Unexpected music file %s. %s' % (name, repair)
-        for entry in entries:
+        if any(n.lower().endswith('.ogg') and n.casefold() not in expected for n in names):
+            log("Skipped extra music files. Only the game's original music is used.")
+        credits = os.path.join(folder, "credits.txt")
+        problems = []
+        if not os.path.isfile(credits) or os.path.getsize(credits) == 0:
+            problems.append("credits.txt is missing or empty (the true ending's credits need it)")
+        missing = [entry['name'] for entry in entries if not os.path.isfile(os.path.join(folder, entry['name']))]
+        if missing:
+            problems.append('Music file %s is missing; only %d of the %d music files (.ogg) are there' % (
+                missing[0], len(entries) - len(missing), len(entries)))
+            if len(missing) > 1:
+                problems.append('missing music: ' + ', '.join(missing[:3]))
+            if len(missing) == len(entries):
+                problems.append('the music files (.ogg) are missing')
+        restore = 'Restore the original music and credits from a complete copy of the game, then try again.'
+        if problems:
+            return False, "%s. %s" % ("; ".join(problems), restore)
+        for entry in [credits_entry, *entries]:
             name = entry['name']
             path = os.path.join(folder, name)
+            kind = 'Game credits file' if name == 'credits.txt' else 'Music file'
+            repair = restore if name == 'credits.txt' else 'Restore the original music files from a complete copy of the game, then try again.'
             try:
                 if os.path.getsize(path) != entry['size']:
-                    return False, 'Music file %s has the wrong size. %s' % (name, repair)
+                    return False, '%s %s does not match the supported original. %s' % (kind, name, repair)
                 sha = hashlib.sha256()
                 with open(path, 'rb') as source:
                     for block in iter(lambda: source.read(1024 * 1024), b''):
                         sha.update(block)
                 if sha.hexdigest() != entry['sha256']:
-                    return False, 'Music file %s has the wrong SHA-256. %s' % (name, repair)
+                    return False, '%s %s does not match the supported original. %s' % (kind, name, repair)
+            except FileNotFoundError:
+                return False, '%s %s is missing. %s' % (kind, name, repair)
             except OSError:
-                return False, 'Music file %s is missing or unreadable. %s' % (name, repair)
-        return True, 'credits.txt is present; %d music files verified (size and SHA-256).' % len(entries)
+                return False, 'Could not read %s %s. Check folder access, then try again.' % (kind.lower(), name)
+        return True, 'Game credits and %d music files checked. Ready to build.' % len(entries)
     if not os.path.isdir(os.path.join(folder, "mus")):
-        return False, ("%s has no mus folder (the shared music). Use Steam's \"Verify integrity of game files\", then "
-                       "try again." % folder)
+        return False, ('The shared music folder is missing. Restore the complete original game folder, '
+                       'then try again.')
     import chapters
     selected = [p for p in (parts if parts is not None else chapters.PARTS) if p != 'root']
     errors = chapters.audio_errors(folder, ['root'] + selected)
     if errors:
-        return False, 'Missing or unreadable audio: %s. Verify the game files in Steam.' % errors[0]
+        return False, 'Missing or unreadable audio: %s. Restore the complete original game folder, then try again.' % errors[0]
     return True, '%s %s: audio checked.' % ('Chapter' if len(selected) == 1 else 'Chapters', chapters.numbers(selected))
 
 
@@ -188,6 +257,37 @@ def card_music_names(store='steam'):
         return {e['name'].casefold(): e['name'] for record in windows.values() for e in record['files']}
     except (OSError, ValueError, KeyError, TypeError, AttributeError):
         return {}
+
+
+def source_music_names(platform):
+    """Official source spellings only. Supported editions share the same music-name set (tested)."""
+    return sorted({entry['name'] for releases in read_music_manifest()['releases'].values()
+                   for record in releases.get(platform, {}).values() for entry in record['files']})
+
+
+def log_ignored_music(product, folder, log):
+    if product.key != 'undertale':
+        return
+    layout = verify_game.layout_for(product.game, folder)
+    if layout is None:
+        return
+    try:
+        expected = {name.casefold() for name in source_music_names(layout.key)}
+        locations = [folder, layout.data_dir(folder)]
+        if layout is not verify_game.WINDOWS:
+            locations.append(os.path.dirname(layout.data_dir(folder)))
+        if any(name.lower().endswith('.ogg') and name.casefold() not in expected
+               for location in dict.fromkeys(locations) for name in os.listdir(location)):
+            log("Skipped extra music files. Only the game's original music is used.")
+    except OSError:
+        pass  # The normal file checks report unreadable required files.
+
+
+def stray_name(name):
+    """Known host metadata and incomplete copy names; not a replacement for game validation."""
+    low = name.casefold()
+    return (name.startswith('.') or low in ('__macosx', 'thumbs.db', 'desktop.ini', '$recycle.bin',
+                                           'system volume information') or low.endswith(('.tmp', '.part')))
 
 
 def _same_bytes(a: str, b: str) -> bool:
@@ -238,36 +338,33 @@ def sd_files(product: Product, folder: str, parts=None):
     looks like one made from the Windows files."""
     out = []
     layout = verify_game.layout_for(product.game, folder) if product.key == "undertale" else None
-    if layout is not None and layout is not verify_game.WINDOWS:
+    if product.key == 'undertale':
+        layout = layout or verify_game.WINDOWS
         src_dir = layout.data_dir(folder)
         names = card_music_names()
-        for name in sorted(os.listdir(src_dir)):
+        for name in [layout.data_name, 'credits.txt', *source_music_names(layout.key)]:
             p = os.path.join(src_dir, name)
             if not os.path.isfile(p):
                 continue
             if name == layout.data_name:
                 out.append((p, "data.win", os.path.getsize(p)))
-            elif name.lower() == "credits.txt" or name.lower().endswith(".ogg"):
+            else:
                 out.append((p, names.get(name.casefold(), name), os.path.getsize(p)))
         return sorted(out, key=lambda e: e[1])
-    if product.key == "undertale":
-        for name in sorted(os.listdir(folder)):
-            low = name.lower()
-            p = os.path.join(folder, name)
-            if os.path.isfile(p) and (low in ("data.win", "credits.txt") or low.endswith(".ogg")):
-                out.append((p, name, os.path.getsize(p)))
-        return out
     # DELTARUNE: the folder's contents, minus PC binaries and chapters not chosen.
     chapters = {p for p in product.game.parts if p != "root"}
     chosen = set(parts) if parts is not None else chapters
     for dirpath, dirnames, filenames in os.walk(folder):
         # Save import has its own explicit preview and confirmation. Rebuilding never imports saves or settings.
-        dirnames[:] = [d for d in dirnames if d.casefold() != 'saves']
+        dirnames[:] = [d for d in dirnames if d.casefold() != 'saves' and not stray_name(d)
+                       and not d.lower().endswith('.ogg')]
         rel_dir = os.path.relpath(dirpath, folder)
         top = rel_dir.split(os.sep)[0]
         if rel_dir == ".":
             dirnames[:] = [d for d in dirnames if d not in chapters or d in chosen]
         for name in sorted(filenames):
+            if stray_name(name):
+                continue
             if name.casefold() in ('settings.ini', 'legacycfg.ini', 'delta' + 'tale.ini'):
                 continue
             if name.lower().endswith(SKIP_SUFFIXES) or name.lower() in SKIP_NAMES:
@@ -275,6 +372,8 @@ def sd_files(product: Product, folder: str, parts=None):
             if top in chapters and top not in chosen:
                 continue
             p = os.path.join(dirpath, name)
+            if not os.path.isfile(p) or os.path.getsize(p) == 0:
+                continue
             rel = name if rel_dir == "." else os.path.join(rel_dir, name).replace(os.sep, "/")
             out.append((p, rel, os.path.getsize(p)))
     return out

@@ -4,5 +4,9 @@
 // Call once the renderer and audio system exist.
 void CtrAptTrace_init(void);
 
-// Stops the trace's heartbeat logging; call before closing the log at exit.
+// Signal the heartbeat workers to stop before closing the log at exit.
 void CtrAptTrace_stop(void);
+
+// Called only by the single exit owner before libctru's _exit/heap teardown.
+// Join each worker for at most four seconds; on failure end the mapped process.
+void CtrAptTrace_exit(int status) __attribute__((noreturn));
