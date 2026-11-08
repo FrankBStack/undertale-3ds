@@ -27,6 +27,7 @@ import pipeline
 import texcache
 import sfx_encoder
 import runtime_pins
+import path_hygiene
 
 EXTRA_FILES = ("tools/release/verify_game.py", "tools/release/release_contract.py",
                "tools/release/sfxpack-versions.json",
@@ -103,8 +104,12 @@ def opening_instructions(game, platform=None):
     Checksum sidecars are optional release metadata, never a player setup step.
     Wrapper packaging will substitute its EXE/app names when those exist.
     """
-    lines = ["## Opening the builder",
-             "This beta builder is unsigned. Windows or macOS may warn you the first time you open it."]
+    lines = ["## Opening the builder"]
+    if platform is None:
+        lines.append('This beta builder is unsigned. Windows or macOS may warn you the first time you open it.')
+    elif platform in ('windows', 'macos'):
+        lines.append('This beta builder is unsigned. %s may warn you the first time you open it.' %
+                     ('Windows' if platform == 'windows' else 'macOS'))
     if platform in (None, "windows"):
         lines.append('Windows: Extract all files, then open %s-3ds-builder.cmd. '
                      'If Windows shows "Windows protected your PC", choose "More info", then "Run anyway".' % game)
@@ -170,7 +175,7 @@ def inputs(root, game, runtime=None):
     for rel in pipeline.SOURCE_FILES + EXTRA_FILES:
         if generated_cache(rel) or not pipeline.source_wanted(rel, game):
             continue
-        p = root / rel
+        p = pipeline.source_input(root, rel, game)
         if not p.is_file():
             raise ValueError("Incomplete curated export: missing " + rel)
         result[rel] = p.read_bytes()
@@ -178,7 +183,7 @@ def inputs(root, game, runtime=None):
         directory = root / rel
         if not directory.is_dir():
             raise ValueError("Incomplete curated export: missing " + rel)
-        for p in sorted(directory.rglob("*")):
+        for p in sorted(path_hygiene.iter_paths(directory)):
             if generated_cache(p.relative_to(root).as_posix()):
                 continue
             if p.is_symlink():
@@ -257,6 +262,8 @@ def package(root, output, game, platform, runtime=None, texprep=None, release_de
     start = game + "-3ds-builder" + suffix
     files[start] = launcher(game, platform).encode("utf-8")
     files["README.md"] = opening_instructions(game, platform).encode("utf-8")
+    files['README.txt'] = (game.upper() + ' 3DS Builder\n\n' +
+                          opening_instructions(game, platform).replace('## ', '').replace('`', '')).encode('utf-8')
     if platform == 'linux':
         files['README.txt'] = (game.upper() + ' 3DS Builder\n\n'
             'Before opening the builder, install Python 3.9 or newer with Tk.\n'

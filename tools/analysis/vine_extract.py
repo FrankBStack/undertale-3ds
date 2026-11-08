@@ -19,7 +19,8 @@ PREFIX = 'Flowery_dispatch_'
 WRAPPER = 'Flowery_wrap_'
 CONDITION = r'(?:eq|ne|cs|cc|mi|pl|vs|vc|hi|ls|ge|lt|gt|le|al)?'
 LATE = re.compile(r'^\.(?:text|rodata|data|bss)\.late\.perfflowery$')
-LATE_LANES = {'perfflowery': re.compile(r'^\.(?:text|rodata|data|bss)\.late\.perfflowery$|^\.text\.drpix_late$'),
+LATE_LANES = {'dlgwhite': re.compile(r'^\.text_dlgwhite$'),
+              'perfflowery': re.compile(r'^\.(?:text|rodata|data|bss)\.late\.perfflowery$|^\.text\.drpix_late$'),
               # DELTARUNE New's tower face retention (vine_new_retain.inc), its own late sections, and climbnoise's
               # Azahar-only free of the tower textures there (cnTowerFree, its own line in late_reserve.ld), change flowerhw's
               # tower cuts 6 and 7, its test words and tshare (the shared depth texture's wait for VRAM; all on its own
@@ -60,7 +61,7 @@ def late_sections(text, lane='perfflowery'):
             selected = False
         if selected and not re.match(r'\s*\.(?:file|loc|cfi_\w+)\b', line):
             output.append(line)
-    assert not stack and '.text.late.'+lane in kinds
+    assert not stack and ('.text_dlgwhite' if lane == 'dlgwhite' else '.text.late.'+lane) in kinds
     result = '\n'.join(output)+'\n'
     # GCC can emit .global/.type immediately before switching to an object's
     # section. Preserve declarations for retained definitions wherever they

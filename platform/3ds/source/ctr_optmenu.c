@@ -47,6 +47,10 @@
 #include "common.h"
 #include "ctr_wrap_chain.h"
 #include "ctr_fpsbox.h"
+#ifndef ENABLE_WAD16
+#define quitblackKeys optKeysHeard
+#define quitblackFlush fpsboxMenuFlush
+#endif
 #line 22
 #include "ctr_display.h"
 #include "audio_system.h"
@@ -185,7 +189,11 @@ OPT_STR(omDisNew3ds, "New 3DS only.");
 OPT_STR(omHlpGameTop, "Play on the top screen.");
 OPT_STR(omHlpGameBot, "Play on the bottom screen.");
 OPT_STR(omHlpDlgTop, "Dialogue stays in the game.");
+#if defined(ENABLE_WAD16) // popbot: the overworld's popups follow it; the same 40 B, and 38 x 7 px fits the line
+OPT_STR(omHlpDlgBot, "Dialogue and menus move to the bottom.");
+#else
 OPT_STR(omHlpDlgBot, "Dialogue moves to the bottom screen.");
+#endif
 OPT_STR(omHlpOtherOff, "Other screen off.");
 OPT_STR(hlpOtherBlank, "Other screen blank.");
 OPT_STR(omHlpOtherLog, "Frame rate and log on the other screen.");
@@ -793,10 +801,12 @@ OPT_STATIC void optPreview(uint16_t* fb, uint32_t part) {
 #endif
 
 // Row i of the page.
+static void optRowMainHeard(const CtrMenu* menu, uint32_t i, OptRow* r); // optRowMain, then the appended text (below)
+static void optRowMainShown(const CtrMenu* menu, uint32_t i, OptRow* r); // then this polish's value (below)
 OPT_STATIC void optRow(const CtrMenu* menu, uint32_t page, uint32_t i, OptRow* r) {
     r->label = r->value = r->help = omStrEmpty;
     r->dis = false;
-    if (page == OPT_PAGE_MAIN) optRowMain(menu, i, r);
+    if (page == OPT_PAGE_MAIN) optRowMainShown(menu, i, r);
     else if (page == OPT_PAGE_FPS) optRowFps(i, r);
 #ifdef ENABLE_WAD16
     else if (page == OPT_PAGE_SMOOTH) optRowSmooth(i, r);
@@ -840,12 +850,18 @@ OPT_STATIC void optCompose(const CtrMenu* menu, uint16_t* fb) {
 // console's while the menu is open, so the Controls and legal pages print there too) and copied to the shown one,
 // in the middle 320 columns of the top screen. Done again whenever the game has moved (the renderer's move points the
 // console at its own buffer, which is then what the console gets back at close).
+#if defined(ENABLE_WAD16)
+u8* CtrBlank_settledShown(gfxScreen_t screen, gfx3dSide_t side, u16* width, u16* height); // ctr_gpu_queue.c, dlgblank
+#define OPT_SHOWN CtrBlank_settledShown
+#else
+#define OPT_SHOWN CtrPacer_shownFramebuffer
+#endif
 OPT_STATIC void optPlace(CtrMenu* menu) {
     gfxScreen_t s = CtrScreens_onBottom ? GFX_TOP : GFX_BOTTOM;
     opt.placed = false;
     if (gfxGetScreenFormat(s) != GSP_RGB565_OES) return;
     u16 w = 0, h = 0;
-    uint16_t* shown = (uint16_t*) CtrPacer_shownFramebuffer(s, GFX_LEFT, &w, &h);
+    uint16_t* shown = (uint16_t*) OPT_SHOWN(s, GFX_LEFT, &w, &h);
     uint16_t* spare = (uint16_t*) CtrPacer_backFramebuffer(s, GFX_LEFT);
     gfxSetDoubleBuffering(s, false); // the consoles' single buffer, as the renderer's move leaves it
     if (shown == nullptr || spare == nullptr || shown == spare || w != 240u) return;
@@ -868,6 +884,19 @@ OPT_STATIC void optPlace(CtrMenu* menu) {
 // At each menu call (once a frame while it is open, after the frame's start and before its yield): the page drawn and
 // shown if it changed, placed again first if the game has moved since. The Controls and legal pages print through the
 // console, and are copied every frame.
+#if defined(ENABLE_WAD16) // menufirst (UNDERTALE): composed off the LCD, then copied at the screen's vblank (file's end)
+static void optComposeShown(const CtrMenu* menu, uint16_t* fb);
+static void* optCopyShown(void* to, const void* from, size_t bytes);
+static void optFlushFrame(CtrMenu* menu);
+#define OPT_COMPOSE_PAGE optComposeShown
+#define OPT_FLUSH_FRAME optFlushFrame
+#define OPT_COPY_SHOWN optCopyShown
+#else
+#define OPT_COMPOSE_PAGE optCompose
+#define OPT_COPY_SHOWN memcpy
+#define OPT_FLUSH_FRAME optFlush
+#endif
+#line 879 // menufirst: the numbering before it (the __LINE__ trap)
 OPT_STATIC void optFlush(CtrMenu* menu) {
     if (!menu->open) return;
     if (!opt.placed || CtrScreens_onBottom != (opt.scr == GFX_TOP) || menu->console->frameBuffer != opt.spareBase) {
@@ -880,23 +909,24 @@ OPT_STATIC void optFlush(CtrMenu* menu) {
     if (!consolePage) {
 #ifdef CTRPORT_PLAYER_SHOTS
         uint64_t t0 = svcGetSystemTick();
-        optCompose(menu, opt.spareBase);
+        OPT_COMPOSE_PAGE(menu, opt.spareBase);
         logInfo(optLogCompose, (unsigned long) ((svcGetSystemTick() - t0) / 268u));
 #else
-        optCompose(menu, opt.spareBase);
+        OPT_COMPOSE_PAGE(menu, opt.spareBase);
 #endif
     }
-    memcpy(opt.shownBase, opt.spareBase, OPT_PAGE_BYTES);
+    OPT_COPY_SHOWN(opt.shownBase, opt.spareBase, OPT_PAGE_BYTES);
     GSPGPU_FlushDataCache(opt.shownBase, OPT_PAGE_BYTES);
     CtrLog_endConsole();
     opt.dirty = false;
 }
-static void fpsboxMenuFlush(CtrMenu* menu); void CtrFpsbox_menuNoErase(uint16_t*, const uint16_t*, bool); CtrMenuAction CtrCtrlui_main(CtrMenu* menu, int32_t dir); CtrMenuAction CtrCtrlui_update(CtrMenu* menu, u32 down);
+static void fpsboxMenuFlush(CtrMenu* menu); static void quitblackFlush(CtrMenu*); static CtrMenuAction quitblackKeys(CtrMenu*, u32); void CtrFpsbox_menuNoErase(uint16_t*, const uint16_t*, bool); CtrMenuAction CtrCtrlui_main(CtrMenu* menu, int32_t dir); CtrMenuAction CtrCtrlui_update(CtrMenu* menu, u32 down);
 // ===[ The menu ]===
 
 // The menu's sounds: the game's own cursor sound (argui's sndMove) for the open and each move, its choice sound
-// (sndSelect) for a change, a choice, back and the close; played through the audio's menu hold
-// (ctr_audio_system.c's CtrAudio_menuSound), so they sound while the game's sounds are held.
+// (sndSelect) for a change or choice; back and close are silent. Played through the audio's menu hold
+// (ctr_audio_system.c's CtrAudio_menuSound), so they sound while the game's sounds are held. A press has its sound only
+// if it changed something (optKeysHeard).
 void CtrAudio_menuSound(AudioSystem* audio, int32_t id);
 OPT_STATIC void optSound(bool selectSound);
 
@@ -1080,7 +1110,7 @@ OPT_STATIC CtrMenuAction optActivate(CtrMenu* menu, uint32_t i, int32_t dir) {
         return CtrCtrlui_main(menu, dir);
     }
     if (i == OPT_MAIN_LEGAL || i == OPT_MAIN_CREDITS) {
-        if (dir == 0) CtrLegalui_open(menu, i == OPT_MAIN_CREDITS);
+        if (dir >= 0) CtrLegalui_open(menu, i == OPT_MAIN_CREDITS);
         return MENU_ACTION_NONE;
     }
     if (i >= OPT_MAIN_RESUME) {
@@ -1103,10 +1133,10 @@ OPT_STATIC CtrMenuAction optActivate(CtrMenu* menu, uint32_t i, int32_t dir) {
     menu->edited = true;
     return MENU_ACTION_CHANGED;
 }
-
+void CtrMenuquiet_beforeKeys(CtrMenu* menu, u32 down) __asm__("CtrMenuquiet_press");
 OPT_STATIC CtrMenuAction optKeys(CtrMenu* menu, u32 down) {
     u32 folded = CTR_MENU_FOLD(down);
-    if (folded & 0xFFu) optSound((folded & 0xC0u) == 0);
+    CtrMenuquiet_beforeKeys(menu, down); __asm__ volatile(".rept 6\n nop\n .endr"); // spend the retained sound-call slot
     opt.dirty = true;
     if (CtrLegal_shown()) {
         CtrLegalui_update(menu, down);
@@ -1141,6 +1171,159 @@ OPT_STATIC CtrMenuAction optKeys(CtrMenu* menu, u32 down) {
     return action;
 }
 
+// A press's sound only if the press changed something (maintainer 11-06: Right on Legal notices sounded, and nothing
+// happened): an action for main.c, or a new page, cursor or position; a value's change always returns an action. The
+// same sound, as early as the change is known: after the keys, or just before the page that changed draws or reads a
+// file (its hooks: CtrOptmenu_pressSound and CtrOptmenu_pressLegal), so neither delays it and the Credits' vblank wait
+// is still followed by the copy. Appended (late_reserve.ld).
+#if defined(__3DS__) && defined(__GNUC__)
+#define OPT_PRESS_GLOBAL __attribute__((noinline, optimize("Os"), section(".text_menupress")))
+#else
+#define OPT_PRESS_GLOBAL
+#endif
+#define OPT_PRESS OPT_PRESS_GLOBAL static
+// The menu's hold, its rows' ">" and the counter's corner, after every other late function: growth or a new neighbour here would
+// move the snow floor, HOME and CtrBlank code that follows .text_menupress (review R379 F2). So this code calls
+// .text_menupress, and only retargeted calls reach it. Appended (late_reserve.ld).
+#if defined(__3DS__) && defined(__GNUC__)
+#define OPT_HOLD_GLOBAL __attribute__((noinline, optimize("Os"), section(".text_menuhold")))
+#define OPT_HOLD_RO __attribute__((section(".rodata.menuhold_in_text")))
+#else
+#define OPT_HOLD_GLOBAL
+#define OPT_HOLD_RO
+#endif
+#define OPT_HOLD OPT_HOLD_GLOBAL static
+u32 CtrLegalui_mark(u32 folded);
+bool CtrOptmenu_pressLeft(void);
+#if defined(__3DS__) && defined(__GNUC__)
+__attribute__((section(".bss.menupress_late")))
+#endif
+static struct { u32 keys, legalMark; bool quitArmed; uint8_t holdKey, holdFrames; } optPress; // keys: the press's menu keys until its sound has played or it ends
+
+OPT_PRESS u32 optPressMark(const CtrMenu* menu) {
+    return (u32) opt.page | (u32) opt.cur[opt.page] << 8 | (u32) menu->page << 16 | (u32) optPress.quitArmed << 24;
+}
+
+// The press changed something: its sound, once. Nothing while no press is being handled (a held frame's draw).
+void CtrOptmenu_pressSound(void);
+void CtrOptmenu_pressLegal(void);
+OPT_PRESS_GLOBAL void CtrOptmenu_pressSound(void) {
+    u32 keys = optPress.keys;
+    optPress.keys = 0;
+    if (keys != 0) optSound((keys & 0xC0u) == 0);
+}
+
+// The press being handled has Left in it (the Circle Pad and C-stick folded in): the Controls page's Layout steps back.
+OPT_PRESS_GLOBAL bool CtrOptmenu_pressLeft(void) {
+    return (optPress.keys & KEY_DLEFT) != 0;
+}
+
+// A Legal or Credits page is about to draw or read. A draw alone says nothing: the roll and a held key's repeat draw too.
+OPT_PRESS_GLOBAL void CtrOptmenu_pressLegal(void) {
+    if (optPress.keys != 0 && optPress.legalMark != CtrLegalui_mark(optPress.keys)) CtrOptmenu_pressSound();
+}
+
+// The rows' appended text, on the page's own lines. (polish audit, 11-06.) Quit game: while its first A
+// is waiting for the second, the row says so. Exact colours Off had a blank help line; the row's other state has one.
+#if defined(__3DS__) && defined(__GNUC__)
+#define OPT_PRESS_RO __attribute__((section(".rodata.menupress_in_text")))
+#else
+#define OPT_PRESS_RO
+#endif
+static const char omQuitArmed[] OPT_PRESS_RO = "Press A again to quit";
+#if CTR_PACK_EXACT_AVAILABLE
+static const char omHlpExactOff[] OPT_PRESS_RO = "Faster, less exact. Applies on restart.";
+#endif
+OPT_PRESS void optRowMainHeard(const CtrMenu* menu, uint32_t i, OptRow* r) {
+    optRowMain(menu, i, r);
+    if (i == OPT_MAIN_QUIT && optPress.quitArmed) r->label = omQuitArmed;
+#if CTR_PACK_EXACT_AVAILABLE
+    if (i == OPT_MAIN_EXACT && !r->dis && !menu->settings.exactColours) r->help = omHlpExactOff;
+#endif
+}
+
+// A on the main page's Quit game row, with no direction, B or SELECT in the press (those win over A in optKeys).
+OPT_PRESS bool optQuitPress(const CtrMenu* menu, u32 down, u32 folded) {
+    return (down & KEY_A) != 0 && (folded & 0xF0u) == 0 && (down & (KEY_B | KEY_SELECT)) == 0 && !CtrLegal_shown() &&
+           menu->page == MENU_PAGE_OPTIONS && opt.page == OPT_PAGE_MAIN && opt.cur[OPT_PAGE_MAIN] == OPT_MAIN_QUIT;
+}
+
+OPT_PRESS CtrMenuAction optKeysHeard(CtrMenu* menu, u32 down) {
+    u32 folded = CTR_MENU_FOLD(down);
+    u32 mark = optPressMark(menu);
+    // The menu's keys; on a Legal or Credits page L and R too, which move it (their ends: silent by the same mark).
+    optPress.keys = folded & (CtrLegal_shown() ? 0x3FFu : 0xFFu);
+    optPress.legalMark = CtrLegalui_mark(optPress.keys);
+    // Quit game takes two A presses, and any other key in between cancels (polish audit assistant 4: one A on the last row,
+    // a wrap of Up from the top, and the game was gone). Only this row's A: no other way of quitting changes.
+    bool armed = optQuitPress(menu, down, folded) && !optPress.quitArmed;
+    if (armed != optPress.quitArmed) opt.dirty = true;
+    // A cancel changes the row, so it sounds whichever key made it: L, R, X and Y do nothing else off a Legal page. No up
+    // or down can be among them here (the mask above keeps those), so this is START's sound.
+    if (optPress.keys == 0 && optPress.quitArmed && !armed) optPress.keys = down;
+    optPress.quitArmed = armed;
+    CtrMenuAction action = armed ? MENU_ACTION_NONE : optKeys(menu, down);
+    if (action != MENU_ACTION_NONE || mark != optPressMark(menu)) CtrOptmenu_pressSound();
+    CtrOptmenu_pressLegal();
+    optPress.keys = 0;
+    return action;
+}
+
+// Rows that open a page all show ">" and take Right as A (polish audit assistant 15): these two now do, as Debug and FPS counter
+// did (optActivate).
+OPT_HOLD void optRowMainShown(const CtrMenu* menu, uint32_t i, OptRow* r) {
+    optRowMainHeard(menu, i, r);
+    if (i == OPT_MAIN_LEGAL || i == OPT_MAIN_CREDITS) r->value = valOpen;
+}
+
+// Held Up or Down on the menu's lists (polish audit assistant 6): a step on the press, then every other frame after 10 frames
+// held, the reader's timing (CtrLegalui_update). A repeat is a press of that key, with a press's sound and draw. It never
+// wraps: at the list's end the hold is over, with no sound and no redraw, and only a fresh press wraps. Each list's first
+// and last rows are never grey (test_menu_press_sound.py), so a list's end is its last index. Left and Right stay single
+// presses; the reader and the Credits have their own repeat. A key held since before the menu saw a press does nothing.
+bool CtrCtrlui_holdMoves(u32 key);
+bool CtrLegalui_holdMoves(u32 key);
+OPT_HOLD bool optHoldMoves(const CtrMenu* menu, u32 key) {
+    if (CtrLegal_shown()) return CtrLegalui_holdMoves(key);
+    if (menu->page == MENU_PAGE_CONTROLS) return CtrCtrlui_holdMoves(key);
+    // Not optCounts: a reference from here changes where the compiler lays out this file's frozen strings (its section
+    // anchors), and optRowMain's code with it.
+#ifdef ENABLE_WAD16
+    static const uint8_t last[OPT_PAGES] OPT_HOLD_RO = { OPT_MAIN_COUNT - 1, OPT_FPS_COUNT - 1, OPT_DEBUG_COUNT - 1, OPT_SMOOTH_COUNT - 1 };
+#else
+    static const uint8_t last[OPT_PAGES] OPT_HOLD_RO = { OPT_MAIN_COUNT - 1, OPT_FPS_COUNT - 1, OPT_DEBUG_COUNT - 1 };
+#endif
+    return menu->page == MENU_PAGE_OPTIONS && opt.cur[opt.page] != (key == KEY_DUP ? 0u : last[opt.page]);
+}
+
+// A hold starts from a press of Up or Down alone. Any other of the menu's keys ends one, so a repeat never follows a page's
+// change, and never cancels the Quit game row's first A. In optKeysHeard's call in __wrap_CtrArgui_menuUpdate, so that function
+// keeps its size. A repeat calls optKeysHeard itself, so the hold's frames run on.
+OPT_HOLD CtrMenuAction optKeysHold(CtrMenu* menu, u32 down) {
+    u32 alone = CTR_MENU_FOLD(down) & 0xFFFu;
+    if (alone != 0) {
+        optPress.holdKey = alone == KEY_DUP || alone == KEY_DDOWN ? (uint8_t) alone : 0u;
+        optPress.holdFrames = 0;
+    }
+    return quitblackKeys(menu, down);
+}
+
+// In optLive's call in __wrap_CtrArgui_menuUpdate, so that function keeps its size: after any press, ahead of the flush.
+OPT_HOLD void optHoldTick(void) {
+    CtrMenu* menu = opt.menu;
+    u32 key = optPress.holdKey;
+    if (key != 0 && menu) {
+        uint8_t frames = (uint8_t) (optPress.holdFrames + 1u); // can't wrap: every list ends the hold before 255 frames
+        optPress.holdFrames = frames;
+        if ((CTR_MENU_FOLD(hidKeysHeld()) & key) == 0) optPress.holdKey = 0;
+        else if (frames > 10u && (frames & 1u) == 0) {
+            if (optHoldMoves(menu, key)) optKeysHeard(menu, key);
+            else optPress.holdKey = 0;
+        }
+    }
+    optLive();
+}
+
 // Once a frame while the menu is open (main.c), after the frame's start and before its CtrRenderer_setDisplay: Other
 // screen Off as the settings say again (the yield wrapper held it off for the frame's screensConfigure while the menu
 // was on top), the keys, then where the menu goes and its page.
@@ -1152,10 +1335,10 @@ OPT_CODE CtrMenuAction __wrap_CtrArgui_menuUpdate(CtrMenu* menu, u32 down) {
     if (!menu->open) return MENU_ACTION_NONE;
     bool wasTop = CtrOptmenu_onTop;
     if (wasTop) CtrScreens_otherOff = menu->settings.bottomMode != BOTTOM_MODE_CONSOLE;
-    CtrMenuAction action = down != 0 ? optKeys(menu, down) : MENU_ACTION_NONE;
+    CtrMenuAction action = down != 0 ? optKeysHold(menu, down) : MENU_ACTION_NONE;
     if (down == 0 && CtrLegal_shown()) CtrLegalui_update(menu, 0); // held keys and the credits' roll
-    optLive(); // a move (Game screen) happens at this frame's yield; the next call places the menu again
-    fpsboxMenuFlush(menu);
+    optHoldTick(); // then optLive: a move (Game screen) happens at this frame's yield; the next call places the menu again
+    quitblackFlush(menu);
     return action;
 }
 
@@ -1400,7 +1583,7 @@ OPT_CODE void CtrOptmenu_text(uint16_t* fb, int32_t x, int32_t y, const char* s,
 // All added menu work is at the tail; optFlush keeps its original body/slot.
 __attribute__((noinline, noipa, optimize("Os"), section(".text.fpsbox_late")))
 static void fpsboxMenuFlush(CtrMenu* menu) {
-    optFlush(menu);
+    OPT_FLUSH_FRAME(menu);
     if (menu->open && opt.placed)
         CtrFpsbox_menuNoErase(opt.shownBase, opt.spareBase, opt.scr == GFX_TOP);
 }
@@ -1496,6 +1679,37 @@ FPS75_CODE void CtrFpsbox_drawDigits(int32_t x, int32_t y, const char* text, uin
     }
 }
 
+// The counter over a menu on the bottom screen (polish audit assistant 15: it sat on row 0's heart and the first letter of the
+// reader's titles): in the top right corner, which every page leaves empty, with the same two pixels' margin. It stays
+// live there, so that FPS counter's rows still show what they do. Nothing changes during play or over a menu on top,
+// where the counter is in the black border. CtrFpsbox_drawDigits keeps its rectangle in bytes (x past 255 doesn't fit), so
+// it draws as ever, at x, with the screen and the page it reads both moved under it. g.rgb565: this screen's paint, on the
+// main thread with the menu's own copies; the other screen's paints don't touch either pointer. The close clears the page,
+// the corner with it, and the counter's next paint is back at x.
+// The rectangle's coordinates are the unmoved ones, and a smaller size's corner is farther right. So a rectangle that reaches
+// past what this size can draw comes from a larger size (the Size row, over this menu or the other screen), and at this
+// origin it would run off the screen and the page. It's forgotten, as the page's redraw has already covered those digits.
+// Any rectangle kept ends at x + 11 * sx or before, so at column 318 or before. Same-size readings keep theirs.
+void __wrap_CtrFpsbox_drawDigits(int32_t x, int32_t y, const char* text, uint32_t colour);
+void CtrFpsbox_drawPlaced(int32_t x, int32_t y, const char* text, uint32_t colour);
+OPT_HOLD_GLOBAL void CtrFpsbox_drawPlaced(int32_t x, int32_t y, const char* text, uint32_t colour) {
+    int32_t by = 0;
+    void* screen = g.fb;
+    uint16_t* page = opt.spareBase;
+    if (g.rgb565 && opt.menu != nullptr && opt.menu->open && opt.placed && opt.scr == GFX_BOTTOM) {
+        by = (318 - 11 * (int32_t) g.sx - x) * 240;
+        uint8_t* old = fps75Rect[CtrScreens_game ^ g.rgb565];
+        if (old[2] > x + 11 * (int32_t) g.sx) old[2] = old[3] = 0;
+        g.fb = (uint16_t*) screen + by;
+        opt.spareBase = page + by;
+    }
+    __wrap_CtrFpsbox_drawDigits(x, y, text, colour);
+    if (by != 0) {
+        g.fb = screen;
+        opt.spareBase = page;
+    }
+}
+
 // main.c's SAVE FAILED line (its saveFailureWarning, row 24 of the menu console), printed only while the menu is
 // closed. With the menu open that console is the page's: the main page redraws it whole before each copy (optCompose,
 // so the line never showed there), but the Controls and legal pages print through it and are shown every frame
@@ -1507,3 +1721,174 @@ __attribute__((noinline, noipa, used, section(".text.savewarn_late"))) void CtrO
     if (opt.menu == nullptr) printf(line);
 }
 #pragma GCC diagnostic pop
+
+#if defined(ENABLE_WAD16)
+// ===[ menufirst (change menufirst, 11-07; UNDERTALE): the options menu's first open ]===
+// maintainer's o3DS, 11-07: the first open after boot sounded about 0.5 s late, and on the bottom screen parts of the page
+// near its top showed a moment before the rest. Late code, last in late text (.text_menufirst), so nothing before it
+// moves; reached through one retargeted call each (optFlush's compose and copy here; argui's glyph call and
+// credwait's vblank wait by CMake's renames).
+#define MENUFIRST_CODE __attribute__((noinline, noipa, optimize("Os"), section(".text_menufirst")))
+// A vblank wait for the menu's screen came just now, ahead of optFlush's copy (optCopyShown).
+static bool optSettled __attribute__((section(".bss.menufirst_late")));
+
+// The open's sound (argui's sndMove) and the menu's choice sound (sndSelect) were not in the SFX cache until their first
+// play: that play queued a read of the sound on the audio loader thread, whose first read opens the file (54-262 ms an
+// open on maintainer's card, its 11-07 log), and the voice started one audio update after the read, held, and was let go
+// at the next. Here, at each room load (argui's prefetch wrap, which the first room's load runs behind the loading
+// bar), both are asked of the sound plan's copy worker, after the room's own sounds, as the plan asks for the sounds
+// it has no time for: the worker copies them in the background as their first play would, and the copies go in only
+// if they fit under the cache's cap with the linear floor kept. Nothing is pushed out for them (R420: the preload's
+// copy, buildSfx, evicts cached sounds when a fragmented linear allocation fails, a room's kept 1 MB sound among
+// them). No room, or a read already on its way: nothing done, and the first open loads its sound as it did before.
+// Cached already: nothing read. Its keep list (flowend) then holds them for the room when it has room after the plan.
+int CtrAudioSystem_queueSfx(int32_t soundIndex, uint32_t kib, uint32_t floorBytes);
+#define MENUFIRST_SOUND_KIB 64u                    // the worker's upper bound for one sound (both are a few KB)
+#define MENUFIRST_FLOOR_BYTES (3u * 1024u * 1024u) // linear memory left free: the plan's worker floor (one shared value)
+// R420b's review: a first request starts the worker, whose 32 KiB read buffer (UTSFX_PIECE) is taken before any floor
+// check. So these optional requests go only while that buffer fits above the floor too, whether or not the worker is
+// already running (from here that can't be told; with it running, this is only a little stricter than needed).
+#define MENUFIRST_PIECE_BYTES (32u * 1024u)
+void CtrOptmenu_prepareRoom(void); void* CtrMenuborder_copy(void* to, const void* from, size_t bytes);
+MENUFIRST_CODE void CtrOptmenu_prepareRoom(void) {
+    CtrOptmenu_prepareGlyphs();
+    if (MENUFIRST_FLOOR_BYTES + MENUFIRST_PIECE_BYTES > linearSpaceFree()) return;
+    for (uint32_t i = 0; 2u > i; i++) {
+        if (g.assetIds[i] >= 0) (void) CtrAudioSystem_queueSfx(g.assetIds[i], MENUFIRST_SOUND_KIB, MENUFIRST_FLOOR_BYTES);
+    }
+}
+
+// Whether a buffer is the one the menu's screen scans now: that screen's framebuffer registers (0x68 buffer A, 0x6C
+// buffer B, 0x78 bit 0 which one shows; the bottom's at 0x400568, the top's left eye at 0x400468), as dlgblank reads
+// them. Unreadable: no.
+MENUFIRST_CODE static bool optScanned(const uint16_t* buffer) {
+    u32 regs[5];
+    if (R_FAILED(GSPGPU_ReadHWRegs(opt.scr == GFX_TOP ? 0x400468u : 0x400568u, regs, sizeof(regs)))) return false;
+    return osConvertVirtToPhys(buffer) == ((regs[4] & 1u) != 0 ? regs[1] : regs[0]);
+}
+
+// optFlush's compose. The page is drawn in the screen's spare buffer, then copied onto the one shown. At the open, the
+// game's last frame may have just flipped the screen (the dialogue box's transfer: the GPU's finish callback swaps, and
+// GSP shows the swap at that screen's next vblank), so the spare buffer is still on the LCD and the 10+ ms compose was
+// scanned there: the frame and the first rows first. One vblank's wait lets the flip land first. Then the copy: once
+// the compose is done, wait for the screen's next vblank, so that optFlush's memcpy, its next work, runs from column 0
+// ahead of the scan (crispgap's rule, docs/3ds-hardware.md; credwait does the same for a moved Legal or Credits page),
+// not over a scan already part way across. The page shows at the same refresh as before, now whole.
+MENUFIRST_CODE static void optComposeShown(const CtrMenu* menu, uint16_t* fb) {
+    GSPGPU_Event vblank = opt.scr == GFX_TOP ? GSPGPU_EVENT_VBlank0 : GSPGPU_EVENT_VBlank1;
+    if (optScanned(fb - (opt.scr == GFX_TOP ? OPT_TOP_SIDE : 0u))) gspWaitForEvent(vblank, true);
+    optCompose(menu, fb);
+    gspWaitForEvent(vblank, true);
+    optSettled = true;
+}
+
+// The Controls, Legal and Credits pages (R420): printed through the console into the spare buffer and copied by
+// optFlush every frame, over a scan part way across when the page has changed (a press, a held key's repeat, the
+// Credits' roll). Copied here: at the menu screen's vblank, as the Options page is, unless a wait for it came just
+// before (optComposeShown's, or credwait's for a moved Legal or Credits page), so no frame waits twice. One wait a
+// frame at most, under the console's lock as the Options page's; a paused frame's slot is two vblanks, as credwait
+// counts on for its own wait every frame of a held scroll.
+MENUFIRST_CODE static void* optCopyShown(void* to, const void* from, size_t bytes) {
+    if (!optSettled) gspWaitForEvent(opt.scr == GFX_TOP ? GSPGPU_EVENT_VBlank0 : GSPGPU_EVENT_VBlank1, true);
+    optSettled = false;
+    return CtrMenuborder_copy(to, from, bytes);
+}
+
+// The frame's flush (fpsboxMenuFlush's call, the menu's one flush a frame, at the open too): the note lives only from
+// a wait to the end of its own frame's flush (s8bxrev L1). A frame whose flush copies nothing (the menu closing, a
+// screen not placed) would otherwise leave credwait's note for a later frame's copy, which then would not wait.
+MENUFIRST_CODE static void optFlushFrame(CtrMenu* menu) {
+    optFlush(menu);
+    optSettled = false;
+}
+
+// credwait's wait (z_credclip.c's one call, retargeted by CMake's rename): the wait, then a note that it came.
+void CtrOptmenu_credWait(GSPGPU_Event id, bool nextEvent);
+MENUFIRST_CODE void CtrOptmenu_credWait(GSPGPU_Event id, bool nextEvent) {
+    gspWaitForEvent(id, nextEvent);
+    optSettled = true;
+}
+#endif
+
+#if defined(ENABLE_WAD16)
+#define MENUBORDER_CODE __attribute__((noinline, noipa, optimize("Os"), section(".text_menuborder")))
+// Physical-bottom menu counters retain their (-1,+1) offset. Play and top counters stay at y 2.
+void CtrMenuborder_fps(int32_t x, int32_t y, const char* text, uint32_t colour);
+MENUBORDER_CODE void CtrMenuborder_fps(int32_t x, int32_t y, const char* text, uint32_t colour) {
+    bool bottom = (CtrScreens_game ^ g.rgb565) == GFX_BOTTOM;
+    int32_t by = 0;
+    void* screen = g.fb;
+    uint16_t* page = opt.spareBase;
+    if (bottom && g.rgb565 && opt.menu != nullptr && opt.menu->open && opt.placed && opt.scr == GFX_BOTTOM) {
+        by = (317 - 11 * (int32_t) g.sx - x) * 240;
+        uint8_t* old = fps75Rect[CtrScreens_game ^ g.rgb565];
+        if (old[2] > x + 11 * (int32_t) g.sx) old[2] = old[3] = 0;
+        g.fb = (uint16_t*) screen + by;
+        opt.spareBase = page + by;
+    }
+    __wrap_CtrFpsbox_drawDigits(x, y + (by != 0), text, colour);
+    if (by != 0) {
+        g.fb = screen;
+        opt.spareBase = page;
+    }
+}
+#endif
+
+// maintainer 11-08: leaving a page or closing the menu is silent. Decide before a page's early draw/read hook can sound
+// the press. Only the pending sound is cleared: keys, actions, settings, drawing and the menu-open sound stay intact.
+// Appended after every existing late input; optKeys spends its original sound-call padding instead of growing.
+// The assembler-name declaration above hides the new call-graph edge from GCC's function ordering; otherwise
+// optKeys moves to the end of its existing section despite keeping its size. The release byte audit pins this.
+bool CtrCtrlui_holdMoves(u32 key);
+__attribute__((noinline, noipa, optimize("Os"), section(".text_menuquiet")))
+void CtrMenuquiet_press(CtrMenu* menu, u32 down) {
+    u32 folded = CTR_MENU_FOLD(down);
+    bool back = (down & (KEY_B | KEY_SELECT)) != 0;
+    if (!back && (folded & (KEY_A | KEY_DUP | KEY_DDOWN)) == KEY_A) {
+        if (CtrLegal_shown()) {
+            // CtrLegalui_mark: low two bits are the view (0 hub), next two the row (2 Back).
+            back = (optPress.legalMark & 0xFu) == 8u;
+        } else if (folded & (KEY_DLEFT | KEY_DRIGHT)) {
+            return; // outside the Legal hub a direction wins over A
+        } else if (menu->page == MENU_PAGE_CONTROLS) {
+            // Back is the Controls list's last row: Down cannot repeat from it.
+            back = !CtrCtrlui_holdMoves(KEY_DDOWN);
+        } else if (opt.page == OPT_PAGE_MAIN) {
+            back = opt.cur[OPT_PAGE_MAIN] == OPT_MAIN_RESUME;
+        } else {
+            back = opt.cur[opt.page] == optCounts[opt.page] - 1u;
+        }
+    }
+    if (back) optPress.keys = 0;
+}
+
+// Quit owns the next picture, rather than repainting its disarmed row and
+// clearing only the menu. The two old callers keep their instructions/slots;
+// these adapters are at the late tail. No new state: cursor is unused by this
+// menu's main page, and -1 is reserved only after confirmed Quit (never Resume).
+#ifdef ENABLE_WAD16
+#define QUITBLACK_CODE __attribute__((noinline, noipa, optimize("Os"), section(".text_quitblack")))
+QUITBLACK_CODE static CtrMenuAction quitblackKeys(CtrMenu* menu, u32 down) {
+    CtrMenuAction action = optKeysHeard(menu, down);
+    if (action == MENU_ACTION_QUIT) menu->cursor = -1;
+    return action;
+}
+
+u8* CtrQuitblack_present(CtrTextureCache* cache);
+QUITBLACK_CODE static void quitblackFlush(CtrMenu* menu) {
+    if (menu->cursor == -1) {
+        u8* page = CtrQuitblack_present(g.texCache);
+        if (page != nullptr) {
+            // Close must clear only the black spare we just queued, never the
+            // still-scanned old menu. Its RGB565 console remains single-buffered.
+            opt.restore = (u16*) page + (opt.scr == GFX_TOP ? OPT_TOP_SIDE : 0u);
+            menu->console->frameBuffer = opt.restore;
+            CtrOptmenu_onTop = 0; // skip optLeaveTop's early scanned-buffer clear
+            opt.dirty = false;
+            optSettled = false;
+            return;
+        }
+    }
+    fpsboxMenuFlush(menu);
+}
+#endif

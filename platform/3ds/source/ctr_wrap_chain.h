@@ -27,9 +27,11 @@ uint32_t CtrAudioSystem_chainPklin(uint32_t bytes);
 #define CTR_SHEDSFX_AFTER_FLOWBURST __real_CtrAudioSystem_shedSfx
 #endif
 
-// CtrAudioSystem_beginSfxPlan (UNDERTALE): flowend -> flowhitch -> real.
+// CtrAudioSystem_beginSfxPlan (UNDERTALE): flowend -> papvoice -> flowhitch -> real.
+//   papvoice (z_utsfx.c's end): the plan's text voices with a small WAV are read at their play (change papvoice).
 //   flowhitch (ctr_audio_system.c, before flowend's wrap): the sounds the last room shed may be decoded into the cache again.
-#define CTR_BEGINSFXPLAN_AFTER_FLOWEND CtrAudioSystem_chainPlanFlowhitch
+#define CTR_BEGINSFXPLAN_AFTER_FLOWEND UtSfx_chainPlanVoices
+void UtSfx_chainPlanVoices(void);
 void CtrAudioSystem_chainPlanFlowhitch(void);
 
 // CtrAudioSystem_preloadSfx (UNDERTALE): flowend [-> the ADPCM pack's admit] -> flame (Old only) -> real.
@@ -412,7 +414,9 @@ CtrDataVersionResult CtrDataVersion_chainAdpcmPack(CTR_DATAVERSION_CHAIN_PARAMS)
 struct Renderer;
 #if defined(ENABLE_WAD16)
 #undef CTR_DATAVERSION_AFTER_UTSFX
-#define CTR_DATAVERSION_AFTER_UTSFX Thinart_check
+// logsweep (S8b): each link's caller goes to a wrapper appended in late text (z_thinart.c's end), so the bodies stay.
+#define CTR_DATAVERSION_AFTER_UTSFX Thinart_dataCheck
+CtrDataVersionResult Thinart_dataCheck(CTR_DATAVERSION_CHAIN_PARAMS);
 CtrDataVersionResult Thinart_check(CTR_DATAVERSION_CHAIN_PARAMS);
 // DODGEFRONT is a per-source definition, not a target-wide one. The new unit
 // must retain Old's chain even though it is not one of the original readers.
@@ -422,15 +426,27 @@ CtrDataVersionResult Thinart_check(CTR_DATAVERSION_CHAIN_PARAMS);
 #define CTR_PREFETCHROOM_AFTER_THINART __real_CtrRenderer_prefetchRoom
 #endif
 #undef CTR_PREFETCHROOM_AFTER_FLOWHITCH
-#define CTR_PREFETCHROOM_AFTER_FLOWHITCH Thinart_prefetchRoom
+#define CTR_PREFETCHROOM_AFTER_FLOWHITCH Thinart_slotPrefetch
+void Thinart_slotPrefetch(struct Renderer* renderer);
 void Thinart_prefetchRoom(struct Renderer* renderer);
 void CTR_PREFETCHROOM_AFTER_THINART(struct Renderer* renderer);
 #undef CTR_DISPLAYCAPS_AFTER_SOULSHAKE
-#define CTR_DISPLAYCAPS_AFTER_SOULSHAKE Thinart_caps
+#define CTR_DISPLAYCAPS_AFTER_SOULSHAKE Thinart_slotCaps
+uint32_t Thinart_slotCaps(struct Renderer* renderer);
 uint32_t Thinart_caps(struct Renderer* renderer);
 #undef CTR_ENDFRAME_AFTER_INPUTLATE
-#define CTR_ENDFRAME_AFTER_INPUTLATE Thinart_endFrame
+#define CTR_ENDFRAME_AFTER_INPUTLATE Thinart_slotEndFrame
+void Thinart_slotEndFrame(struct Renderer* renderer);
 void Thinart_endFrame(struct Renderer* renderer);
+#endif
+
+// thinrule (first update, UNDERTALE): Smart smoothing's whole-rows table (z_thinrule.c), the link after itemverdict's
+// in the font verdict and display caps chains; itemverdict's link calls it where it called the real one.
+#if defined(ENABLE_WAD16)
+#undef CTR_FONTVERDICTS_AFTER_ITEMVERDICT
+#define CTR_FONTVERDICTS_AFTER_ITEMVERDICT Thinrule_fontVerdicts
+#undef CTR_DISPLAYCAPS_AFTER_ITEMVERDICT
+#define CTR_DISPLAYCAPS_AFTER_ITEMVERDICT Thinrule_caps
 #endif
 
 #endif

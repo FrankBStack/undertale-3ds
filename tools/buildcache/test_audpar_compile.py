@@ -26,6 +26,38 @@ CANONICAL = SET[0]+GET[1]+SET[2]+GET[0]+SET[1]+GET[2]
 
 
 class TableTest(unittest.TestCase):
+    def test_upd1_seek_pool_keeps_section_flags_and_references(self):
+        seek = ('\t.section\t.rodata.str1.4,"aMS",%progbits,1\n\t.align\t2\n.LC1:\n'
+                '\t.ascii\t"Audio: seek to %.2f s failed in text\\000"\n')
+        body = '\t.section\t.text.seekStream\nseekStream:\n\t.word\t.LC1\n\t.size\tseekStream, .-seekStream\n'
+        anchor = ('\t.section\t.rodata.str1.4\n\t.align\t2\n.LC9:\n'
+                  '\t.ascii\t"Audio: %lu decode thread messages dropped\\000"\n')
+        raw = seek + body + anchor
+        expected = seek.split('\n', 1)[0] + '\n' + body + anchor + seek.split('\n', 1)[1]
+        self.assertEqual(adapter.restore_upd1_seek_pool(raw), expected)
+        for broken in (raw.replace('.word\t.LC1', '.word\t.LC2'), raw + seek,
+                       raw.replace('messages dropped', 'messages unknown'), raw + '\t.word 1\n'):
+            # A trailing directive belongs to the anchor, which is never edited.
+            if broken.endswith('\t.word 1\n'):
+                self.assertTrue(adapter.restore_upd1_seek_pool(broken).endswith(seek.split('\n', 1)[1]))
+            else:
+                with self.assertRaises(AssertionError):
+                    adapter.restore_upd1_seek_pool(broken)
+        with self.assertRaises(AssertionError):
+            adapter.restore_upd1_seek_pool(raw.replace('\t.ascii\t"Audio: seek', '\t.word 0\n\t.ascii\t"Audio: seek'))
+
+    def test_upd1_retained_arena_complete_body_order(self):
+        body = lambda n: (f'\t.align\t2\n\t.syntax unified\n\t.arm\n\t.type\t{n}, %function\n'
+                          f'{n}:\n\tbx lr\n\t.size\t{n}, .-{n}\n')
+        head = 'upd1Arena:\n\t.section\t.text.late.roomload\n'
+        raw = head + body('rlArena') + body('rlAddSprite') + body('rlNanosSince')
+        self.assertEqual(adapter.restore_roomload_emission(raw),
+                         head + body('rlAddSprite') + body('rlNanosSince') + body('rlArena'))
+        for broken in (raw.replace('rlArena', 'unknown'), raw + body('rlArena'),
+                       raw.replace('rlNanosSince', 'unknown'), raw.replace('upd1Arena:', 'other:')):
+            with self.assertRaises(AssertionError):
+                adapter.restore_roomload_emission(broken)
+
     def test_offset_emission_moves_only_complete_groups(self):
         body = lambda n: (f"\t.align\t2\n\t.syntax unified\n\t.arm\n\t.type\t{n}, %function\n"
                           f"{n}:\n\tbx lr\n\t.size\t{n}, .-{n}\n")
@@ -60,6 +92,31 @@ class TableTest(unittest.TestCase):
         self.assertEqual(offsets,sorted(offsets))
         with self.assertRaisesRegex(AssertionError,'unqualified offset emission'):
             adapter.restore_offset_emission(new.replace('utaChnGetSamplePos','unknown'))
+
+    def test_upd1_complete_helper_inventory_and_model_order(self):
+        from collections import Counter
+        names = ('utaPhys utaStreamOn utaLive utaPendingPieces utaSeamOffsets utaClamp16 utaSeamAt '
+                 'utaAdvance utaMirror utaSeamSound utaSeamFor utaSeamWeight utaChnSetMix utaChnSetRate '
+                 'utaChnSetPaused utaForget utaClearPhys utaMaybeLog utaChnWaveBufClear utaQueue '
+                 'utaPlayingPiece utaChnGetWaveBufSeq utaUnplayed utaChnGetSamplePos utaBuildSeam '
+                 'utaStop utaFeed utaChnWaveBufAdd utaFrameCallback utaDecOpenMemory utaChnReset '
+                 'utaChnSetInterp utaChnSetFormat utaSetCallback utaDecOpenFile utaDecSeek utaDecRead').split()
+        body = lambda n: (f'\t.align\t2\n\t.syntax unified\n\t.arm\n\t.type\t{n}, %function\n'
+                          f'{n}:\n\tbx lr\n\t.size\t{n}, .-{n}\n')
+        for new in (False, True):
+            prefix = '' if new else '\t.set gunOpenFileLink, gunOpenFile\n'
+            raw = prefix + ''.join('\t.section\t.text.late.utaudio2\n'+body(n) for n in reversed(names))
+            result = ''.join(adapter.restore_upd1_helpers(adapter.SECTION.split(raw)))
+            self.assertEqual(Counter(raw.splitlines()), Counter(result.splitlines()))
+            self.assertLess(result.index('utaSetCallback:'), result.index('utaDecOpenFile:'))
+            self.assertLess(result.index('utaDecOpenFile:'), result.index('utaDecSeek:'))
+            self.assertLess(result.index('utaDecSeek:'), result.index('utaDecRead:'))
+            self.assertEqual(result.index('utaMaybeLog:') < result.index('utaForget:'), new)
+            self.assertEqual(result.index('utaStop:') > result.index('utaFeed:'), new)
+            for broken in (raw.replace('utaDecSeek', 'unknown'), raw+body('utaDecSeek'),
+                           raw.replace(body('utaDecRead'), '')):
+                with self.assertRaises(AssertionError):
+                    adapter.restore_upd1_helpers(adapter.SECTION.split(broken))
 
     def test_offsets_keep_placeholders_and_move_only_new_tables(self):
         names = ('audparGetTrackPosition', 'audparSetTrackPosition')

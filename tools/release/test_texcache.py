@@ -466,10 +466,11 @@ class DryRun(unittest.TestCase):
         out = []
         with mock.patch.object(texcache, "dry_run_lines", return_value=["Texture preparation on the PC: X"]):
             with mock.patch.object(app, "discover") as disc, mock.patch.object(app, "toolchain") as tc, \
-                    mock.patch.object(app, "deliver") as dl:
+                    mock.patch.object(app, "deliver") as dl, \
+                    mock.patch.object(app, "source_line", return_value="Source: synthetic fixture"):
                 disc.find_copies.return_value = []
                 disc.Probes.return_value.roots.return_value = []
-                dl.scan_saves.return_value = types.SimpleNamespace(folder="x", files=[])
+                dl.scan_saves.return_value = types.SimpleNamespace(folder="x", files=[], error=None)
                 tc.detect.return_value = types.SimpleNamespace(bash=None)
                 tc.dry_run_report.return_value = "toolchain"
                 with mock.patch.object(app.sys, "platform", "win32"):
@@ -666,11 +667,11 @@ class DataVersion(unittest.TestCase):
                 items = deliver.plan_sd_copy(fx.sd, UT, [], fx.game)
                 _, _, _, res = deliver.copy_with_textures(fx.sd, items, UT, fx.game, fx.work)
             self.assertEqual(order, ["tex", "ver"])
-            self.assertIn("Version check prepared: 1 file(s) written", res.message)
+            self.assertIn('Game check ready.', res.message)
             self.assertEqual(read(self.card_file(fx)), self.expected(fx))
             _, _, _, res = deliver.copy_with_textures(fx.sd, [], UT, fx.game, fx.work, textures=False)
             # Whole-set SD transactions verify receipts in the fresh staged layout before publication.
-            self.assertIn("1 file(s) written", res.message)
+            self.assertIn('Game check ready.', res.message)
             os.remove(self.card_file(fx))
             deliver.copy_with_textures(fx.sd, [], UT, fx.game, fx.work, textures=False, data_version=False)
             self.assertFalse(os.path.exists(self.card_file(fx)))

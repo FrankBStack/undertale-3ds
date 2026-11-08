@@ -23,6 +23,40 @@ TABLE = re.compile(r'[ \t]*\.section[ \t]+\.rodata\n'
                    r'(?:[ \t]*\.byte[ \t]+\(\.L\d+-\.Lrtx(?P=number)-4\)/4\n){4}')
 
 
+def move_function_after(text, name, anchor):
+    """Reorder complete bodies only, within the same explicit shared section."""
+    chunks = SECTION.split(text)
+    hits = {}
+    for wanted in (name, anchor):
+        pattern = (r'\t.align\t2\n\t.syntax unified\n\t.arm\n\t.type\t'
+                   + re.escape(wanted) + r', %function\n.*?^\t.size\t'
+                   + re.escape(wanted) + r',[^\n]*\n')
+        found = [(i, m) for i, c in enumerate(chunks) for m in re.finditer(pattern, c, re.M | re.S)]
+        assert len(found) == 1, ('complete shared body', wanted)
+        hits[wanted] = found[0]
+    i, m = hits[name]
+    j, a = hits[anchor]
+    sections = [re.match(r'\s*\.section\s+([^,\n]+)', chunks[k])[1] for k in (i, j)]
+    assert sections[0] == sections[1], ('different shared sections', sections)
+    assert i < j or (i == j and m.end() <= a.start()), ('unexpected shared order', name, anchor)
+    block = m[0]
+    assert re.findall(r'^([A-Za-z]\w*):', block, re.M) == [name]
+    chunks[i] = chunks[i][:m.start()] + chunks[i][m.end():]
+    if i == j:
+        end = a.end() - len(block)
+    else:
+        end = a.end()
+    chunks[j] = chunks[j][:end] + block + chunks[j][end:]
+    result = ''.join(chunks)
+    assert Counter(result.splitlines()) == Counter(text.splitlines())
+    return result
+
+
+def restore_roomload_emission(text):
+    assert re.search(r'^upd1Arena:', text, re.M), 'not an upd1 roomload body'
+    return move_function_after(text, 'rlArena', 'rlNanosSince')
+
+
 def restore_tables(text, names=NAMES):
     chunks = SECTION.split(text)
     original = list(chunks)
@@ -67,6 +101,71 @@ def restore_tables(text, names=NAMES):
                                 table_bytes=4)
 
 
+def restore_upd1_helpers(chunks):
+    """S7 shared helper order, preserving every complete assembly body verbatim."""
+    prefix = ('utaPhys utaStreamOn utaLive utaPendingPieces utaSeamOffsets utaClamp16 '
+              'utaSeamAt utaAdvance utaMirror utaSeamSound utaSeamFor utaSeamWeight '
+              'utaChnSetMix utaChnSetRate utaChnSetPaused ').split()
+    # The Old-only decoder alias is emitted from the guarded gounder header.
+    new = not any(re.search(r'^\s*\.set gunOpenFileLink, gunOpenFile$', c, re.M) for c in chunks)
+    middle = ('utaMaybeLog utaForget utaClearPhys' if new else
+              'utaForget utaClearPhys utaMaybeLog').split()
+    middle += ('utaChnWaveBufClear utaQueue utaPlayingPiece utaChnGetWaveBufSeq '
+               'utaUnplayed utaChnGetSamplePos utaBuildSeam').split()
+    middle += ('utaFeed utaChnWaveBufAdd utaStop' if new else
+               'utaStop utaFeed utaChnWaveBufAdd').split()
+    order = prefix + middle + ('utaFrameCallback utaDecOpenMemory utaChnReset '
+                               'utaChnSetInterp utaChnSetFormat utaSetCallback '
+                               'utaDecOpenFile utaDecSeek utaDecRead').split()
+    found, first = {}, None
+    for index, chunk in enumerate(chunks):
+        if not re.match(r'[ \t]*\.section[ \t]+\.text.late.utaudio2(?:,|\n)', chunk):
+            continue
+        first = index if first is None else first
+        names = re.findall(r'^([A-Za-z]\w*):', chunk, re.M)
+        for name in names:
+            assert name in order and name not in found, ('unqualified upd1 helper', name)
+            pattern = (r'\t.align\t2\n\t.syntax unified\n\t.arm\n\t.type\t'
+                       + re.escape(name) + r', %function\n.*?^\t.size\t'
+                       + re.escape(name) + r',[^\n]*\n')
+            matches = list(re.finditer(pattern, chunk, re.M | re.S))
+            assert len(matches) == 1, ('incomplete upd1 helper', name)
+            block = matches[0][0]
+            assert re.findall(r'^([A-Za-z]\w*):', block, re.M) == [name]
+            found[name] = block
+            chunk = chunk.replace(block, '', 1)
+        chunks[index] = chunk
+    assert set(found) == set(order), ('upd1 helper inventory', sorted(set(order)-set(found)))
+    assert first is not None
+    chunks[first] += ''.join(found[name] for name in order)
+    return chunks
+
+
+def restore_upd1_seek_pool(text):
+    """Keep the complete seek-error constant after the S7 dropped-message pool."""
+    chunks = SECTION.split(text)
+    hits = []
+    for needle in ('Audio: seek to %.2f s failed', 'Audio: %lu decode thread messages dropped'):
+        found = [i for i, c in enumerate(chunks) if
+                 re.match(r'\s*\.section\s+\.rodata.str1.4(?:,|\n)', c) and needle in c]
+        assert len(found) == 1, ('unqualified upd1 seek pool', needle, found)
+        hits.append(found[0])
+    src, dst = hits
+    assert src < dst, 'unexpected upd1 seek pool order'
+    header, payload = chunks[src].split('\n', 1)
+    labels = re.findall(r'^\.LC\d+:', payload, re.M)
+    assert len(labels) == 1 and len(re.findall(r'^\s*\.ascii\s+', payload, re.M)) == 1
+    assert not re.search(r'^\s*\.(?:byte|word|space|zero)\b', payload, re.M)
+    body = re.search(r'^seekStream:\n.*?^\s*\.size\s+seekStream,[^\n]*\n', text, re.M | re.S)
+    assert body and re.search(r'^\s*\.word\s+' + re.escape(labels[0][:-1]) + r'\s*$', body[0], re.M)
+    # Leave the first section declaration (and its merge flags) in place.
+    chunks[src] = header + '\n'
+    chunks[dst] += payload
+    result = ''.join(chunks)
+    assert Counter(result.splitlines()) == Counter(text.splitlines())
+    return result
+
+
 def restore_offset_emission(text):
     """Restore shared-section emission order without changing instructions/data.
 
@@ -98,30 +197,38 @@ def restore_offset_emission(text):
                           +re.escape(name)+r', %function\n', chunks[index])
         assert match, ('unqualified offset insertion', name)
         chunks[index] = chunks[index][:match.start()]+block+chunks[index][match.start():]
-    names = ('utaDecOpenMemory', 'utaChnReset', 'utaChnSetInterp', 'utaChnSetFormat')
-    src = find('.text.late.utaudio2', names[0]+':\n')
-    dst = find('.text.late.utaudio2', 'utaSetCallback:\n')
-    pattern = (r'\t.align\t2\n\t.syntax unified\n\t.arm\n\t.type\t'
-               +names[0]+r', %function\n.*?^\t.size\t'+names[-1]+r',[^\n]*\n')
-    matches = list(re.finditer(pattern, chunks[src], re.M | re.S))
-    assert len(matches) == 1, ('unqualified offset helper block', len(matches))
-    m = matches[0]; block = m[0]
-    actual = re.findall(r'^([A-Za-z]\w*):',block,re.M)
-    if actual == [names[0], 'utaBuildSeam', *names[1:]]:
-        # New's frozen order has sample-position then seam-building before
-        # utaFeed. New calls move those two independently of the decoder group.
-        seam = take('utaBuildSeam')
-        sample = take('utaChnGetSamplePos')
-        before_function(seam, 'utaFeed')
-        before_function(sample, 'utaBuildSeam')
+    if re.search(r'^upd1AudioOpen:', text, re.M):
+        chunks = SECTION.split(restore_upd1_seek_pool(''.join(chunks)))
+        chunks = restore_upd1_helpers(chunks)
+        # apRequest's body is unchanged; GCC now emits it before the SFX group.
+        if re.search(r'^apRequest:', text, re.M):
+            ordered = move_function_after(''.join(chunks), 'apRequest', 'adSfxSeamPcm')
+            chunks = SECTION.split(ordered)
+    else:
+        names = ('utaDecOpenMemory', 'utaChnReset', 'utaChnSetInterp', 'utaChnSetFormat')
+        src = find('.text.late.utaudio2', names[0]+':\n')
+        dst = find('.text.late.utaudio2', 'utaSetCallback:\n')
+        pattern = (r'\t.align\t2\n\t.syntax unified\n\t.arm\n\t.type\t'
+                   +names[0]+r', %function\n.*?^\t.size\t'+names[-1]+r',[^\n]*\n')
         matches = list(re.finditer(pattern, chunks[src], re.M | re.S))
-        assert len(matches) == 1, 'New decoder block did not become contiguous'
+        assert len(matches) == 1, ('unqualified offset helper block', len(matches))
         m = matches[0]; block = m[0]
-    assert re.findall(r'^([A-Za-z]\w*):',block,re.M) == list(names), actual
-    assert 'utaQueue:\n' in chunks[src][m.end():]
-    chunks[src] = chunks[src][:m.start()]+chunks[src][m.end():]
-    pos = chunks[dst].index('\t.align\t2\n')
-    chunks[dst] = chunks[dst][:pos]+block+chunks[dst][pos:]
+        actual = re.findall(r'^([A-Za-z]\w*):',block,re.M)
+        if actual == [names[0], 'utaBuildSeam', *names[1:]]:
+            # New's frozen order has sample-position then seam-building before
+            # utaFeed. New calls move those two independently of the decoder group.
+            seam = take('utaBuildSeam')
+            sample = take('utaChnGetSamplePos')
+            before_function(seam, 'utaFeed')
+            before_function(sample, 'utaBuildSeam')
+            matches = list(re.finditer(pattern, chunks[src], re.M | re.S))
+            assert len(matches) == 1, 'New decoder block did not become contiguous'
+            m = matches[0]; block = m[0]
+        assert re.findall(r'^([A-Za-z]\w*):',block,re.M) == list(names), actual
+        assert 'utaQueue:\n' in chunks[src][m.end():]
+        chunks[src] = chunks[src][:m.start()]+chunks[src][m.end():]
+        pos = chunks[dst].index('\t.align\t2\n')
+        chunks[dst] = chunks[dst][:pos]+block+chunks[dst][pos:]
     play = find('.text.flowburst_late', 'flowendPlaySound:\n')
     chain = find('.text.flowburst_late', 'CtrAudioSystem_chainFlowburst:\n')
     assert chain < play, 'unexpected offset deferred-play order'
@@ -187,7 +294,7 @@ def run(command):
 
 
 def selected(command):
-    sources = [arg for arg in command if arg.replace('\\', '/').endswith('/ctr_audio_system.c')]
+    sources = [arg for arg in command if arg.replace('\\', '/').endswith(('/ctr_audio_system.c', '/z_roomload.c'))]
     return len(sources) == 1 and all(arg in command for arg in (
         '-DENABLE_WAD16', '-D__3DS__', '-DNDEBUG', '-O2'))
 
@@ -198,9 +305,11 @@ def main(args):
     if not selected(command):
         return run(delegate+command)
     assert '-c' in command and command.count('-o') == 1
-    source = next(arg for arg in command if arg.replace('\\', '/').endswith('/ctr_audio_system.c'))
+    source = next(arg for arg in command if arg.replace('\\', '/').endswith(('/ctr_audio_system.c', '/z_roomload.c')))
     output = Path(command[command.index('-o')+1])
-    original, restored = output.with_name('audpar0.s'), output.with_name('audpar1.s')
+    roomload = source.replace('\\', '/').endswith('/z_roomload.c')
+    stem = 'upd1-roomload' if roomload else 'audpar'
+    original, restored = output.with_name(stem+'0.s'), output.with_name(stem+'1.s')
     emit = list(command)
     emit[emit.index('-c')] = '-S'
     emit[emit.index('-o')+1] = str(original)
@@ -208,7 +317,9 @@ def main(args):
     if status:
         return status
     raw = original.read_text(encoding='utf-8')
-    if re.search(r'^audparGetTrackPosition:', raw, re.M):
+    if roomload:
+        text, receipt = restore_roomload_emission(raw), dict(roomload_order=True)
+    elif re.search(r'^audparGetTrackPosition:', raw, re.M):
         diagnostic = any(arg.startswith('-DCTR_AUDIO_PCM_HASH') or
                          arg.replace('\\', '/').endswith('/ctr_audio_capture_wrap.h') for arg in command)
         if not diagnostic:

@@ -5,8 +5,16 @@
 
 #include "ctr_mp4.h"
 // The API header expects this from PacketVideo's OSCL library.
+#ifndef CTRPORT_NO_AAC
 #define OSCL_IMPORT_REF
 #include "pvmp4audiodecoder_api.h"
+#endif
+#ifdef CTRPORT_NO_AAC
+#define AACOUT_RETAIN_CALL __attribute__((noinline))
+#else
+#define AACOUT_RETAIN_CALL
+#endif
+#line 10
 
 #ifndef CTRPORT_HAVE_TREMOR
 // Fallback when the devkitPro 3ds-libvorbisidec package is not installed. It
@@ -319,135 +327,23 @@ const char* CtrDecoder_vorbisBackendName(void) {
 
 #endif
 
-// ===[ MP4 (AAC) ]===
-
-// Samples are read through a window this large (see CtrMp4): the Chapter 3
-// video's AAC frames sit between its video frames, a few KB apart.
-#define AAC_WINDOW_BYTES (64 * 1024)
-// An AAC-LC frame's samples per channel.
-#define AAC_FRAME 1024
-
-struct CtrMp4Aac {
-    CtrMp4 mp4;
-    tPVMP4AudioDecoderExternal ext;
-    void* mem;
-    uint8_t* sample;
-    uint32_t next; // the next sample to decode
-    // The frames of the last decoded sample not yet read (stereo).
-    int16_t pcm[AAC_FRAME * 2];
-    uint32_t pcmPos, pcmCount;
-};
-
-// A presentation time in output frames.
-static int64_t aacFrames(const CtrMp4Track* t, uint32_t sampleRate, int64_t ticks) {
-    if (t->timescale == sampleRate) return ticks;
-    return ticks * (int64_t) sampleRate / (int64_t) t->timescale;
-}
-
-// The output frames the track holds, priming ones (before time 0) left out.
+#ifndef CTRPORT_NO_AAC
+#include "ctr_audio_decoder_aac.inc"
+#else
+// UT's accepted inputs are WAV/Vorbis. Keep the shared decoder ABI and its
+// MP4 index probe, but no AAC implementation or PacketVideo references.
 static uint64_t aacTotalFrames(const CtrMp4Track* t, uint32_t sampleRate) {
-    int64_t start = aacFrames(t, sampleRate, t->pts[0]);
-    int64_t total = (int64_t) t->count * AAC_FRAME + (start < 0 ? start : 0);
+    int64_t ticks = t->pts[0];
+    int64_t start = t->timescale == sampleRate ? ticks : ticks * (int64_t) sampleRate / (int64_t) t->timescale;
+    int64_t total = (int64_t) t->count * 1024 + (start < 0 ? start : 0);
     return total > 0 ? (uint64_t) total : 0;
 }
-
-static void aacFree(CtrMp4Aac* a) {
-    if (a == NULL) return;
-    CtrMp4_close(&a->mp4);
-    free(a->mem);
-    free(a->sample);
-    free(a);
-}
-
-static bool mp4Open(CtrDecoder* d, const char* path) {
-    CtrMp4Aac* a = (CtrMp4Aac*) calloc(1, sizeof(CtrMp4Aac));
-    if (a == NULL) return false;
-    if (!CtrMp4_open(&a->mp4, path, AAC_WINDOW_BYTES)) {
-        free(a);
-        return false;
-    }
-    d->aac = a;
-    const CtrMp4Track* t = &a->mp4.audio;
-    if (t->count == 0 || t->codec != CTR_MP4_FOURCC('m', 'p', '4', 'a') || t->configSize < 2) return false;
-    a->mem = malloc(PVMP4AudioDecoderGetMemRequirements());
-    a->sample = (uint8_t*) malloc(t->maxSize != 0 ? t->maxSize : 1);
-    if (a->mem == NULL || a->sample == NULL) return false;
-    a->ext.outputFormat = OUTPUTFORMAT_16PCM_INTERLEAVED;
-    a->ext.desiredChannels = 2; // mono comes out on both
-    a->ext.aacPlusEnabled = false;
-    if (PVMP4AudioDecoderInitLibrary(&a->ext, a->mem) != 0) return false;
-    a->ext.pInputBuffer = t->config;
-    a->ext.inputBufferCurrentLength = (Int) t->configSize;
-    a->ext.inputBufferMaxLength = 0;
-    if (PVMP4AudioDecoderConfig(&a->ext, a->mem) != MP4AUDEC_SUCCESS || a->ext.samplingRate <= 0) return false;
-    d->kind = CTR_DECODER_MP4;
-    d->channels = 2;
-    d->sampleRate = (uint32_t) a->ext.samplingRate;
-    d->totalFrames = aacTotalFrames(t, d->sampleRate);
-    return true;
-}
-
-// Decodes sample a->next into a->pcm. A frame that fails to decode comes out
-// silent, so what follows keeps its time. False at the end of the track.
-static bool aacDecodeNext(CtrDecoder* d) {
-    CtrMp4Aac* a = d->aac;
-    const CtrMp4Track* t = &a->mp4.audio;
-    if (a->next >= t->count) return false;
-    uint32_t index = a->next++;
-    bool ok = CtrMp4_readSample(&a->mp4, t, index, a->sample);
-    if (ok) {
-        a->ext.pInputBuffer = a->sample;
-        a->ext.inputBufferCurrentLength = (Int) t->sizes[index];
-        a->ext.inputBufferMaxLength = 0;
-        a->ext.inputBufferUsedLength = 0;
-        a->ext.remainderBits = 0;
-        a->ext.pOutputBuffer = a->pcm;
-        a->ext.pOutputBuffer_plus = NULL;
-        a->ext.repositionFlag = false;
-        ok = PVMP4AudioDecodeFrame(&a->ext, a->mem) == MP4AUDEC_SUCCESS && a->ext.frameLength == AAC_FRAME;
-    }
-    if (!ok) memset(a->pcm, 0, sizeof(a->pcm));
-    // Priming frames, before time 0, are left out.
-    int64_t start = aacFrames(t, d->sampleRate, t->pts[index]);
-    a->pcmPos = start < 0 ? (uint32_t) (-start < AAC_FRAME ? -start : AAC_FRAME) : 0;
-    a->pcmCount = AAC_FRAME;
-    return true;
-}
-
-static int32_t mp4Read(CtrDecoder* d, int16_t* out, uint32_t maxFrames) {
-    CtrMp4Aac* a = d->aac;
-    while (a->pcmPos >= a->pcmCount) {
-        if (!aacDecodeNext(d)) return 0;
-    }
-    uint32_t frames = a->pcmCount - a->pcmPos;
-    if (frames > maxFrames) frames = maxFrames;
-    memcpy(out, a->pcm + a->pcmPos * 2u, frames * 2u * sizeof(int16_t));
-    a->pcmPos += frames;
-    d->positionFrames += frames;
-    return (int32_t) frames;
-}
-
-static bool mp4Seek(CtrDecoder* d, uint64_t frame) {
-    CtrMp4Aac* a = d->aac;
-    const CtrMp4Track* t = &a->mp4.audio;
-    if (frame > d->totalFrames) frame = d->totalFrames;
-    // The sample holding the frame: the last one starting at or before it.
-    uint32_t index = 0;
-    while (index + 1 < t->count && aacFrames(t, d->sampleRate, t->pts[index + 1]) <= (int64_t) frame) index++;
-    PVMP4AudioDecoderResetBuffer(a->mem);
-    // A frame's second half is only right after the one before it has been
-    // decoded (the transform overlaps them), so that one is decoded first.
-    a->next = index > 0 ? index - 1 : 0;
-    if (index > 0) aacDecodeNext(d);
-    a->pcmPos = a->pcmCount = 0;
-    if (aacDecodeNext(d)) {
-        int64_t into = (int64_t) frame - aacFrames(t, d->sampleRate, t->pts[index]);
-        if (into > (int64_t) a->pcmPos) a->pcmPos = into < AAC_FRAME ? (uint32_t) into : AAC_FRAME;
-    }
-    d->positionFrames = frame;
-    return true;
-}
-
+static void aacFree(CtrMp4Aac* a) { (void) a; }
+static bool mp4Open(CtrDecoder* d, const char* path) { (void) d; (void) path; return false; }
+static int32_t mp4Read(CtrDecoder* d, int16_t* out, uint32_t n) { (void) d; (void) out; (void) n; return -1; }
+static bool mp4Seek(CtrDecoder* d, uint64_t frame) { (void) d; (void) frame; return false; }
+#endif
+#line 451
 // ===[ Probing ]===
 
 // Ogg page header: "OggS", version, flags, granule (8), serial (4), sequence
@@ -656,7 +552,7 @@ bool CtrDecoder_seek(CtrDecoder* d, uint64_t frame) {
     }
 }
 
-void CtrDecoder_close(CtrDecoder* d) {
+AACOUT_RETAIN_CALL void CtrDecoder_close(CtrDecoder* d) {
     vorbisClose(d);
     aacFree(d->aac);
     d->aac = NULL;

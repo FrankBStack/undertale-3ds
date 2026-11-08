@@ -39,6 +39,7 @@ class DeliveryKeyTests(unittest.TestCase):
         app.work = lambda job, done, **kwargs: done(_run(job))
         page = gui.DeliverPage.__new__(gui.DeliverPage)
         page.app = app
+        page.log_delivery = mock.Mock()  # Receipt-key unit fixture has no Build page or log file.
         page.how, page.card, page.addr = Var('sd'), Var('E:/'), Var('192.0.2.7:5000')
         page.manual, page.copying, page.saved_key = None, False, None
         app.opts.autopilot = 'fixture'  # copy() goes straight to the copy, with no file list window.

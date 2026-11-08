@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import hashlib
+import errno
 import json
 import os
 from pathlib import Path, PurePosixPath
@@ -104,8 +105,29 @@ def require_stack(tc, pins=None):
     return dict(packages=pins['packages'], files=pins['files'], runtime_archives=pins['runtime_archives'])
 
 
+def download_error(error, folder):
+    """Distinguish local access/space failures from a failed network request."""
+    code, windows = getattr(error, 'errno', None), getattr(error, 'winerror', None)
+    if isinstance(error, urllib.error.HTTPError):
+        message = ('The server did not provide the required 3DS files (HTTP %d). '
+                   'Try again later.') % error.code
+    elif code in (errno.ENOSPC, errno.EDQUOT) or windows in (39, 112):
+        message = ('There is not enough free space in the work folder for the required 3DS files. '
+                   'Free some space, then choose Try again.')
+    elif code in (errno.EACCES, errno.EPERM, errno.EROFS, errno.ENOENT, errno.ENOTDIR) or windows in (5, 19):
+        message = ('The builder could not save the required 3DS files in the work folder. '
+                   'Check access to the work folder, then choose Try again.')
+    elif isinstance(error, (urllib.error.URLError, ConnectionError, TimeoutError)):
+        message = 'The required 3DS files could not be downloaded. Check your connection, then choose Try again.'
+    else:
+        message = ('The required 3DS files could not be downloaded or saved. Check your connection, free space '
+                   'and access to the work folder, then choose Try again.')
+    refused = toolchain.Refused(message + ' Your installed devkitPro was not changed.')
+    refused.details = str(error)
+    return refused
+
+
 def _download_file(pin, url, dest, size, sha, opener):
-    label = pin['package'] + ' ' + pin['version']
     temporary = dest.with_name(dest.name + '.part')
     try:
         request = urllib.request.Request(url, headers={'User-Agent': 'ctrport-builder/' + toolchain.builder_version()})
@@ -132,32 +154,38 @@ def _download_file(pin, url, dest, size, sha, opener):
             raise toolchain.Refused("A required 3DS file could not be found on devkitPro's download server. "
                 'Try again later. If it still fails, check the UNDERTALE 3DS release page for an updated builder. '
                 'Your installed devkitPro was not changed.\n%s' % RELEASE_PAGE) from None
-        raise toolchain.Refused('Could not download tested %s (HTTP %d). Try again later. '
-                               'Your devkitPro is unchanged.' % (label, status)) from None
+        raise download_error(error, dest.parent) from error
     except OSError as error:
         if toolchain.certificate_failure(error):
             raise toolchain.Refused('Could not verify the devkitPro download certificate. Check your computer '
                 'date and time, then try again. If it still fails, check the UNDERTALE 3DS release page. '
                 'Your devkitPro is unchanged.\n' + RELEASE_PAGE) from None
-        raise toolchain.Refused('Could not download tested %s. Check your connection and free space in the '
-            'work folder, then try again. Your devkitPro is unchanged.' % label) from None
+        raise download_error(error, dest.parent) from error
     finally:
-        if temporary.exists():
-            temporary.unlink()
+        try:
+            temporary.unlink(missing_ok=True)
+        except OSError:
+            pass  # Preserve the original failure; cleanup may remove the private partial file later.
 
 
 def download_package(pin, cache, opener):
     # Never overwrite unknown files. Damaged entries are ignored and kept for the
     # ownership-aware cleanup; every new transaction has its own private folder.
     downloads = cache / 'downloads'
-    downloads.mkdir(exist_ok=True)
+    try:
+        downloads.mkdir(exist_ok=True)
+    except OSError as error:
+        raise download_error(error, downloads) from error
     for directory in sorted(downloads.glob('pkg-*')):
         try:
             verify_package(directory, (pin,))
             return directory
         except (OSError, ValueError):
             continue
-    directory = Path(tempfile.mkdtemp(prefix='pkg-', dir=downloads))
+    try:
+        directory = Path(tempfile.mkdtemp(prefix='pkg-', dir=downloads))
+    except OSError as error:
+        raise download_error(error, downloads) from error
     try:
         name = filename(pin)
         _download_file(pin, SERVER + name, directory/name, pin['size'], pin['sha256'], opener)
@@ -165,7 +193,7 @@ def download_package(pin, cache, opener):
         verify_package(directory, (pin,))
         return directory
     except BaseException:
-        shutil.rmtree(directory)
+        shutil.rmtree(directory, ignore_errors=True)
         raise
 
 
@@ -334,7 +362,10 @@ def select(tc, work, notify=lambda text: None, *, packages=PACKAGES, run=command
         return dict(packages=rows, shims=None)
     cmake = None
     cache = work/'bin/libraries'
-    cache.mkdir(parents=True, exist_ok=True)
+    try:
+        cache.mkdir(parents=True, exist_ok=True)
+    except OSError as error:
+        raise download_error(error, cache) from error
     sdk = installed
     if changed:
         # Windows installs CMake beside the selected MSYS bash, not on the
@@ -425,6 +456,33 @@ def linked_files(map_path, platform):
     return [dict(path=str(item),sha256=digest(item),bytes=item.stat().st_size) for item in sorted(files)]
 
 
+COMPILER_NAMES = ('arm-none-eabi-gcc', 'arm-none-eabi-gcc.exe', 'arm-none-eabi-g++', 'arm-none-eabi-g++.exe')
+
+
+def link_compiler(args, platform):
+    """The qualified 3DS compiler that a configured link command runs, or None.
+
+    A plain link command starts with the compiler, as before. UNDERTALE's link also passes through a launcher
+    (aacout's link check, platform/3ds/aacout.cmake's RULE_LAUNCH_LINK): its own command, then '--', then the
+    compiler's command, which the launcher runs as given (tools/buildcache/aacout_compile.py runs exactly the argument
+    after its separator). So the compiler is that one argument, right after the first '--': never a later operand
+    (an output or input path can carry a compiler's name) and never anything past a second '--'. Each candidate is
+    resolved first and then held to the exact names, as the plain case always was. Nothing else stands in for it:
+    otherwise this returns None, and the caller allows no compiler runtime (it fails closed)."""
+    def compiler(arg):
+        path = Path(native_path(arg, platform)).resolve()
+        return path if path.name in COMPILER_NAMES else None
+    if not args:
+        return None
+    plain = compiler(args[0])
+    if plain is not None:
+        return plain
+    if '--' not in args:
+        return None
+    slot = args.index('--') + 1
+    return compiler(args[slot]) if slot < len(args) else None
+
+
 def confirm_linked(build, platform, packages=PACKAGES):
     """The map must confirm the configured qualified files, including their location."""
     build=Path(build)
@@ -444,13 +502,13 @@ def confirm_linked(build, platform, packages=PACKAGES):
     # debug/archive bytes can differ by host; never apply a Windows file hash to
     # Mac/Linux. Require the exact qualified compiler's private runtime location.
     args = shlex.split((build/'CMakeFiles/ctrport.dir/link.txt').read_text(encoding='utf-8'))
-    compiler = Path(native_path(args[0], platform)).resolve()
-    compiler_runtime = compiler.parent.parent/'lib/gcc/arm-none-eabi/16.1.0/armv6k/fpu/libgcc.a'
+    compiler = link_compiler(args, platform)
+    compiler_runtime = (compiler.parent.parent/'lib/gcc/arm-none-eabi/16.1.0/armv6k/fpu/libgcc.a').resolve() \
+        if compiler is not None else None
     for row in linked:
         path = Path(row['path']).resolve()
         project = path.parent == build.resolve() and path.name in local
-        compiler_file = path == compiler_runtime.resolve() and compiler.name in (
-            'arm-none-eabi-gcc', 'arm-none-eabi-gcc.exe', 'arm-none-eabi-g++', 'arm-none-eabi-g++.exe')
+        compiler_file = compiler_runtime is not None and path == compiler_runtime
         if row['sha256'] not in expected and not project and not compiler_file:
             raise ValueError('An unpinned library contributed to the game: ' + str(path))
     return linked

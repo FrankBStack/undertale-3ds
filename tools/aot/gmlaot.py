@@ -51,6 +51,8 @@ usage:
                    instructions each) run once
   --chunk N        bytecode instructions per generated C file (default 4000): smaller files compile faster
                    and in parallel
+  --append-from N  keep entries 0..N-1 in their original units; emit the remaining entries into aot_append_<n>.c.
+                   Static builds link those units after all existing generated and typed units, before padding.
   --tag T          the set's tag in the build ID (default aot<budget MB>, or aot<N>fn without a budget)
   --no-native      accepted for older scripts and does nothing (see --no-utflames)
   --no-utflames    WAD 16 only: leave out the calls to engine/src/z_utflames.c's native fire-bullet bodies
@@ -1950,6 +1952,8 @@ def parse_args(args):
             opts["max"] = int(args[i + 1])
         elif a == "--chunk":
             opts["chunk"] = int(args[i + 1])
+        elif a == "--append-from":
+            opts["append_from"] = int(args[i + 1])
         elif a == "--max-size":
             opts["max_size"] = int(args[i + 1])
         elif a == "--budget":
@@ -2204,14 +2208,28 @@ UTF_NATIVE = [
       "objfn:0x84:D34C8E5443B80A72", "objref:0x84:0x4", "objref:0x84:0x10", "objvar:0x84:0", "objvar:0x84:1",
       "objvar:0x84:2"),
      ".text.utring_late", ".text.utring_ops"),
+    # The snow floor's Draw with all its balls at rest (poffroom, z_snowfloor.c): the same digest on Steam and GOG 1.08.
+    # Its kicked balls: UTF_NATIVE_NEXT (snowkick).
+    ("SnowFloor_draw", "fnv:1226E82BD02DB827",
+     ("var:v0", "var:v1", "var:v2", "var:v3", "var:v4", "var:v5", "func:draw-set-color", "func:draw-circle", "i16:0x138",
+      "ref:0x2D8", "ref:0x3AC", "ref:0x480", "ref:0x554"),
+     ".text_snowfloor", ".text_snowfloor_ops"),
 ]
 # UTF_NATIVE items bound for one --target only (any other target, or none given, keeps the generated function): the
 # ring boss's Create is an Old 3DS cut (the New 3DS has the time, and its late-text reserve not the room).
-UTF_NATIVE_TARGET = {"UtRing_bossCreate": "o3ds"}
+UTF_NATIVE_TARGET = {"UtRing_bossCreate": "o3ds", "SnowFloor_draw": "o3ds"}
 # A native body's way in for the call that finds its variables missing, for one --target: (function, its section,
 # the target). The body gets this in place of the generated function, and this calls the body with the generated one
 # (engine/src/z_sansspawn.c).
 UTF_NATIVE_FIRST = {"UtFlames_borderDraw": ("SansSpawn_borderFirst", ".text_sansspawn", "o3ds")}
+# A second native body for what a UTF_NATIVE item with an operand table (its 5th item) hands to its generated function:
+# (body, the section of its wrapper, the section of its operand table, more operands). The first body gets the
+# wrapper in place of the generated function, and the wrapper calls the second body with the generated one and a
+# table of the first's operands with the more ones after them. The first body's wrapper and table keep their size, so
+# no late code before the second's moves (snowkick: the snow floor's kicked balls, engine/src/z_snowfloor.c).
+UTF_NATIVE_NEXT = {"SnowFloor_draw": ("SnowFloor_moving", ".text_snowkick", ".text_snowkick_ops",
+                                      ("var:v6", "var:v7", "func:collision-circle", "func:random", "ref:0x28C",
+                                       "i16:0x294", "i16:0x2A4"))}
 
 
 def utf_object_create(dw, obj, want):
@@ -2392,7 +2410,8 @@ def utflames_native(dw, blob, entry, k):
                 sub = utf_object_create(dw, to_i16(by_addr[int(at, 16)].word), want_s)
         args = []
         decls = []
-        for op in operands:
+        nxt = UTF_NATIVE_NEXT.get(fn_name) if len(item) > 4 else None
+        for op in tuple(operands) + (nxt[3] if nxt is not None else ()):
             kind, what = op.split(":", 1)
             if kind == "wild":
                 continue
@@ -2452,17 +2471,35 @@ def utflames_native(dw, blob, entry, k):
         if len(item) > 4:
             # The operands as a constant table in the item's 5th section (late text too): a wrapper that only passes
             # its address, not one that stores each operand.
+            first_args = args[:len(args) - len(nxt[3])] if nxt is not None else args
             text += ["#if defined(__arm__) && defined(__3DS__)",
                      "__attribute__((section(\"%s\")))" % item[4],
                      "#endif",
-                     "static const int32_t aotua_%d[%d] = {" % (k, len(args))]
-            text += ["    (int32_t) %s," % v for v in args]
-            text += ["};",
-                     "#if defined(__arm__) && defined(__3DS__)",
+                     "static const int32_t aotua_%d[%d] = {" % (k, len(first_args))]
+            text += ["    (int32_t) %s," % v for v in first_args]
+            text += ["};"]
+            generated = "aotf_%d" % k
+            if nxt is not None:
+                # UTF_NATIVE_NEXT: the second body's table and wrapper, which the first body gets as its generated one.
+                generated = "aotug_%d" % k
+                text += ["RValue %s(VMContext* ctx, uint32_t k, AotFn generated, const int32_t* a);" % nxt[0],
+                         "#if defined(__arm__) && defined(__3DS__)",
+                         "__attribute__((section(\"%s\")))" % nxt[2],
+                         "#endif",
+                         "static const int32_t aotub_%d[%d] = {" % (k, len(args))]
+                text += ["    (int32_t) %s," % v for v in args]
+                text += ["};",
+                         "RValue aotug_%d(VMContext* ctx);" % k,
+                         "#if defined(__arm__) && defined(__3DS__)",
+                         "__attribute__((section(\"%s\")))" % nxt[1],
+                         "#endif",
+                         "RValue aotug_%d(VMContext* ctx) {" % k,
+                         "    return %s(ctx, %d, aotf_%d, aotub_%d);" % (nxt[0], k, k, k), "}"]
+            text += ["#if defined(__arm__) && defined(__3DS__)",
                      "__attribute__((section(\"%s\")))" % item[3],
                      "#endif",
                      "RValue aotu_%d(VMContext* ctx) {" % k,
-                     "    return %s(ctx, %d, aotf_%d, aotua_%d);" % (fn_name, k, k, k), "}"]
+                     "    return %s(ctx, %d, %s, aotua_%d);" % (fn_name, k, generated, k), "}"]
             return text, fn_name
         if len(item) > 3:
             text += ["#if defined(__arm__) && defined(__3DS__)",
@@ -2863,6 +2900,15 @@ def generate_function(dw, name, k, report):
     return func_text, "\n".join(out), line, len(fn.depth)
 
 
+def undertale_label(dw):
+    """Recognize the tested single-table label by data identity, never its path or WAD version."""
+    from data_versions import load_table
+    _, known = load_table()
+    digests = {digest for game, part, size, digest in known
+               if game == 'undertale' and part == 'root' and size == len(dw.data)}
+    return 'Undertale' if digests and hashlib.sha256(dw.data).hexdigest() in digests else None
+
+
 def main(argv):
     # Isolated Python (-I) omits the script directory from its import path.
     sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -2893,9 +2939,10 @@ def main(argv):
     late_entries = []  # explicit --late-numeric only; original warm bodies stay in funcs_out
     for gi, g in enumerate(groups):
         dw = DataWin(g["data_win"])
+        label = undertale_label(dw)
         import weirdshd
-        weirdshd.validate(dw, BOARD_TARGET, os.path.basename(os.path.dirname(g["data_win"])))
-        sources.append(os.path.basename(os.path.dirname(g["data_win"])) + "/" + os.path.basename(g["data_win"]))
+        weirdshd.validate(dw, BOARD_TARGET, label or os.path.basename(os.path.dirname(g["data_win"])))
+        sources.append((label or os.path.basename(os.path.dirname(g["data_win"]))) + "/" + os.path.basename(g["data_win"]))
         if dw.wad < 16:
             report.append("skip %s: WAD %d bytecode (only WAD 16 and 17 are supported)" % (g["data_win"], dw.wad))
             continue
@@ -2909,8 +2956,8 @@ def main(argv):
         report.append("game %s: WAD %d, %d code entries" % (g["data_win"], dw.wad, len(dw.code)))
         dw.part = len(parts_out)
         if TYPED is not None:
-            dw.folder = os.path.basename(os.path.dirname(os.path.abspath(g["data_win"])))
-        parts_out.append((os.path.basename(os.path.dirname(os.path.abspath(g["data_win"]))) or "data.win", len(dw.code),
+            dw.folder = label or os.path.basename(os.path.dirname(os.path.abspath(g["data_win"])))
+        parts_out.append((label or os.path.basename(os.path.dirname(os.path.abspath(g["data_win"]))) or "data.win", len(dw.code),
                           len(dw.vars), len(dw.funcs)))
         games.append((gi, dw))
     group_of = {id(dw): gi for gi, dw in games}
@@ -3026,9 +3073,12 @@ def main(argv):
     missing_late = opts.get("late_numeric", set()) - {name for _, name in func_keys}
     if missing_late:
         raise ValueError("Requested late numeric entries were not emitted: " + ", ".join(sorted(missing_late)))
+    append_from = opts.get("append_from", len(funcs_out))
+    if not 0 <= append_from <= len(funcs_out):
+        raise ValueError("--append-from exceeds the emitted entry count or is negative")
     os.makedirs(out_dir, exist_ok=True)
     for f in os.listdir(out_dir):
-        if re.fullmatch(r"aot_gen_\d+\.c|aot_table\.c|aot_generated\.inc|aot_typed(_bind|_\d+)?\.c|aot_late\.c|aot_gettext\.c|aot_utold_(loop|regions)\.c", f):
+        if re.fullmatch(r"aot_(gen|append)_\d+\.c|aot_table\.c|aot_generated\.inc|aot_typed(_bind|_\d+)?\.c|aot_late\.c|aot_gettext\.c|aot_utold_(loop|regions)\.c", f):
             os.remove(os.path.join(out_dir, f))
     header = ("// Generated by tools/aot/gmlaot.py from %s.\n"
               "// Derived from the game's code: keep it in the build directory, never commit or share it.\n\n"
@@ -3048,7 +3098,8 @@ def main(argv):
             out[-1][1] += n
         return out
 
-    chunks = chunked(range(len(funcs_out)))
+    chunks = chunked(range(append_from))
+    appended = chunked(range(append_from, len(funcs_out)))
     if opts.get("layout_order"):
         # --layout: the functions in its order, the rest after them as they were; aotf_<n> and the table stay as made.
         # A module too big for its region is linked without its last files (platform/3ds/aot/aot_module_link.cmake),
@@ -3067,6 +3118,9 @@ def main(argv):
         chunks = chunked(head) + chunks[len(chunks) - keep:]
     for i, (order, n) in enumerate(chunks):
         with open(os.path.join(out_dir, "aot_gen_%d.c" % i), "w", encoding="utf-8", newline="\n") as f:
+            f.write(header + "\n\n".join(funcs_out[j][0] for j in order) + footer)
+    for i, (order, n) in enumerate(appended):
+        with open(os.path.join(out_dir, "aot_append_%d.c" % i), "w", encoding="utf-8", newline="\n") as f:
             f.write(header + "\n\n".join(funcs_out[j][0] for j in order) + footer)
     with open(os.path.join(out_dir, "aot_table.c"), "w", encoding="utf-8", newline="\n") as f:
         f.write(header)
@@ -3147,7 +3201,7 @@ def main(argv):
             f.write("\n\n".join(t[2] for t in TYPED_TEXTS))
             f.write(footer)
         report.append("typed: %d regions in %d functions" % (len(TYPED_TEXTS), len(set(t[1] for t in TYPED_TEXTS))))
-    report.append("%d files of generated code" % len(chunks))
+    report.append("%d files of generated code" % (len(chunks) + len(appended)))
     report.append("%d functions, %d instructions, %.1f s" % (len(entries), total_instrs, time.time() - t0))
     with open(os.path.join(out_dir, "aot_report.txt"), "w", encoding="utf-8") as f:
         f.write("\n".join(report) + "\n")

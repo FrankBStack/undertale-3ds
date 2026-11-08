@@ -137,6 +137,23 @@ def padrefs_file(game, target, chapters=False):
     return path
 
 
+def append_file(game, target, chapters=False):
+    """Optional fixed prefix count for a padded, statically linked selection."""
+    path = Path(HERE) / 'selection' / ('%s-%s-append.txt' % (game, target))
+    if chapters or not path.is_file():
+        return None
+    if not path.with_name('%s-%s-pad.txt' % (game, target)).is_file():
+        raise ValueError('Appended units require an AOT padding file: ' + str(path))
+    return path
+
+
+def append_count(path):
+    fields = ' '.join(line.split('#', 1)[0] for line in path.read_text(encoding='utf-8').splitlines()).split()
+    if len(fields) != 1 or not fields[0].isdigit():
+        raise ValueError('Expected one nonnegative emitted-entry count in ' + str(path))
+    return int(fields[0])
+
+
 def gmlaot_runs(game, target, found, out, selection, chapters=False, typed=None, late_numeric=None):
     """[(folder, gmlaot.py arguments)]: one run into out, or with chapters one into out/<part> for each listed part
     present in found (its lines are written to out/<part>/selection.txt before its run). typed: gmlaot.py --typed
@@ -148,8 +165,9 @@ def gmlaot_runs(game, target, found, out, selection, chapters=False, typed=None,
         typed_args += ['--late-numeric', late_numeric]
     layout = ["--layout", layout_file(game)] if layout_file(game) else []
     if not chapters:
+        append = append_file(game, target)
         return [(out, ["gmlaot.py", out, "--target", target, "--selection", selection, "--data", found] + layout
-                 + typed_args + GMLAOT_EXTRA)]
+                 + (["--append-from", str(append_count(append))] if append else []) + typed_args + GMLAOT_EXTRA)]
     budget = selection_budget(target, selection, chapters=True)
     tag = "aot%gch" % budget
     runs = []
@@ -202,6 +220,8 @@ def fingerprint(game, target, data, selection, chapters=False, runs=(), typed=No
         h.update(Path(path).read_bytes())
     refs = padrefs_file(game, target, chapters)
     h.update(refs.read_bytes() if refs else b'no retained references')
+    append = append_file(game, target, chapters)
+    h.update(append.read_bytes() if append else b'no appended units')
     if typed:   # gmlaot.py --typed (tools/aot/typed.py); "all" names no file
         for path in (os.path.join(HERE, "typed.py"),) + (() if typed == "all" else (typed,)):
             h.update(Path(path).read_bytes())

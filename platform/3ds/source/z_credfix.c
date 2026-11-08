@@ -35,8 +35,8 @@ static const char credfixNeeded[] CREDFIX_RO = "/lang/lang_en.json";
 static const char credfixPart[] CREDFIX_RO = "chapter1_windows";
 static const char credfixKind[] CREDFIX_RO = "Missing text";
 #endif
-// The first line of the missing music notice's advice (ctr_notice.c, CtrNotice_missing).
-static const char credfixAdvice[] CREDFIX_RO = "Copy to the path above from your PC.";
+// The missing music notice's advice (ctr_notice.c, __wrap_CtrNotice_missing).
+static const char credfixAdvice[37] CREDFIX_RO = "Run the builder again."; // 37 bytes: its slot's size
 static const char credfixLog[] CREDFIX_RO = "%s: %s\n";
 
 CREDFIX_CODE CtrDataVersionResult CTR_DATAVERSION_CREDFIX(const char* path, const char* game, const char* part,

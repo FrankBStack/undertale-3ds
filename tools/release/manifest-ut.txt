@@ -5,6 +5,7 @@ LICENSE
 # "#map <member> <- <source>": the member's bytes come from another tracked file (check_release.py).
 # The public README is the template, not this repository's own README.
 #map README.md <- tools/release/templates/README-undertale.md
+#map THIRD_PARTY_NOTICES <- tools/release/templates/THIRD_PARTY_NOTICES-undertale.txt
 README.md
 THIRD_PARTY_NOTICES
 VERSION
@@ -204,6 +205,7 @@ platform/3ds/smdh.cmake
 platform/3ds/check_cdreach_thunk.cmake
 platform/3ds/check_layerfix_inputs.cmake
 platform/3ds/check_memory_split.cmake
+platform/3ds/check_scanout_hook.cmake
 platform/3ds/cia/n3ds.rsf
 platform/3ds/cia/o3ds.rsf
 platform/3ds/cold/ctr_readback.c
@@ -216,11 +218,17 @@ platform/3ds/late_reserve.ld
 platform/3ds/legal.cmake
 platform/3ds/python.sh
 platform/3ds/release_contract.cmake
-platform/3ds/source/ctr_aac_debug_bits.c
 platform/3ds/source/ctr_aot_module.c
 platform/3ds/source/ctr_aot_module.h
 platform/3ds/source/ctr_apt_trace.c
 platform/3ds/source/ctr_apt_trace.h
+platform/3ds/source/z_keeplit.c
+platform/3ds/source/z_oflog.c
+platform/3ds/source/z_stackfloor.c
+platform/3ds/source/z_scanout.c
+platform/3ds/source/z_errtext_e1.c
+platform/3ds/source/z_menuborder.c
+platform/3ds/source/z_popbot.c
 platform/3ds/source/z_trace_wake.c
 platform/3ds/source/ctr_argui.c
 platform/3ds/source/ctr_asgprobe.c
@@ -394,6 +402,7 @@ platform/3ds/source/ctr_renderer_tpaggrow_layout.inc
 platform/3ds/source/ctr_repack.inc
 platform/3ds/source/ctr_romfs.c
 platform/3ds/source/ctr_rosalina.c
+platform/3ds/source/ctr_rosalow.h
 platform/3ds/source/ctr_safe_save.c
 platform/3ds/source/ctr_safe_save.h
 platform/3ds/source/ctr_screens.c
@@ -453,188 +462,11 @@ platform/3ds/source/z_roomload_trace.c
 platform/3ds/source/z_roomload_trace.h
 platform/3ds/source/z_roomplan.c
 platform/3ds/source/z_rosabl.c
+platform/3ds/source/z_rosalow.c
 platform/3ds/source/z_utpolish_audio.c
 platform/3ds/source/z_utpolish_bench.c
 platform/3ds/source/z_utpolish_bench.h
 platform/3ds/source/zzz_ctr_slot_diag.c
-platform/3ds/vendor/pvaac/LICENSE
-platform/3ds/vendor/pvaac/NOTICE
-platform/3ds/vendor/pvaac/README.md
-platform/3ds/vendor/pvaac/src/aac_mem_funcs.h
-platform/3ds/vendor/pvaac/src/apply_ms_synt.c
-platform/3ds/vendor/pvaac/src/apply_ms_synt.h
-platform/3ds/vendor/pvaac/src/apply_tns.c
-platform/3ds/vendor/pvaac/src/apply_tns.h
-platform/3ds/vendor/pvaac/src/byte_align.c
-platform/3ds/vendor/pvaac/src/calc_gsfb_table.c
-platform/3ds/vendor/pvaac/src/chans.h
-platform/3ds/vendor/pvaac/src/decode_huff_cw_binary.c
-platform/3ds/vendor/pvaac/src/deinterleave.c
-platform/3ds/vendor/pvaac/src/digit_reversal_tables.c
-platform/3ds/vendor/pvaac/src/digit_reversal_tables.h
-platform/3ds/vendor/pvaac/src/e_adif_const.h
-platform/3ds/vendor/pvaac/src/e_blockswitching.h
-platform/3ds/vendor/pvaac/src/e_coupling_mode.h
-platform/3ds/vendor/pvaac/src/e_elementid.h
-platform/3ds/vendor/pvaac/src/e_huffmanconst.h
-platform/3ds/vendor/pvaac/src/e_infoinitconst.h
-platform/3ds/vendor/pvaac/src/e_invf_mode.h
-platform/3ds/vendor/pvaac/src/e_maskstatus.h
-platform/3ds/vendor/pvaac/src/e_mp4ff_const.h
-platform/3ds/vendor/pvaac/src/e_progconfigconst.h
-platform/3ds/vendor/pvaac/src/e_rawbitstreamconst.h
-platform/3ds/vendor/pvaac/src/e_sbr_element_id.h
-platform/3ds/vendor/pvaac/src/e_sbr_error.h
-platform/3ds/vendor/pvaac/src/e_sbr_header_status.h
-platform/3ds/vendor/pvaac/src/e_sbr_master_status.h
-platform/3ds/vendor/pvaac/src/e_sbr_sync_state.h
-platform/3ds/vendor/pvaac/src/e_sr_mode.h
-platform/3ds/vendor/pvaac/src/e_tmp4audioobjecttype.h
-platform/3ds/vendor/pvaac/src/e_tns_const.h
-platform/3ds/vendor/pvaac/src/e_window_sequence.h
-platform/3ds/vendor/pvaac/src/e_window_shape.h
-platform/3ds/vendor/pvaac/src/esc_iquant_scaling.c
-platform/3ds/vendor/pvaac/src/esc_iquant_scaling.h
-platform/3ds/vendor/pvaac/src/fft_rx4.h
-platform/3ds/vendor/pvaac/src/fft_rx4_long.c
-platform/3ds/vendor/pvaac/src/fft_rx4_short.c
-platform/3ds/vendor/pvaac/src/fft_rx4_tables_fxp.c
-platform/3ds/vendor/pvaac/src/find_adts_syncword.c
-platform/3ds/vendor/pvaac/src/find_adts_syncword.h
-platform/3ds/vendor/pvaac/src/fwd_long_complex_rot.c
-platform/3ds/vendor/pvaac/src/fwd_long_complex_rot.h
-platform/3ds/vendor/pvaac/src/fwd_short_complex_rot.c
-platform/3ds/vendor/pvaac/src/fwd_short_complex_rot.h
-platform/3ds/vendor/pvaac/src/fxp_mul32.h
-platform/3ds/vendor/pvaac/src/fxp_mul32_c_equivalent.h
-platform/3ds/vendor/pvaac/src/gen_rand_vector.c
-platform/3ds/vendor/pvaac/src/gen_rand_vector.h
-platform/3ds/vendor/pvaac/src/get_adif_header.c
-platform/3ds/vendor/pvaac/src/get_adif_header.h
-platform/3ds/vendor/pvaac/src/get_adts_header.c
-platform/3ds/vendor/pvaac/src/get_adts_header.h
-platform/3ds/vendor/pvaac/src/get_audio_specific_config.c
-platform/3ds/vendor/pvaac/src/get_audio_specific_config.h
-platform/3ds/vendor/pvaac/src/get_dse.c
-platform/3ds/vendor/pvaac/src/get_dse.h
-platform/3ds/vendor/pvaac/src/get_ele_list.c
-platform/3ds/vendor/pvaac/src/get_ele_list.h
-platform/3ds/vendor/pvaac/src/get_ga_specific_config.c
-platform/3ds/vendor/pvaac/src/get_ga_specific_config.h
-platform/3ds/vendor/pvaac/src/get_ics_info.c
-platform/3ds/vendor/pvaac/src/get_ics_info.h
-platform/3ds/vendor/pvaac/src/get_prog_config.c
-platform/3ds/vendor/pvaac/src/get_prog_config.h
-platform/3ds/vendor/pvaac/src/get_pulse_data.c
-platform/3ds/vendor/pvaac/src/get_pulse_data.h
-platform/3ds/vendor/pvaac/src/get_sbr_bitstream.h
-platform/3ds/vendor/pvaac/src/get_tns.c
-platform/3ds/vendor/pvaac/src/get_tns.h
-platform/3ds/vendor/pvaac/src/getbits.h
-platform/3ds/vendor/pvaac/src/getfill.c
-platform/3ds/vendor/pvaac/src/getfill.h
-platform/3ds/vendor/pvaac/src/getgroup.c
-platform/3ds/vendor/pvaac/src/getics.c
-platform/3ds/vendor/pvaac/src/getmask.c
-platform/3ds/vendor/pvaac/src/hcbtables.h
-platform/3ds/vendor/pvaac/src/hcbtables_binary.c
-platform/3ds/vendor/pvaac/src/huffcb.c
-platform/3ds/vendor/pvaac/src/huffdecode.c
-platform/3ds/vendor/pvaac/src/hufffac.c
-platform/3ds/vendor/pvaac/src/huffman.h
-platform/3ds/vendor/pvaac/src/huffspec_fxp.c
-platform/3ds/vendor/pvaac/src/ibstream.h
-platform/3ds/vendor/pvaac/src/imdct_fxp.c
-platform/3ds/vendor/pvaac/src/imdct_fxp.h
-platform/3ds/vendor/pvaac/src/infoinit.c
-platform/3ds/vendor/pvaac/src/intensity_right.c
-platform/3ds/vendor/pvaac/src/intensity_right.h
-platform/3ds/vendor/pvaac/src/inv_long_complex_rot.c
-platform/3ds/vendor/pvaac/src/inv_long_complex_rot.h
-platform/3ds/vendor/pvaac/src/inv_short_complex_rot.c
-platform/3ds/vendor/pvaac/src/inv_short_complex_rot.h
-platform/3ds/vendor/pvaac/src/iquant_table.c
-platform/3ds/vendor/pvaac/src/iquant_table.h
-platform/3ds/vendor/pvaac/src/long_term_prediction.c
-platform/3ds/vendor/pvaac/src/long_term_prediction.h
-platform/3ds/vendor/pvaac/src/long_term_synthesis.c
-platform/3ds/vendor/pvaac/src/long_term_synthesis.h
-platform/3ds/vendor/pvaac/src/lt_decode.c
-platform/3ds/vendor/pvaac/src/lt_decode.h
-platform/3ds/vendor/pvaac/src/ltp_common_internal.h
-platform/3ds/vendor/pvaac/src/mdct_fxp.c
-platform/3ds/vendor/pvaac/src/mdct_fxp.h
-platform/3ds/vendor/pvaac/src/mdct_tables_fxp.c
-platform/3ds/vendor/pvaac/src/mix_radix_fft.c
-platform/3ds/vendor/pvaac/src/mix_radix_fft.h
-platform/3ds/vendor/pvaac/src/ms_synt.c
-platform/3ds/vendor/pvaac/src/ms_synt.h
-platform/3ds/vendor/pvaac/src/pns_corr.c
-platform/3ds/vendor/pvaac/src/pns_corr.h
-platform/3ds/vendor/pvaac/src/pns_intensity_right.c
-platform/3ds/vendor/pvaac/src/pns_intensity_right.h
-platform/3ds/vendor/pvaac/src/pns_left.c
-platform/3ds/vendor/pvaac/src/pns_left.h
-platform/3ds/vendor/pvaac/src/pulse_nc.c
-platform/3ds/vendor/pvaac/src/pulse_nc.h
-platform/3ds/vendor/pvaac/src/pv_audio_type_defs.h
-platform/3ds/vendor/pvaac/src/pv_normalize.c
-platform/3ds/vendor/pvaac/src/pv_normalize.h
-platform/3ds/vendor/pvaac/src/pvmp4audiodecoder_api.h
-platform/3ds/vendor/pvaac/src/pvmp4audiodecoderconfig.c
-platform/3ds/vendor/pvaac/src/pvmp4audiodecoderframe.c
-platform/3ds/vendor/pvaac/src/pvmp4audiodecodergetmemrequirements.c
-platform/3ds/vendor/pvaac/src/pvmp4audiodecoderinitlibrary.c
-platform/3ds/vendor/pvaac/src/pvmp4audiodecoderresetbuffer.c
-platform/3ds/vendor/pvaac/src/q_normalize.c
-platform/3ds/vendor/pvaac/src/q_normalize.h
-platform/3ds/vendor/pvaac/src/s_adif_header.h
-platform/3ds/vendor/pvaac/src/s_bits.h
-platform/3ds/vendor/pvaac/src/s_ch_info.h
-platform/3ds/vendor/pvaac/src/s_elelist.h
-platform/3ds/vendor/pvaac/src/s_frameinfo.h
-platform/3ds/vendor/pvaac/src/s_hcb.h
-platform/3ds/vendor/pvaac/src/s_huffman.h
-platform/3ds/vendor/pvaac/src/s_lt_pred_status.h
-platform/3ds/vendor/pvaac/src/s_mc_info.h
-platform/3ds/vendor/pvaac/src/s_mixdown.h
-platform/3ds/vendor/pvaac/src/s_patch.h
-platform/3ds/vendor/pvaac/src/s_progconfig.h
-platform/3ds/vendor/pvaac/src/s_pulseinfo.h
-platform/3ds/vendor/pvaac/src/s_sbr_channel.h
-platform/3ds/vendor/pvaac/src/s_sbr_dec.h
-platform/3ds/vendor/pvaac/src/s_sbr_element_stream.h
-platform/3ds/vendor/pvaac/src/s_sbr_frame_data.h
-platform/3ds/vendor/pvaac/src/s_sbr_header_data.h
-platform/3ds/vendor/pvaac/src/s_sbrbitstream.h
-platform/3ds/vendor/pvaac/src/s_sectinfo.h
-platform/3ds/vendor/pvaac/src/s_sr_info.h
-platform/3ds/vendor/pvaac/src/s_tdec_int_chan.h
-platform/3ds/vendor/pvaac/src/s_tdec_int_file.h
-platform/3ds/vendor/pvaac/src/s_tns_frame_info.h
-platform/3ds/vendor/pvaac/src/s_tnsfilt.h
-platform/3ds/vendor/pvaac/src/s_wnd_shape.h
-platform/3ds/vendor/pvaac/src/sbr_applied.h
-platform/3ds/vendor/pvaac/src/sbr_constants.h
-platform/3ds/vendor/pvaac/src/sbr_dec.h
-platform/3ds/vendor/pvaac/src/sbr_open.h
-platform/3ds/vendor/pvaac/src/set_mc_info.c
-platform/3ds/vendor/pvaac/src/set_mc_info.h
-platform/3ds/vendor/pvaac/src/sfb.c
-platform/3ds/vendor/pvaac/src/sfb.h
-platform/3ds/vendor/pvaac/src/tns_ar_filter.c
-platform/3ds/vendor/pvaac/src/tns_ar_filter.h
-platform/3ds/vendor/pvaac/src/tns_decode_coef.c
-platform/3ds/vendor/pvaac/src/tns_decode_coef.h
-platform/3ds/vendor/pvaac/src/tns_inv_filter.c
-platform/3ds/vendor/pvaac/src/tns_inv_filter.h
-platform/3ds/vendor/pvaac/src/trans4m_freq_2_time_fxp.c
-platform/3ds/vendor/pvaac/src/trans4m_time_2_freq_fxp.c
-platform/3ds/vendor/pvaac/src/unpack_idx.c
-platform/3ds/vendor/pvaac/src/unpack_idx.h
-platform/3ds/vendor/pvaac/src/window_block_fxp.h
-platform/3ds/vendor/pvaac/src/window_tables_fxp.c
-platform/3ds/vendor/pvaac/src/write_output.h
 tools/analysis/halfart/undertale.txt
 tools/analysis/halfart_pack.py
 tools/analysis/vine_extract.py
@@ -657,6 +489,7 @@ tools/aot/selection/typed-undertale-o3ds.txt
 tools/aot/selection/undertale-hints.txt
 tools/aot/selection/undertale-n3ds.txt
 tools/aot/selection/undertale-o3ds-pad.txt
+tools/aot/selection/undertale-o3ds-append.txt
 tools/aot/selection/undertale.txt
 tools/aot/typed.py
 # ADPCM tools and diagnostic sources; playback and release selection stay disabled.
@@ -755,6 +588,7 @@ tools/release/builder/discover.py
 tools/release/builder/gui.py
 tools/release/builder/pipeline.py
 tools/release/builder/products.py
+tools/release/builder/path_hygiene.py
 tools/release/builder/preferences.py
 tools/release/builder/toolchain.py
 tools/release/builder/library_pins.py
@@ -796,10 +630,12 @@ tools/release/macos_runtime_check.py
 tools/release/test_builder_native_data.py
 tools/release/test_builder_platforms.py
 tools/release/test_texcache.py
+tools/release/test_builder_texture_delivery.py
 tools/roomplan/build_plan.py
 tools/roomplan/closure.py
 tools/roomplan/codeclose.py
 tools/roomplan/build_sfxplan.py
+tools/roomplan/voice_census.py
 tools/roomplan/records/sounds/undertale-steam-1.08.json
 tools/roomplan/dwinfo.py
 tools/roomplan/records.py
@@ -859,6 +695,7 @@ platform/3ds/source/z_symverdict_dr.c
 tools/aot/symverdict.py
 # credfix (both games): the missing credits/text file notice and the asset gain slots
 platform/3ds/source/z_credfix.c
+platform/3ds/source/z_noticewrap.c
 platform/3ds/source/ctr_audio_system_credfix_layout.inc
 
 # Renderer compiler launcher and its standard-library-only dependencies (actual kit build gate).
@@ -914,6 +751,10 @@ platform/3ds/source/z_swkbd.c
 # smartcut item verdicts (fontverdict.py's build mode writes them)
 platform/3ds/source/z_itemverdict.c
 tools/aot/itemverdict.py
+# thinrule: Smart smoothing's whole-rows list (fontverdict.py's build mode writes it) and its loader
+platform/3ds/source/z_thinrule.c
+platform/3ds/source/z_thinrule.h
+tools/aot/thinrule.py
 # thinart: private build-time artwork generator and hidden-entry loader; no assets
 tools/aot/inkart.py
 platform/3ds/source/z_thinart.c
@@ -943,6 +784,9 @@ platform/3ds/source/z_flowdiag.c
 platform/3ds/source/z_btlentry.c
 # utold partial sprites: draw_sprite_part's partial-tile path (both games)
 platform/3ds/source/ctr_renderer_parts.inc
+# drawbatch: seam copies, one texture for a draw across cache tiles (UNDERTALE only; compiles empty in DELTARUNE)
+platform/3ds/source/ctr_seamcopy.h
+platform/3ds/source/z_seamcopy.c
 
 # Exact DR cold SHA checker (shared source include; disabled in UNDERTALE).
 platform/3ds/source/ctr_data_version_cold.inc
@@ -1131,7 +975,51 @@ tools/release/builder/certs/cacert.pem
 tools/release/builder/certs/LICENSE.certifi
 
 tools/release/builder/gui_test_support.py
+tools/release/conftest.py
+tools/release/test_builder_cleanup_sessions.py
+tools/release/test_builder_collect_safety.py
+tools/release/test_builder_devkitpro_location.py
+tools/release/test_builder_first_launch.py
+tools/release/test_builder_ftp_save_listing.py
+tools/release/test_builder_host_safety.py
+tools/release/test_builder_local_file_safety.py
+tools/release/test_builder_polish.py
+tools/release/test_builder_pubdocs.py
+tools/release/test_builder_r372.py
 
 tools/release/test_builder_tk_required.py
 
 tools/release/test_builder_first_paint.py
+# snow floor; empty outside UNDERTALE Old
+engine/src/z_snowfloor.c
+engine/src/z_snowkick.c
+platform/3ds/source/ctr_fanquads.inc
+
+tools/release/test_builder_usb_strays.py
+tools/release/test_builder_aot_name.py
+
+# First-update adapter (empty outside UNDERTALE).
+platform/3ds/source/z_upd1_options.c
+platform/3ds/source/z_upd1_audio.c
+platform/3ds/source/z_upd1_text.c
+
+# AAC retired: UT-only retained slots and compile adapter
+platform/3ds/aacout.cmake
+tools/buildcache/aacout_compile.py
+tools/buildcache/test_aacout_compile.py
+
+# First-update parity: saved-room reinsertion order, included by engine/src/runner.c.
+engine/src/z_parity_restore.h
+
+# noticescroll: retained Legal/Credits clear calls, UNDERTALE only.
+tools/buildcache/noticescroll_compile.py
+tools/buildcache/gmlstubs_compile.py
+tools/buildcache/test_gmlstubs_compile.py
+platform/3ds/source/z_gmlstubs.c
+tools/analysis/test_gmlstubs.py
+platform/3ds/source/z_gmlstubs.h
+# dlgwhite: independent recorded-fill correctness fix and exact-byte gate.
+platform/3ds/source/ctr_dlgwhite.inc
+tools/analysis/check_dlgwhite_layout.py
+tools/analysis/test_dlgwhite.py
+tools/release/test_dlgwhite_gate.py

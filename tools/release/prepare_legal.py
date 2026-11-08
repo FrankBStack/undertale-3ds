@@ -14,6 +14,10 @@ import struct
 JOIN_MIN = 40
 FIELD = re.compile(r'\s*(?:[A-Z][A-Za-z0-9 ./()-]{0,40}:\s|(?i:copyright\b|\(c\)|\u00a9|spdx-))')
 LIST_ITEM = re.compile(r'\s*(?:[-*+\u2022]|\(?[0-9]{1,3}[.)]|\(?[a-zA-Z][.)]|\([ivx]+\))\s')
+# The console's reader has ASCII glyphs only: ctr_legal.c's luiLine draws anything else as '?'. Its pages spell these
+# the usual way. The bundled LICENSE and THIRD_PARTY_NOTICES keep the real characters. A new character stops the build
+# here (test_prepare_legal.py runs this on the shipped files), so a notice can't reach a console with a '?' in a name.
+CONSOLE_SPELLING = {'\u00a9': '(c)', '\u00f6': 'o'}
 
 
 def split_bytes(line, columns):
@@ -86,10 +90,20 @@ def reflow(lines):
     return out
 
 
+def console_text(text):
+    """The text as the reader can draw it: only CONSOLE_SPELLING's characters change."""
+    for character, spelling in CONSOLE_SPELLING.items():
+        text = text.replace(character, spelling)
+    unknown = sorted({character for character in text if ord(character) > 126})
+    if unknown:
+        raise ValueError('legal text has characters the console cannot draw: ' + ascii(unknown))
+    return text
+
+
 def paginate(data, columns, lines):
     if not 1 <= columns <= 38 or not 1 <= lines <= 22:
         raise ValueError('legal page dimensions exceed the settings console')
-    text = data.decode('utf-8')
+    text = console_text(data.decode('utf-8'))
     if '\0' in text:
         raise ValueError('NUL in legal text')
     rows = []
@@ -108,11 +122,11 @@ def write_changed(path, data):
         path.write_bytes(data)
 
 
-def prepare(root, output):
+def prepare(root, output, notices=None):
     contract = json.loads((root / 'docs/release/build-contract.json').read_text(encoding='utf-8'))
     output.mkdir(parents=True, exist_ok=True)
     for name in ('LICENSE', 'THIRD_PARTY_NOTICES'):
-        data = (root / name).read_bytes()
+        data = (notices if name == 'THIRD_PARTY_NOTICES' and notices is not None else root / name).read_bytes()
         pages = paginate(data, contract['legal_columns'], contract['legal_lines'])
         write_changed(output / name, data)
         write_changed(output / (name + '.pages'), pages)
@@ -122,5 +136,6 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--root', type=Path, required=True)
     parser.add_argument('--output', type=Path, required=True)
+    parser.add_argument('--notices', type=Path, help='selected game\'s full notice bundle')
     args = parser.parse_args()
-    prepare(args.root, args.output)
+    prepare(args.root, args.output, args.notices)

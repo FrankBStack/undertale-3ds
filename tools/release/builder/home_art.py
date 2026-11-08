@@ -515,7 +515,12 @@ def generate(game, data_dir, destination, tex3ds, roots=None, specs=CACHE_ART, d
     destination.mkdir(parents=True, exist_ok=True)
     data_dir = Path(data_dir)
     data = data_dir / 'data.win'
-    if game == 'deltarune':
+    if game == 'undertale':
+        from products import verify_game
+        layout = verify_game.layout_for(verify_game.GAMES[game], str(data_dir))
+        if layout is not None:
+            data = Path(layout.data_path(str(data_dir)))
+    elif game == 'deltarune':
         data = next((data_dir / ('chapter%d_windows/data.win' % i) for i in range(1, 6)
                      if (data_dir / ('chapter%d_windows/data.win' % i)).is_file()), data)
     result = {"schema": 1, "game": game}

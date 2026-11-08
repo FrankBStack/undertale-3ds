@@ -243,3 +243,9 @@ BTN_LATE void CtrBtnprompt_saveEdits(const CtrDisplaySettings* before, const Ctr
     btnLabels(&after->controls);
 #endif
 }
+
+// E1: alias only. The late adapter reuses this title formatter for a map with
+// unavailable buttons removed; all original bodies and calls stay in place.
+#if defined(ENABLE_WAD16)
+__asm__(".global Errtext_title\n.set Errtext_title, btnTitle\n");
+#endif

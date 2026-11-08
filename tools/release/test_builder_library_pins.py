@@ -275,6 +275,69 @@ class LibraryPinsTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError,'did not use the checked'):
             libraries.confirm_linked(build,sys.platform,(self.pin,))
 
+    def compiler_runtime(self):
+        """A qualified compiler's layout in the temporary root: bin/arm-none-eabi-gcc and its private libgcc, whose
+        bytes match no pin (so only the compiler-runtime rule can admit it)."""
+        compiler=self.root/'devkitARM/bin'/('arm-none-eabi-gcc.exe' if sys.platform=='win32' else 'arm-none-eabi-gcc')
+        compiler.parent.mkdir(parents=True)
+        compiler.write_bytes(b'')
+        runtime=self.root/'devkitARM/lib/gcc/arm-none-eabi/16.1.0/armv6k/fpu/libgcc.a'
+        runtime.parent.mkdir(parents=True)
+        runtime.write_bytes(b'HOST LIBGCC, NO PIN')
+        return compiler,runtime
+
+    def linked_with_runtime(self):
+        """A configured build whose map takes one member from the compiler's runtime, and a function that writes its
+        link command ({compiler} and {libs} filled in)."""
+        build,archive=self.configured()
+        compiler,runtime=self.compiler_runtime()
+        (build/'release-link.map').write_text(
+            archive.as_posix()+'(known.o)\n'+runtime.as_posix()+'(_udivsi3.o)\nDiscarded input sections\n')
+        def link(command):
+            (build/'CMakeFiles/ctrport.dir/link.txt').write_text(
+                command.format(compiler=compiler.as_posix(),libs='-L"'+archive.parent.as_posix()+'" -lctru -lm -lgcc'))
+        return build,runtime,link
+
+    def test_plain_link_command_admits_its_compilers_runtime_as_before(self):
+        # The S7 link: the compiler is the command's first argument.
+        build,runtime,link=self.linked_with_runtime()
+        link('"{compiler}" {libs}')
+        rows=libraries.confirm_linked(build,sys.platform,(self.pin,))
+        self.assertIn(str(runtime.resolve()),[row['path'] for row in rows])
+
+    def test_launcher_wrapped_link_command_admits_the_compilers_runtime(self):
+        # aacout's RULE_LAUNCH_LINK runs its link check first: python ... --aacout-link <out> -- <compiler> ...
+        build,runtime,link=self.linked_with_runtime()
+        link('"'+Path(sys.executable).as_posix()+'" -X utf8 -I "aacout_compile.py" --aacout-link "aacout.ld" -- "{compiler}" {libs}')
+        rows=libraries.confirm_linked(build,sys.platform,(self.pin,))
+        self.assertIn(str(runtime.resolve()),[row['path'] for row in rows])
+
+    @unittest.skipUnless(sys.platform=='win32','a case-insensitive file system resolves the name to its real case')
+    def test_plain_link_command_with_an_uppercase_compiler_path_admits_as_before(self):
+        # The old check took the resolved name: an uppercase spelling of the real compiler resolves to its real name.
+        build,runtime,link=self.linked_with_runtime()
+        link('"'+(self.root/'devkitARM/bin/ARM-NONE-EABI-GCC.EXE').as_posix()+'" {libs}')
+        rows=libraries.confirm_linked(build,sys.platform,(self.pin,))
+        self.assertIn(str(runtime.resolve()),[row['path'] for row in rows])
+
+    def test_compiler_runtime_is_refused_without_the_qualified_compiler(self):
+        build,runtime,link=self.linked_with_runtime()
+        python='"'+Path(sys.executable).as_posix()+'" -I "aacout_compile.py"'
+        for command in (
+                python+' -- gcc {libs}',                     # a launcher, but no qualified compiler after '--'
+                python+' "{compiler}" -- gcc {libs}',        # the compiler's name only before the '--'
+                python+' "{compiler}" {libs}',               # no '--': never a later argument, never args[0]
+                'ccache "{compiler}" {libs}',                # a plain command must start with the compiler
+                python+' -- gcc -o "{compiler}" {libs}',     # an output operand named like the compiler
+                python+' -- gcc "{compiler}" {libs}',        # an input operand named like the compiler
+                python+' -- ccache "{compiler}" {libs}',     # a non-compiler driver in the launcher's slot
+                python+' -- -- "{compiler}" {libs}',         # a second separator: nothing past it
+                python+' {libs} --'):                        # the launcher's slot is absent
+            with self.subTest(command=command):
+                link(command)
+                with self.assertRaisesRegex(ValueError,'unpinned library'):
+                    libraries.confirm_linked(build,sys.platform,(self.pin,))
+
     def test_same_length_damage_stops_the_configured_precompile_check(self):
         build,archive=self.configured()
         archive.write_bytes(b'X'*archive.stat().st_size)

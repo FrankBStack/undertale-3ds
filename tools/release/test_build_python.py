@@ -2,6 +2,7 @@
 import os
 from pathlib import Path
 import shutil
+import shlex
 import subprocess
 import sys
 import tempfile
@@ -84,21 +85,27 @@ class BuildEnvironmentTests(unittest.TestCase):
                                (ROOT / 'platform/3ds/python.sh').as_posix()],
                               env=env, stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=30)
 
-    @unittest.skipUnless(os.name == 'nt' and shutil.which('reg.exe') and os.environ.get('APPDATA'),
-                         'Windows with a logon session')
+    def profile_shell(self, script, env):
+        # Exercise the actual Bash parser with invented registry output, never this PC's logon record.
+        values = dict(APPDATA=r'C:\Fixture Profile\Roaming', LOCALAPPDATA=r'C:\Fixture Profile\Local',
+                      USERPROFILE=r'C:\Fixture Profile')
+        record = '\n'.join('    %s    REG_SZ    %s' % row for row in values.items())
+        prefix = 'reg.exe() { printf "%s\\n" ' + shlex.quote(record) + '; }; '
+        return self.shell(prefix + script, env), values
+
     def test_profile_variables_come_back_in_a_shell_without_them(self):
         env = {k: v for k, v in os.environ.items() if k.upper() not in ('APPDATA', 'LOCALAPPDATA', 'USERPROFILE')}
-        result = self.shell('release_windows_profile_env; printf "%s\n" "$APPDATA" "$LOCALAPPDATA" "$USERPROFILE"', env)
+        result, values = self.profile_shell(
+            'release_windows_profile_env; printf "%s\n" "$APPDATA" "$LOCALAPPDATA" "$USERPROFILE"', env)
         self.assertEqual(result.returncode, 0, result.stderr)
         got = result.stdout.splitlines()
-        want = [os.environ.get(k, '') for k in ('APPDATA', 'LOCALAPPDATA', 'USERPROFILE')]
+        want = [values[k] for k in ('APPDATA', 'LOCALAPPDATA', 'USERPROFILE')]
         self.assertEqual([os.path.normcase(v) for v in got], [os.path.normcase(v) for v in want])
 
-    @unittest.skipUnless(os.name == 'nt' and shutil.which('reg.exe'), 'Windows')
     def test_profile_variables_already_set_are_kept(self):
         env = dict(os.environ, APPDATA=r'C:\kept-appdata')
         env.pop('LOCALAPPDATA', None)
-        result = self.shell('release_windows_profile_env; printf "%s\n" "$APPDATA"', env)
+        result, _values = self.profile_shell('release_windows_profile_env; printf "%s\n" "$APPDATA"', env)
         self.assertEqual(result.stdout.strip(), r'C:\kept-appdata', result.stderr)
 
     def test_missing_derivation_stops_the_build(self):
@@ -121,6 +128,53 @@ class BuildEnvironmentTests(unittest.TestCase):
         self.assertIn('release_windows_profile_env\nrelease_find_python\n', text)
         self.assertIn('release_missing_derivation "Crisp art" "$crispart_why" || exit 3', text)
         self.assertNotIn('optional derivation tools unavailable', text)
+
+    def cache_folder(self, marker, git_body):
+        """The compile cache's folder as build.sh picks it, in a tree with or without .git, with a stand-in git."""
+        text = (ROOT / 'platform/3ds/build.sh').read_text(encoding='utf-8')
+        start = text.index('            main_checkout=$repo\n')
+        end = text.index('            cache_dir="$main_checkout/scratch/ccache"\n')
+        block = text[start:end] + '            cache_dir="$main_checkout/scratch/ccache"\n'
+        with tempfile.TemporaryDirectory(dir=ROOT / 'scratch') as folder:
+            top = Path(folder)
+            repo = top / 'repo'
+            repo.mkdir()
+            tools = top / 'tools'
+            tools.mkdir()
+            called = top / 'called'
+            (tools / 'git').write_bytes(('#!/bin/sh\n: > "%s"\n%s\n' % (called.as_posix(), git_body)).encode())
+            if marker == 'dir':
+                (repo / '.git').mkdir()
+            elif marker == 'file':
+                (repo / '.git').write_bytes(b'gitdir: elsewhere\n')
+            env = dict(os.environ)
+            env['PATH'] = os.pathsep.join((str(tools), str(Path(BASH).parent)))
+            result = subprocess.run([BASH, '--noprofile', '--norc', '-c',
+                'set -euo pipefail; repo="$1"; ' + block + 'printf %s "$cache_dir"', 'cache-test', repo.as_posix()],
+                env=env, stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=15)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            return result.stdout, repo.as_posix(), called.exists()
+
+    def test_cache_folder_needs_no_git_outside_a_checkout(self):
+        # A source zip has no .git: git must not be asked, or a parent checkout would be found, or the build stopped.
+        for body in ('exit 128', 'exit 127', 'echo /parent/.git'):
+            with self.subTest(git=body):
+                folder, repo, called = self.cache_folder(None, body)
+                self.assertEqual(folder, repo + '/scratch/ccache')
+                self.assertFalse(called)
+
+    def test_cache_folder_of_a_checkout_git_cannot_read(self):
+        for marker in ('dir', 'file'):
+            for body in ('exit 128', 'exit 127'):
+                with self.subTest(marker=marker, git=body):
+                    folder, repo, called = self.cache_folder(marker, body)
+                    self.assertEqual(folder, repo + '/scratch/ccache')
+                    self.assertTrue(called)
+
+    def test_cache_folder_of_a_worktree_is_the_main_checkouts(self):
+        folder, _, called = self.cache_folder('file', 'echo /main/.git')
+        self.assertEqual(folder, '/main/scratch/ccache')
+        self.assertTrue(called)
 
     @unittest.skipUnless((ROOT / 'tools/analysis/crispart_pack.py').is_file(), 'derivation scripts not in this tree')
     def test_tool_check_names_the_import_and_the_place_it_looked(self):

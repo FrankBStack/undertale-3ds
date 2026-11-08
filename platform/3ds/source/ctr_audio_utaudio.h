@@ -118,7 +118,13 @@ void gomMixLink(int id, float mix[12]);
 #define UTA_PHYS_POS (ndspChnGetSamplePos)
 #define UTA_PHYS_OPEN_FILE (CtrDecoder_openFile)
 #define UTA_PHYS_OPEN_MEMORY (CtrDecoder_openMemory)
+#ifdef ENABLE_WAD16
+void Upd1_audioNotice(const char* kind, const char* path);
+#define UTA_PHYS_NOTICE (Upd1_audioNotice)
+#else
 #define UTA_PHYS_NOTICE (CtrNotice_missing)
+#endif
+#line 122
 
 #if defined(ENABLE_WAD16) && defined(CTR_AUDIO_PCM_HASH)
 #undef UTA_PHYS_ADD
@@ -275,6 +281,74 @@ void utaDeclickFlush(const void* data, uint32_t bytes) __asm__("adFlush");
 #define UTA_DECLICK_FLUSH utaDeclickFlush
 #else
 #define UTA_DECLICK_FLUSH DSP_FlushDataCache
+#endif
+
+// musicloop (UNDERTALE): a stopped stream fades out as on PC, and a loop seam is smoothed on both channels once either
+// qualifies (ctr_audio_system.c's end). Each hook is one changed external call target or one inline call in a nop pad,
+// so no function of the file gains or loses a call-graph edge (which would reorder them) and none changes size:
+// - the stream layer's physical clear (UTA_PHYS_CLEAR) goes through mlPhysClear, which leaves a just-stopped stream's
+//   buffers playing, faded out in place, for the frame callback to cut once they are silent;
+// - claimStreamContext's free context goes through mlClaim (in its nop pad), which passes over a context whose buffers
+//   still fade;
+// - utaDecRead's decoder read (UTA_PHYS_READ) goes through mlRead, which at a loop splice lets a channel's seam rule
+//   follow the other channel's.
+#if defined(ENABLE_WAD16)
+#ifdef CTR_AUDIO_CAPTURE_WRAP_H
+#define ML_CLEAR_NEXT CtrCap_chnWaveBufClear
+#else
+#define ML_CLEAR_NEXT (ndspChnWaveBufClear)
+#endif
+#if defined(CTRPORT_TARGET_O3DS) && defined(CTRPORT_HAVE_TREMOR)
+#define ML_READ_NEXT gunReadLink
+#elif defined(CTR_AUDIO_PCM_HASH)
+#define ML_READ_NEXT latRead
+#elif defined(CTR_AUDIO_CAPTURE_WRAP_H)
+#define ML_READ_NEXT CtrCap_decRead
+#else
+#define ML_READ_NEXT (CtrDecoder_read)
+#endif
+void mlPhysClearLink(int p) __asm__("mlPhysClear");
+int32_t mlReadLink(CtrDecoder* dec, int16_t* out, uint32_t maxFrames) __asm__("mlRead");
+#undef UTA_PHYS_CLEAR
+#define UTA_PHYS_CLEAR mlPhysClearLink
+#undef UTA_PHYS_READ
+#define UTA_PHYS_READ mlReadLink
+#define ML_CLAIM(ca, ctx) ({ \
+    extern int mlClaimLink(CtrAudioSystem*, int) __asm__("mlClaim"); \
+    (ctx) = mlClaimLink((ca), (ctx)); \
+    __asm__ volatile(".rept 21; nop; .endr"); \
+})
+// The options menu's hold starts (menuHeldUpdate's picture pause, same call, same argument): mlMenuPause first cuts a
+// stopped stream's fade, which has no voice for the hold to pause. HOME's freeze does the same (z_argcrash.c).
+void mlMenuPauseLink(bool pause) __asm__("mlMenuPause");
+#define ML_MENU_PAUSE mlMenuPauseLink
+// A resumed sound fades in, as on PC (F5): utaSetCallback's registration (ML_REGISTER) goes through mlRegister, which
+// points the vtable's resume entries at musicloop's; the physical mix write after gomPhysMix (GOM_MIX_NEXT) goes through
+// mlPhysMix, which scales a fading channel's mix; the frame callback's lock (ML_FRAME_LOCK) goes through mlFrameLock,
+// which steps the fades on, one DSP frame at a time; every physical pause write (UTA_PHYS_PAUSED) goes through
+// mlPhysPaused, which holds a resumed channel's unpause until its silent mix has reached the DSP. ML_MIX_NEXT and
+// ML_PAUSED_NEXT are the physical writes they make.
+void mlRegisterLink(ndspCallback callback, void* data) __asm__("mlRegister");
+#define ML_REGISTER mlRegisterLink
+void mlFrameLockLink(LightLock* lock) __asm__("mlFrameLock");
+#define ML_FRAME_LOCK mlFrameLockLink
+#ifdef CTR_AUDIO_CAPTURE_WRAP_H
+#define ML_MIX_NEXT CtrCap_chnSetMix
+#define ML_PAUSED_NEXT CtrCap_chnSetPaused
+#else
+#define ML_MIX_NEXT (ndspChnSetMix)
+#define ML_PAUSED_NEXT (ndspChnSetPaused)
+#endif
+void mlPhysMixLink(int id, float mix[12]) __asm__("mlPhysMix");
+#undef GOM_MIX_NEXT
+#define GOM_MIX_NEXT mlPhysMixLink
+void mlPhysPausedLink(int id, bool paused) __asm__("mlPhysPaused");
+#undef UTA_PHYS_PAUSED
+#define UTA_PHYS_PAUSED mlPhysPausedLink
+#else
+#define ML_CLAIM(ca, ctx) ({ __asm__ volatile(".rept 24; nop; .endr"); })
+#define ML_MENU_PAUSE CtrVideo_menuPause
+#define ML_FRAME_LOCK LightLock_Lock
 #endif
 
 #endif

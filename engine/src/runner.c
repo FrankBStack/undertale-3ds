@@ -20,7 +20,7 @@
 #include <stdlib.h>
 #include "string_compat.h"
 #include "math_compat.h"
-
+#include "z_parity_restore.h"
 #include "debug_overlay.h"
 #include "gettime.h"
 #include "freewins_maps.h" // stb_ds.h, and round 5's parked maps
@@ -2125,7 +2125,7 @@ static void initRoom(Runner* runner, int32_t roomIndex) {
         { extern void DataWin_loadRoomPayloadSized(DataWin*, int32_t); DataWin_loadRoomPayloadSized(dataWin, roomIndex); }
     }
 
-    SavedRoomState* savedState = FreewinsRoom_entry(runner, roomIndex); // the state, or only its flag (at this file's end)
+    SavedRoomState* savedState = ParityRestore_entry(runner, roomIndex); // the state, or only its flag (at this file's end)
 
     // Kept so carried persistent instances can be re-homed onto the new room's layer with the same name.
     Room* previousRoom = runner->currentRoom;
@@ -5155,7 +5155,7 @@ static void stepFrame(Runner* runner) {
 
     // Apply motion: friction, gravity, then x += hspeed, y += vspeed
     RUNNER_PHASE(runner, "<runner: motion>"); UTSW_MOTION(runner);
-    int32_t motionCount = (int32_t) arrlen(runner->instances);
+    int32_t motionCount = runner->pendingRoom == -1 ? (int32_t) arrlen(runner->instances) : 0;
     int32_t endOfPathSlot = EventSlotMap_lookup(&runner->eventSlotMap, EVENT_OTHER, OTHER_END_OF_PATH);
     repeat(motionCount, mi) {
         Instance* inst = runner->instances[mi];
@@ -6732,7 +6732,7 @@ __attribute__((naked, used, section(".text.late.utkill"))) static void utkDskipT
 // (tools/analysis/check_utdust_slots.py). UNDERTALE only (Policy E); the same on Old and New (GCC 16.1.0 Release).
 #define UTDUST_CLEANUP_TAIL ".space 80"
 #if defined(UTSW_ON)
-#define UTDUST_STEP_TAIL ".space 80" // UT-040's 96 B, less the 16 B of alarmbirth's phase-entry cutoff (Old and New)
+#define UTDUST_STEP_TAIL ".space 84" // vispar motion entry guard shrinks the qualified body 4 B; retain its full slot
 #else
 #define UTDUST_STEP_TAIL ".space 68" // 172 B less stepFrame's Utdust_insideRoom call (utkill)
 #endif
@@ -6744,11 +6744,11 @@ __attribute__((naked, used, section(".text.stepFrame"))) static void stepFrameTa
 }
 #endif
 #if defined(__3DS__) && defined(NDEBUG) && IS_WAD17_OR_HIGHER_ENABLED
-// alarmbirth, DELTARUNE retained slot: stepFrame is 20 B shorter with the joined alarm test (GCC 16.1.0 Release, Old
+// alarmbirth + vispar, DELTARUNE retained slot: joined alarm and motion tests shorten stepFrame 24 B (Release, Old
 // and New). These zero bytes, in stepFrame's own input section and defined after it, keep every later symbol at the
-// stage address. Never executed or referenced (tools/analysis/check_alarmbirth_layout.py).
+// stage address. Never executed or referenced (tools/analysis/check_vispar_motion_layout.py).
 __attribute__((naked, used, section(".text.stepFrame"))) static void stepFrameTail(void) {
-    __asm__(".space 20");
+    __asm__(".space 24");
 }
 #endif
 #line 6654
@@ -7672,5 +7672,35 @@ static NOINLINE void auditfixgIsolatedEvent(Runner* runner, int32_t eventType, i
     Runner_executeEventForAll(runner, eventType, eventSubtype);
     arrfree(runner->eventDispatchInstances);
     runner->eventDispatchInstances = saved;
+}
+#endif
+
+#if defined(UTORDER_ON)
+// PC GMS1.4 restores saved room actors in reverse instance Draw order:
+// ascending depth, then oldest depth insertion first. Ordinary Step keeps
+// creation order until transfer. Native equal-depth contracts also cover a
+// depth changed away and back immediately before the transfer request.
+// Sort the saved array before initRoom rebuilds both live and object lists;
+// persistent arrivals and new births retain their existing append paths.
+__attribute__((noipa, section(".text.late.parity")))
+static SavedRoomState* ParityRestore_entry(Runner* runner, int32_t roomIndex) {
+    SavedRoomState* state = FreewinsRoom_entry(runner, roomIndex);
+    // Non-persistent rooms return only a flag byte, not a full state.
+    if (!runner->dataWin->room.rooms[roomIndex].persistent || !state->initialized) return state;
+    Instance** list = state->instances;
+    size_t count = arrlenu(list);
+    // Cold restoration only; insertion sort needs no temporary allocation.
+    for (size_t i = 1; i < count; i++) {
+        Instance* inst = list[i];
+        size_t at = i;
+        while (at > 0) {
+            Instance* prev = list[at - 1];
+            if (prev->depth < inst->depth ||
+                (prev->depth == inst->depth && UTORDER_KEY(prev) >= UTORDER_KEY(inst))) break;
+            list[at--] = prev;
+        }
+        list[at] = inst;
+    }
+    return state;
 }
 #endif

@@ -808,7 +808,8 @@ def manual_install_message(platform="linux"):
         steps = ("wget %s\n"
                  "echo '%s  %s' | sha256sum -c - &&\n"
                  "chmod +x ./%s && sudo ./%s &&\n%s" % (pin["url"], pin["sha256"], name, name, name, packages))
-    return "devkitPro blocked the download. Install manually:\n%s\nThen click Check again." % steps
+    return ("The server did not provide the setup file. Try again later, or follow the official "
+            "installation instructions below. After setup, choose Check again.\n%s" % steps)
 
 
 def _save_download(action, *args, **kwargs):
@@ -1022,7 +1023,10 @@ def run_step(step: Step, log, dry_run, actions: Actions | None = None, stage=Non
         else:
             code = actions.run(argv, log)
         if code != 0:
-            if step.key in ("packages", "update"):
+            if step.key == "update":
+                raise Refused("The devkitPro update did not finish. Check the error details, "
+                              "then try this step again.")
+            if step.key == "packages":
                 raise Refused("The 3DS tools could not be installed. Check the error details, "
                               "then try this step again.")
             raise Refused("%s exited with code %s." % (os.path.basename(argv[0]), code))

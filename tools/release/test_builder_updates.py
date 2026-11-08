@@ -321,6 +321,7 @@ class Gui(unittest.TestCase):
     def test_rejected_manual_check_and_game_switch_clear_checking(self):
         import gui
         app = gui.App.__new__(gui.App)
+        app.root = mock.Mock()
         page = mock.Mock()
         page.check_updates.get.return_value = True
         app.pages, app.state = [page, mock.Mock()], mock.Mock(game='undertale')
@@ -354,14 +355,14 @@ class Gui(unittest.TestCase):
         app._release_notice('undertale', None)
         self.assertEqual(page.update_feedback.config.call_count, 3)
 
-    def test_normal_launch_schedules_check_without_running_it_on_tk_thread(self):
+    def test_normal_launch_does_not_check_before_welcome_opt_out(self):
         import gui
         root, app = mock.Mock(), mock.Mock()
         app.exit_code = 0
         with mock.patch.object(gui.tk, 'Tk', return_value=root), mock.patch.object(gui, 'App', return_value=app), \
                 mock.patch.object(gui.pipeline, 'claim_work'):  # Never the real work folder.
             self.assertEqual(gui.run(gui.Options()), 0)
-        root.after_idle.assert_called_once_with(app.check_updates)
+        root.after_idle.assert_not_called()
         app.check_updates.assert_not_called()
 
     def test_both_looks_show_notice_and_explicit_browser_and_disable_preference(self):

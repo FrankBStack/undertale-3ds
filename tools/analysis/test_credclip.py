@@ -333,7 +333,8 @@ def legalui_section():
     text = (SOURCE / 'ctr_legal.c').read_text(encoding='utf-8')
     start = text.index('// ===[ legalui')
     end = text.index('// luiDrawHub joins heading', start)
-    return text[start:end]
+    # The press's sound hooks (menusound; at the file's end) only add the sound before these two.
+    return text[start:end].replace('luiDrawHeard', 'luiDraw').replace('luiLoadHeard', 'luiLoadCredits')
 
 
 def end_gap():

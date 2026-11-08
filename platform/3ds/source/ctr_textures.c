@@ -3620,3 +3620,189 @@ __attribute__((noinline, noipa, section(".text_sfxshed"))) void CtrTextures_shed
     *ofSet = found;
 }
 #endif
+
+// ===[ entryload: the dialogue fonts' tiles kept packed in the heap (UNDERTALE Old) ]===
+//
+// The Old models' UNDERTALE .3dsx has no RAM for packed pages (z_utstall.c's utflPkCollect sets the budget to 0, and
+// nopromo, z_freebies.c, stops promotions), so a font's first glyph tile in a room comes from the SD card in play: o2ds
+// 45-54 ms frames at Sans's first line (room 158) and the bag menu (room 163), and a card read at Papyrus's first line
+// (room 81). Azahar's draws there read one tile each, the one that holds the glyph
+// sheet of fnt_comicsans and of fnt_papyrus (page 19) and of fnt_small (page 18): about 23 KB packed (placedrule
+// section 13). Here, at a room load's end, the packed bytes of the tiles that hold elFonts' sheets are read from their
+// page's cache file into the heap, at most ENTRYLOAD_TILE_MAX of payload in all, each checked against the page's tile
+// table. ENTRYLOAD_TILE_HEAP is a nominal admission reserve, not a heap floor: a tile is read only if the heap reports
+// that much free besides its size, before the file is opened, and the chunk header, stdio's work and other threads'
+// allocations aren't counted. They stay for the session. They aren't a packed page, so the packed budget, promotions
+// and the heap reliefs (the 3 MiB one included) don't see them: a bounded cost, about 23 KB, for the whole session. A
+// draw that finds one of them missing unpacks it from there (CtrTextures_ensureTiles' wraps, CMakeLists.txt) before
+// the page's own path runs, which then has nothing left to load. A tile whose place in the page's table no longer
+// matches, or whose bytes fail the check, is left to that path, which reads it from the card as without entryload.
+// z_utstall.c's calls of the real CtrTextures_roomLoadFinish come here by name (CMakeLists.txt), so no code before this
+// moves. flowdiag and frametrace wrap the same calls, so their builds keep nothing (the hook only finishes the load).
+#if defined(ENABLE_WAD16) && defined(CTRPORT_TARGET_O3DS) // UNDERTALE Old
+#define ENTRYLOAD_LATE __attribute__((noinline, section(".text_entryload")))
+
+void CtrEntryload_roomLoadFinish(CtrTextureCache* cache, uint64_t deadline, uint32_t* nowTiles, uint32_t* otherTiles) ENTRYLOAD_LATE;
+
+#if defined(CTRPORT_ENTRYLOAD_TILES)
+#define ENTRYLOAD_TILES_MAX 4
+#define ENTRYLOAD_TILE_MAX (32u * 1024u)
+#define ENTRYLOAD_TILE_HEAP (4u * 1024u * 1024u)
+
+void __real_CtrTextures_ensureTilesBut(CtrTextureCache* cache, CtrPage* page, int32_t tx0, int32_t ty0, int32_t tx1, int32_t ty1,
+                                       uint64_t drawnElsewise);
+void __wrap_CtrTextures_ensureTilesBut(CtrTextureCache* cache, CtrPage* page, int32_t tx0, int32_t ty0, int32_t tx1, int32_t ty1,
+                                       uint64_t drawnElsewise) ENTRYLOAD_LATE;
+void __real_CtrTextures_ensureTiles(CtrTextureCache* cache, CtrPage* page, int32_t tx0, int32_t ty0, int32_t tx1, int32_t ty1);
+void __wrap_CtrTextures_ensureTiles(CtrTextureCache* cache, CtrPage* page, int32_t tx0, int32_t ty0, int32_t tx1, int32_t ty1) ENTRYLOAD_LATE;
+
+static struct {
+    const CtrPage* pages; // the cache they were read for
+    CtrPackKey key;
+    CtrPage* on[2]; // the pages they are on (UNDERTALE's 18 and 19), which a draw checks first
+    uint32_t count, bytes;
+    struct {
+        CtrPage* page;
+        uint8_t* data; // the tile's packed bytes, as in the page's cache file
+        uint32_t tile, size, checksum;
+    } kept[ENTRYLOAD_TILES_MAX];
+} elTiles __attribute__((section(".bss.entryload_late")));
+
+static const char elTileLog[] __attribute__((section(".rodata.entryload_in_text"))) =
+    "Font tiles: page %u tile %u kept in the heap (%u B in %.0f ms; %u B kept, %u KB heap free)\n";
+static const char elTileSource[] __attribute__((section(".rodata.entryload_in_text"))) = "RAM, a kept font tile";
+// The fonts whose tiles are kept, each ended by a NUL; an empty name ends the list.
+static const char elFonts[] __attribute__((section(".rodata.entryload_in_text"))) = "fnt_comicsans\0fnt_papyrus\0fnt_small\0";
+
+// Reads the packed bytes of one tile from its page's cache file, if the heap has the room; whether it was kept.
+ENTRYLOAD_LATE static bool elKeepTile(CtrTextureCache* cache, uint32_t pageId, CtrPage* page, uint32_t t) {
+    const CtrTile* tile = &page->tiles[t];
+    uint32_t size = tile->size;
+    uint32_t on = elTiles.on[0] == nullptr || elTiles.on[0] == page ? 0u : elTiles.on[1] == nullptr || elTiles.on[1] == page ? 1u : 2u;
+    if (on == 2 || size == 0 || tile->format == CTR_TILE_EMPTY || elTiles.bytes + size > ENTRYLOAD_TILE_MAX ||
+        size + ENTRYLOAD_TILE_HEAP > heapFree())
+        return false;
+    FILE* f = cacheFile(cache, pageId);
+    if (f == nullptr) return false;
+    uint64_t start = nowNanos();
+    bool allowed = CtrMemory_allowRelief(false);
+    uint8_t* data = malloc(size);
+    CtrMemory_allowRelief(allowed);
+    if (data == nullptr) return false;
+    if (fseek(f, (long) tile->offset, SEEK_SET) != 0 || fread(data, 1, size, f) != size || !CtrPack_checkTile(data, size, tile->checksum)) {
+        free(data);
+        return false;
+    }
+    elTiles.on[on] = page;
+    elTiles.kept[elTiles.count].page = page;
+    elTiles.kept[elTiles.count].data = data;
+    elTiles.kept[elTiles.count].tile = t;
+    elTiles.kept[elTiles.count].size = size;
+    elTiles.kept[elTiles.count].checksum = tile->checksum;
+    elTiles.count++;
+    elTiles.bytes += size;
+    logInfo(elTileLog, (unsigned) pageId, (unsigned) t, (unsigned) size, (double) (nowNanos() - start) / 1e6, (unsigned) elTiles.bytes,
+            (unsigned) (heapFree() / 1024));
+    return true;
+}
+
+ENTRYLOAD_LATE static void elKeepTiles(CtrTextureCache* cache, uint64_t deadline) {
+    if (elTiles.pages != cache->pages || memcmp(&elTiles.key, &cache->key, sizeof(CtrPackKey)) != 0) {
+        // Another cache (a game's data changed): what was kept is another page's.
+        for (uint32_t i = 0; elTiles.count > i; i++) free(elTiles.kept[i].data);
+        memset(&elTiles, 0, sizeof(elTiles));
+        elTiles.pages = cache->pages;
+        elTiles.key = cache->key;
+    }
+    const DataWin* dw = cache->dataWin;
+    FILE* opened[CTR_OPEN_FILES];
+    for (int32_t i = 0; CTR_OPEN_FILES > i; i++) opened[i] = cache->files[i];
+    for (uint32_t f = 0; dw->font.count > f && ENTRYLOAD_TILES_MAX > elTiles.count; f++) {
+        const Font* font = &dw->font.fonts[f];
+        if (!font->present || font->isSpriteFont || font->name == nullptr || 0 > font->tpagIndex || (uint32_t) font->tpagIndex >= dw->tpag.count)
+            continue;
+        bool named = false;
+        for (const char* n = elFonts; *n != '\0' && !named; n += strlen(n) + 1) named = strcmp(font->name, n) == 0;
+        const TexturePageItem* tpag = &dw->tpag.items[font->tpagIndex];
+        if (!named || 0 > tpag->texturePageId || (uint32_t) tpag->texturePageId >= cache->pageCount || 0 >= tpag->sourceWidth ||
+            0 >= tpag->sourceHeight)
+            continue;
+        uint32_t pageId = (uint32_t) tpag->texturePageId;
+        CtrPage* page = &cache->pages[pageId];
+        // The page's tile table, as its first draw's load reads it; a page without one yet is tried at a later room load.
+        if (!page->layoutKnown || !page->packInfo || page->failed || page->cacheFile != CTR_CACHE_FILE_VALID) continue;
+        int32_t tx1 = (tpag->sourceX + tpag->sourceWidth - 1) / page->tileW, ty1 = (tpag->sourceY + tpag->sourceHeight - 1) / page->tileH;
+        for (int32_t ty = tpag->sourceY / page->tileH; ty1 >= ty && page->tilesY > ty; ty++) {
+            for (int32_t tx = tpag->sourceX / page->tileW; tx1 >= tx && page->tilesX > tx; tx++) {
+                uint32_t t = (uint32_t) (ty * page->tilesX + tx);
+                bool kept = false;
+                for (uint32_t i = 0; elTiles.count > i && !kept; i++) kept = elTiles.kept[i].page == page && elTiles.kept[i].tile == t;
+                if (kept || ENTRYLOAD_TILES_MAX <= elTiles.count) continue;
+                if (nowNanos() + ROOMLOAD_FILE_FIXED_NANOS > deadline) goto done;
+                elKeepTile(cache, pageId, page, t);
+            }
+        }
+    }
+done:
+    // The files these reads opened close as the room load's own do (CtrTextures_roomLoadFinish).
+    for (int32_t i = 0; CTR_OPEN_FILES > i; i++) {
+        if (cache->files[i] == nullptr || cache->files[i] == opened[i]) continue;
+        CTR_TRACE_CLOSE(cache->files[i], 'E', cache->filePages[i]);
+        cache->files[i] = nullptr;
+    }
+}
+
+// Unpacks the kept tiles in the range that the draw needs and that aren't resident.
+ENTRYLOAD_LATE static void elInstall(CtrTextureCache* cache, CtrPage* page, int32_t tx0, int32_t ty0, int32_t tx1, int32_t ty1,
+                                     uint64_t drawnElsewise) {
+    // Its own path has them in RAM or on the way, or doesn't load now.
+    if (elTiles.pages != cache->pages || page->packed != nullptr || page->read != nullptr || !page->packInfo || page->failed ||
+        page->retryFrame > cache->frame)
+        return;
+    for (uint32_t i = 0; elTiles.count > i; i++) {
+        if (elTiles.kept[i].page != page) continue;
+        int32_t tx = (int32_t) (elTiles.kept[i].tile % (uint32_t) page->tilesX), ty = (int32_t) (elTiles.kept[i].tile / (uint32_t) page->tilesX);
+        uint32_t k = (uint32_t) ((ty - ty0) * (tx1 - tx0 + 1) + (tx - tx0));
+        CtrTile* tile = &page->tiles[elTiles.kept[i].tile];
+        if (tx0 > tx || tx > tx1 || ty0 > ty || ty > ty1 || (64 > k && (drawnElsewise >> k & 1u) != 0) || !tileMissing(page, tile) ||
+            tile->size != elTiles.kept[i].size || tile->checksum != elTiles.kept[i].checksum)
+            continue;
+        uint64_t start = nowNanos();
+        CtrPage* wasBusy = cache->busyPage;
+        cache->busyPage = page;
+        LoadResult result = installTile(cache, page, tile, elTiles.kept[i].data);
+        cache->busyPage = wasBusy;
+        double ms = (double) (nowNanos() - start) / 1e6;
+        cache->frameLoadNanos += nowNanos() - start;
+        if (result == LOAD_OK) {
+            countLoad(&cache->fromRam, 1, ms);
+            logLoad(cache, pageIdOf(cache, page), page, 1, elTileSource, ms, "");
+        } else if (result == LOAD_BAD_DATA) {
+            // Never again: the page's path reads it from the card.
+            free(elTiles.kept[i].data);
+            elTiles.kept[i].data = nullptr;
+            elTiles.kept[i].size = 0;
+        }
+    }
+}
+
+void __wrap_CtrTextures_ensureTilesBut(CtrTextureCache* cache, CtrPage* page, int32_t tx0, int32_t ty0, int32_t tx1, int32_t ty1,
+                                       uint64_t drawnElsewise) {
+    if (page == elTiles.on[0] || page == elTiles.on[1]) elInstall(cache, page, tx0, ty0, tx1, ty1, drawnElsewise);
+    __real_CtrTextures_ensureTilesBut(cache, page, tx0, ty0, tx1, ty1, drawnElsewise);
+}
+
+// The real one calls the real CtrTextures_ensureTilesBut (in this file, so not wrapped), and stays where it is.
+void __wrap_CtrTextures_ensureTiles(CtrTextureCache* cache, CtrPage* page, int32_t tx0, int32_t ty0, int32_t tx1, int32_t ty1) {
+    if (page == elTiles.on[0] || page == elTiles.on[1]) elInstall(cache, page, tx0, ty0, tx1, ty1, 0);
+    __real_CtrTextures_ensureTiles(cache, page, tx0, ty0, tx1, ty1);
+}
+#endif
+
+void CtrEntryload_roomLoadFinish(CtrTextureCache* cache, uint64_t deadline, uint32_t* nowTiles, uint32_t* otherTiles) {
+    CtrTextures_roomLoadFinish(cache, deadline, nowTiles, otherTiles);
+#if defined(CTRPORT_ENTRYLOAD_TILES)
+    elKeepTiles(cache, deadline);
+#endif
+}
+#endif

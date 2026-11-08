@@ -187,7 +187,7 @@ static INPUT_LATE void sampler(void* arg) {
         // A stale snapshot cannot acknowledge a hand-back or replay old edges.
         bool current = valid && (!cursor.ready || ring.tick > cursor.tick ||
                 (ring.tick == cursor.tick && ring.index >= cursor.index));
-        if (current && CtrInputSchedule_due(&schedule, nowMs)) {
+        if (current) {
             if (lastDrain != 0 && begin - lastDrain > published.maxGapTicks) published.maxGapTicks = begin - lastDrain;
             lastDrain = begin;
             published.drains++;
@@ -204,7 +204,7 @@ static INPUT_LATE void sampler(void* arg) {
         LightLock_Unlock(&handoff);
         if (event >= 0) reportHandover(event, nowMs, &snapshot, overruns);
         u64 waitMs = snapshot.mainReads && snapshot.nextMs > nowMs ? snapshot.nextMs - nowMs : CTRPORT_INPUTLATE_PERIOD_MS;
-        if (waitMs > 100) waitMs = 100; // stop/join remains bounded at 250 ms
+        if (waitMs > CTRPORT_INPUTLATE_PERIOD_MS) waitMs = CTRPORT_INPUTLATE_PERIOD_MS; // stop/join remains bounded at 250 ms
         CtrInput_guardSleep(waitMs * 1000000LL);
     }
 }
@@ -330,3 +330,12 @@ INPUT_LATE CtrInputEdges CtrInput_take(const CtrInputMap* map, u32 held, u32 dow
     if (stats != NULL) *stats = lastStats;
     return lastTaken;
 }
+
+// handover: retain the 48 B removed from s8b7's release sampler. Subsection 1
+// follows this object's functions, after their returns; constants keep place.
+#if defined(__3DS__) && defined(NDEBUG) && CTRPORT_INPUTLATE_PERIOD_MS == 16 && CTRPORT_INPUTLATE_STALL_MS == 0
+__asm__(
+    ".pushsection .text.late.inputlate,\"ax\",%progbits\n"
+    ".subsection 1\n.space 48\n"
+    ".popsection\n");
+#endif

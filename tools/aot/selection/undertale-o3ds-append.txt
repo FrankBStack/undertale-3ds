@@ -1,0 +1,5 @@
+# Existing emitted-entry count before the appended Create selection.
+# Freeze those compile units; new entries link after existing typed units.
+# These appended entries run at load time; their 3DS compile units use -Os.
+# The full layout and original-function address gates remain mandatory.
+373

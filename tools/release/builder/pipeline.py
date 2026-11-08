@@ -28,6 +28,7 @@ import toolchain
 import library_pins
 import home_art
 import sfx_encoder
+import path_hygiene
 from processes import hidden_options
 
 CIA_NOT_MADE = "The .cia was not made.\nUntick .cia on Options or set up the .cia tools."
@@ -198,10 +199,17 @@ def _wanted(name):
 
 def source_wanted(relative, game=None):
     """Inputs used by the 3DS build, excluding desktop backends and private test data."""
+    if path_hygiene.is_junk(relative):
+        return False
     if relative.replace("\\", "/") == "tools/release/builder/undertale-3ds-builder.cmd":
         return False  # Packages have one game-specific launcher at their root.
     parts = relative.replace("\\", "/").split("/")
     game_only = {
+        'platform/3ds/aacout.cmake': 'undertale',
+        'tools/buildcache/aacout_compile.py': 'undertale',
+        'tools/buildcache/test_aacout_compile.py': 'undertale',
+        'platform/3ds/source/ctr_aac_debug_bits.c': 'deltarune',
+        'platform/3ds/source/ctr_audio_decoder_aac.inc': 'deltarune',
         # dlgtop's compiler adapter and retained slots are selected only by UT CMake.
         'tools/buildcache/loadgame_compile.py': 'undertale',
         'tools/buildcache/loadgame-order.json': 'undertale',
@@ -263,6 +271,8 @@ def source_wanted(relative, game=None):
             or (parts[-1] in ("gog_smart.py", "gog-smart-1.08.json") and game != "deltarune")
             # offkill.py: the early destroy's entries (build.sh runs it; UNDERTALE only).
             or (parts[-1] == "offkill.py" and game != "deltarune")
+            # thinrule.py: Smart smoothing's whole-rows list, which fontverdict.py's build mode writes for UNDERTALE only.
+            or (parts[-1] == "thinrule.py" and game != "deltarune")
             # textcase.py: the dialogue script's case table (build.sh runs it; UNDERTALE Old only).
             or (parts[-1] == "textcase.py" and game != "deltarune")
             or (parts[-1] == "chapter_manifest.py" and game != "undertale")
@@ -290,6 +300,9 @@ def source_wanted(relative, game=None):
     if parts[:2] == ["tools", "roomplan"]:
         if parts[2:] == ['build_sfxplan.py']:
             return game != 'deltarune'
+        # voice_census.py: build_sfxplan.py imports it (the plan's text voices; change papvoice).
+        if parts[2:] == ['voice_census.py']:
+            return game != 'deltarune'
         # The room plan's build step (build.sh runs build_plan.py) and this game's committed records.
         # codeclose.py: build_plan.py imports it (UNDERTALE's in-play code closure; codeclose).
         # records/sounds/: the sound plan records (build_sfxplan.py, UNDERTALE).
@@ -315,6 +328,8 @@ def source_wanted(relative, game=None):
                                                  "records.py",
                                                  "source_plan.py")
     if parts[:2] == ["platform", "3ds"]:
+        if parts[2:4] == ['vendor', 'pvaac'] and game == 'undertale':
+            return False
         if game == 'undertale' and (parts[2:] in (
                 ['source', 'z_builderx_new.c'], ['source', 'z_builderx_chapters.c'], ['source', 'z_phaseplan.c'])
                 or len(parts) == 4 and parts[2] == 'hotpin' and parts[-1].startswith('deltarune-')):
@@ -382,6 +397,18 @@ def source_directories(game):
     return tuple(path for path in SOURCE_DIRS if path not in omitted)
 
 
+def source_input(root, relative, game=None):
+    """Select UT's scoped notices in the monorepo; curated kits already use that root file."""
+    path = Path(root) / relative
+    if relative == 'THIRD_PARTY_NOTICES' and game == 'undertale':
+        scoped = Path(root) / 'tools/release/templates/THIRD_PARTY_NOTICES-undertale.txt'
+        if scoped.is_file():
+            path = scoped
+    if path.is_symlink():
+        raise ValueError('Source contains a symlink: ' + relative)
+    return path
+
+
 def mirror_source(src_root, dest_root, game=None, *, source_digest=None):
     """Mirror by contents, never archive timestamps. Changed inputs invalidate generated build state;
     an unchanged kit (including a second model) keeps its objects. Returns (copied, removed)."""
@@ -444,7 +471,7 @@ def mirror_source(src_root, dest_root, game=None, *, source_digest=None):
         dst = os.path.join(dest_root, rel)
         want = set()
         for dirpath, dirnames, filenames in os.walk(src):
-            dirnames[:] = [d for d in dirnames if d not in SKIP_DIRS]
+            dirnames[:] = [d for d in dirnames if d not in SKIP_DIRS and not path_hygiene.is_junk(d)]
             rd = os.path.relpath(dirpath, src)
             for n in filenames:
                 r = os.path.normpath(os.path.join(rd, n))
@@ -459,14 +486,14 @@ def mirror_source(src_root, dest_root, game=None, *, source_digest=None):
                 rd = os.path.relpath(dirpath, dst)
                 for n in filenames:
                     r = os.path.normpath(os.path.join(rd, n))
-                    if os.path.normcase(r) not in want and _wanted(n):
+                    if os.path.normcase(r) not in want and (_wanted(n) or path_hygiene.is_junk(r)):
                         changed_input(os.path.join(dst, r))
                         os.remove(os.path.join(dst, r))
                         removed += 1
     for rel in SOURCE_FILES:
         if not source_wanted(rel, game):
             continue
-        s = os.path.join(src_root, rel)
+        s = source_input(src_root, rel, game)
         if os.path.isfile(s):
             d = os.path.join(dest_root, rel)
             copy_changed(s, d)
@@ -487,7 +514,7 @@ def source_payload(root, game):
     paths = {rel for rel in SOURCE_FILES if source_wanted(rel, game)}
     for directory in SOURCE_DIRS + ('tools/release/builder',):
         base = root / directory
-        for p in base.rglob('*'):
+        for p in path_hygiene.iter_paths(base):
             if p.is_symlink():
                 raise ValueError('Source contains a symlink: ' + p.relative_to(root).as_posix())
             rel = p.relative_to(root).as_posix()
@@ -501,7 +528,7 @@ def source_payload(root, game):
     for rel in paths:
         if (root / rel).is_symlink():
             raise ValueError('Source contains a symlink: ' + rel)
-    return {rel: (root / rel).read_bytes() for rel in sorted(paths)}
+    return {rel: source_input(root, rel, game).read_bytes() for rel in sorted(paths)}
 
 
 NO_SOURCE_LINK = ("This copy of the source has no release-descriptor.json and no Git history, so the builder can't "
@@ -851,6 +878,10 @@ class SupportLogFilter:
                 if line.strip():
                     continue
                 self.in_saves = False
+            # Traceback locations need their basename, line and function for support, never directories.
+            frame = re.match(r'^(\s*File ")([^"\r\n]+)(", line \d+(?:, in [^\r\n]*)?)$', line)
+            if frame:
+                line = frame[1] + re.split(r'[\\/]', frame[2])[-1] + frame[3]
             if line.startswith("AOT:   ") or "gml_" in line or re.match(r'^\s*SKIP\s+\d+\s', line):
                 out.append("[line removed: game identifiers]")
                 continue
@@ -863,7 +894,7 @@ class SupportLogFilter:
             line = re.sub(r"%USERPROFILE%[^\r\n]*", "%USERPROFILE%", line)
             # Paths may be outside the current home: external Steam libraries, mounted Windows homes,
             # and named Mac volumes. Drop the path and its tail rather than leaking a basename with spaces.
-            line = re.sub(r"(?<![\w:/\\])(?:[A-Za-z]:[\\/]|\\\\|/(?=[^\s/]))[^\r\n]*", "<path>", line)
+            line = re.sub(r"(?:(?<![\w:/\\])|(?<=-[ILF]))(?:[A-Za-z]:[\\/]|\\\\|/(?=[^\s/]))[^\r\n]*", "<path>", line)
             line = re.sub(r"\b\d{17}\b", "<account>", line)
             for digest in hashes:
                 if digest not in line:
@@ -884,9 +915,10 @@ def filter_log(text, home=None):
 # Running a build
 
 class BuildFailed(Exception):
-    def __init__(self, message, log_path=None):
+    def __init__(self, message, log_path=None, details=''):
         super().__init__(message)
         self.log_path = log_path
+        self.details = details
 
 
 class GameFilesRefused(BuildFailed):
@@ -967,8 +999,9 @@ class Artifact:
     sha256: str
 
 
-SFX_PACK_MISSING = ("WARNING: No sound pack for the Old 3DS: %s. The Old 3DS will play the original sounds "
-                    "instead, which can hold frames in busy scenes. The release builder makes the sound pack.")
+SFX_PACK_MISSING = ("The Old 3DS sound files could not be prepared. The game will use its original sounds, "
+                    "which may cause pauses in busy scenes on a 3DS, 3DS XL or 2DS. "
+                    "Try the build again, or copy the log for support.")
 SFX_NO_ENCODER = ("this copy of the builder has no Windows sound encoder (%s comes only with the release builder)"
                   % sfx_encoder.RELATIVE)
 
@@ -1140,6 +1173,36 @@ class Build:
                 kill_tree(self.proc)
 
     def refuse_game_files(self, error):
+        if self.product.key == 'undertale':
+            import errno
+            log_path = self.log_path
+            try:
+                os.makedirs(os.path.dirname(log_path), exist_ok=True)
+                with open(log_path, 'w', encoding='utf-8') as log:
+                    log.write('UNDERTALE staging: ' + str(error) + '\n')
+            except OSError:
+                log_path = None
+            missing = isinstance(error, products.MissingGameData)
+            try:
+                source_error = (isinstance(error, OSError) and error.errno != errno.ENOSPC and
+                                error.filename2 is None and error.filename is not None and
+                                Path(error.filename).resolve().is_relative_to(Path(self.data_dir).resolve()))
+            except (OSError, ValueError, TypeError):
+                source_error = False
+            if missing or source_error:
+                kind = 'missing' if missing or isinstance(error, FileNotFoundError) else 'unreadable'
+                raise GameFilesRefused(game_files_problem(self.product.title, kind), log_path) from error
+            if isinstance(error, OSError):
+                if error.errno == errno.ENOSPC:
+                    message = 'Not enough space to prepare UNDERTALE. Free up space in the work folder and try again.'
+                else:
+                    message = ('Could not prepare UNDERTALE. Check that the game folder is readable '
+                               'and that files can be saved in the work folder. '
+                               'Free up space if needed. Click Try again, '
+                               'or click Copy log to report the error.')
+            else:
+                message = str(error)
+            raise BuildFailed(message, log_path) from error
         import chapters
         import errno
         # Validation can fail before log creation, including when the work folder itself is unwritable.
@@ -1217,7 +1280,13 @@ class Build:
             try:
                 self.libraries = library_pins.select(self.tc, self.work, self.on_line)
             except (toolchain.Refused, OSError, ValueError) as exc:
-                raise BuildFailed(str(exc)) from exc
+                details = getattr(exc, 'details', '')
+                try:
+                    with open(self.log_path, 'a', encoding='utf-8', newline='\n') as log:
+                        log.write(str(exc) + '\n' + details + '\n')
+                except OSError:
+                    pass  # A blocked/full log must not hide the setup failure.
+                raise BuildFailed(str(exc), self.log_path, details) from exc
             return version, copied, removed
         finally:
             if not getattr(self, '_running', False):
@@ -1234,7 +1303,8 @@ class Build:
 
     def environment(self):
         """build.sh's environment, after prepare(): the release profile's source link and, for a source build, the
-        commit the HOME Menu publisher line names (a kit's build never carries one, even from a stale shell)."""
+        commit the HOME Menu publisher line names (a kit's build never carries one, even from a stale shell). Only a
+        kit's verified build asks smdh.cmake for the release version and publisher, and a stale shell can't ask."""
         env = dict(os.environ)
         env["CTRPORT_CCACHE_DIR"] = os.path.join(self.work, "ccache")
         env["PYTHONDONTWRITEBYTECODE"] = "1"
@@ -1245,9 +1315,12 @@ class Build:
         # reused mirror still has an old ON CMake cache entry.
         env["CTRPORT_PLAYER_BUILD"] = "1"
         env.pop("CTRPORT_SMDH_SOURCE", None)
+        env.pop("CTRPORT_SMDH_RELEASE", None)
         stamp = smdh_source(self.release_source)
         if stamp:
             env["CTRPORT_SMDH_SOURCE"] = stamp
+        else:
+            env["CTRPORT_SMDH_RELEASE"] = "1"
         env.pop("CTRPORT_FILE_PREFIX_MAP", None)
         env.pop('CTRPORT_LIBRARY_SHIMS', None)
         shims = getattr(self, 'libraries', {}).get('shims')
@@ -1278,14 +1351,17 @@ class Build:
         t0 = time.monotonic()
         self._running = True
         version, copied, removed = self.prepare()
-        # A macOS copy's game.ios is staged as data.win (products.aot_data_dir); a Windows copy is used where it is.
+        # UNDERTALE's data.win/game.ios is staged under its tested AOT label (products.aot_data_dir).
         if self.product.key == 'deltarune':
             try:
                 data_dir, self.parts = chapters.stage(self.data_dir, self.work, self.parts)
             except (OSError, ValueError) as exc:
                 self.refuse_game_files(exc)
         else:
-            data_dir = products.aot_data_dir(self.product, self.data_dir, os.path.join(self.work, "data"))
+            try:
+                data_dir = products.aot_data_dir(self.product, self.data_dir, os.path.join(self.work, "data"))
+            except (OSError, ValueError) as exc:
+                self.refuse_game_files(exc)
         argv = build_argv(self.tc, self.work, self.product.key, self.target, data_dir, self.openh264,
                           platform=self.tc.platform)
         env = self.environment()
@@ -1326,7 +1402,9 @@ class Build:
             if not self.tc.package_versions:
                 log.write("  unavailable\n")
             try:
-                art = self.art_generator(self.product.key, data_dir,
+                # UNDERTALE's private AOT copy has no executable SOUL icon.
+                art_data_dir = self.data_dir if self.product.key == 'undertale' else data_dir
+                art = self.art_generator(self.product.key, art_data_dir,
                     os.path.join(self.work, "src", "platform", "3ds", "assets"),
                     os.path.join(self.tc.root or "/opt/devkitpro", "tools", "bin",
                                  "tex3ds.exe" if self.tc.platform == "win32" else "tex3ds"), store=self.store)
@@ -1363,9 +1441,12 @@ class Build:
             raise BuildFailed("The game code could not be prepared.\n"
                               "Click Try again, or click Copy log to report the error.", self.log_path)
         if rc != 0:
-            for line in Path(self.log_path).read_text(encoding='utf-8', errors='replace').splitlines():
+            lines = Path(self.log_path).read_text(encoding='utf-8', errors='replace').splitlines()
+            for index, line in enumerate(lines):
                 if line.startswith('LIBRARY REFUSED: '):
-                    raise BuildFailed(line.removeprefix('LIBRARY REFUSED: '), self.log_path)
+                    raise BuildFailed('The required 3DS files did not pass the final check, so the game was not built. '
+                                      'Choose Try again, or Copy log for support.', self.log_path,
+                                      '\n'.join(lines[index:]))
         if rc != 0:
             raise BuildFailed("The build stopped (exit code %d).\n"
                               "Click Try again, or click Copy log to report the error." % rc, self.log_path)
@@ -1390,9 +1471,9 @@ class Build:
                 if self.cancelled:
                     raise BuildFailed('The build was cancelled.', self.log_path) from error
                 reason = sfx_pack_problem(self.source_root) or 'its sound step failed (the build log says why)'
-                message = SFX_PACK_MISSING % reason
+                message = SFX_PACK_MISSING
                 with open(self.log_path, 'a', encoding='utf-8', newline='\n') as log:
-                    log.write(message + '\n' + 'builder: sfxpack: ' + str(error) + '\n')
+                    log.write(message + '\n' + 'builder: sfxpack: ' + reason + ': ' + str(error) + '\n')
                 self.on_line(message)
                 self.notices.append(message)
                 pack = None
@@ -1458,12 +1539,13 @@ class Build:
                 if (os.path.getsize(temporary) != size or sha256_file(temporary) != digest or
                         os.path.getsize(p) != size or sha256_file(p) != digest):
                     raise BuildFailed("The finished build could not be copied correctly. "
-                                      "Any previous output was kept. Try again.", self.log_path)
+                                      "Some build files may already have been updated. Check free space and access "
+                                      "to the work folder, then try again.", self.log_path)
                 os.replace(temporary, dst)
                 temporary = None
             except OSError as exc:
-                raise BuildFailed("The finished build could not be saved. Any previous output was kept. "
-                                  "Check the work folder and try again.", self.log_path) from exc
+                raise BuildFailed("The finished build could not be saved. Some build files may already have been updated. "
+                                  "Check free space and access to the work folder, then try again.", self.log_path) from exc
             finally:
                 if temporary is not None:
                     try:

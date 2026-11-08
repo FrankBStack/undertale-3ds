@@ -260,9 +260,14 @@ void CtrRenderer_leaveForExit(Renderer* renderer);
 // end of ctr_renderer.c. ctr_renderer.c expands E5X_DECLARE in place of a blank line above SKIP_WRAPPERS, so no line
 // above the warm functions moves, and the wrappers stay static: new global symbols reorder the linker's GOT.
 #define E5X_LATE __attribute__((noinline, section(".text.late.pmengine")))
+#if defined(CTRPORT_RENDER_TIMING)
+#define E5X_PART_EMIT_DECLARE
+#else
+#define E5X_PART_EMIT_DECLARE static void partEmit(CtrRenderer*, CtrPage*, float, float, float, float, const float*, const float*, const CtrColor*);
+#endif
 #define E5X_DECLARE                                                                                                                                  \
     static void partDrawSprite(Renderer*, int32_t, float, float, float, float, float, float, float, float, float, float, float, uint32_t, float); \
-    static void partEmit(CtrRenderer*, CtrPage*, float, float, float, float, const float*, const float*, const CtrColor*); \
+    E5X_PART_EMIT_DECLARE \
     static void e5xDrawSprite(Renderer* renderer, int32_t tpagIndex, float x, float y, float originX, float originY, float xscale, float yscale,     \
                               float angleDeg, uint32_t color, float alpha);                                                                          \
     static void e5xDrawSpritePart(Renderer* renderer, int32_t tpagIndex, float srcOffX, float srcOffY, float srcW, float srcH, float x, float y,     \
@@ -288,7 +293,55 @@ void CtrRenderer_leaveForExit(Renderer* renderer);
                                  int32_t c2, int32_t c3, int32_t c4, float alpha, float lineSeparation);                                             \
     static void e5xDrawSpriteTiled(Renderer* renderer, int32_t tpagIndex, float originX, float originY, float x, float y, float xscale,              \
                                    float yscale, bool tileX, bool tileY, float roomW, float roomH, uint32_t color, float alpha); \
+    BONEPULSE_DECLARE                                                                                                                                \
     KGL_DECLARE
+// Bones in one piece (change bonepulse, the end of ctr_renderer.c): the vtable's normal and frame-skip sprite, sprite-part,
+// rectangle and line entries, which move a listed object's pieces as one.
+// UNDERTALE only (ENABLE_WAD16). DELTARUNE declares none of them and its vtable keeps the draws it had (BP_*).
+#if defined(ENABLE_WAD16)
+#define BONEPULSE_DECLARE                                                                                                                            \
+    static void bpDrawSpritePart(Renderer*, int32_t, float, float, float, float, float, float, float, float, float, float, float, uint32_t, float); \
+    static void bpSkipDrawSpritePart(Renderer*, int32_t, float, float, float, float, float, float, float, float, float, float, float, uint32_t,     \
+                                     float);                                                                                                        \
+    static void bpDrawSpritePartColor(Renderer*, int32_t, float, float, float, float, float, float, float, float, float, float, float, uint32_t,    \
+                                      uint32_t, uint32_t, uint32_t, float);                                                                         \
+    static void bpSkipDrawSpritePartColor(Renderer*, int32_t, float, float, float, float, float, float, float, float, float, float, float,          \
+                                          uint32_t, uint32_t, uint32_t, uint32_t, float);                                                           \
+    static void bpDrawRectangle(Renderer*, float, float, float, float, uint32_t, float, bool);                                                      \
+    static void bpSkipDrawRectangle(Renderer*, float, float, float, float, uint32_t, float, bool);                                                  \
+    static void bpDrawSprite(Renderer*, int32_t, float, float, float, float, float, float, float, uint32_t, float);                                 \
+    static void bpSkipDrawSprite(Renderer*, int32_t, float, float, float, float, float, float, float, uint32_t, float);                             \
+    static void bpDrawLine(Renderer*, float, float, float, float, float, uint32_t, float);                                                          \
+    static void bpSkipDrawLine(Renderer*, float, float, float, float, float, uint32_t, float);                                                      \
+    static void bpDrawLineColor(Renderer*, float, float, float, float, float, uint32_t, uint32_t, float);                                           \
+    static void bpSkipDrawLineColor(Renderer*, float, float, float, float, float, uint32_t, uint32_t, float);
+#define BP_DRAWSPRITE bpDrawSprite
+#define BP_SKIP_DRAWSPRITE bpSkipDrawSprite
+#define BP_DRAWSPRITEPART bpDrawSpritePart
+#define BP_SKIP_DRAWSPRITEPART bpSkipDrawSpritePart
+#define BP_DRAWSPRITEPARTCOLOR bpDrawSpritePartColor
+#define BP_SKIP_DRAWSPRITEPARTCOLOR bpSkipDrawSpritePartColor
+#define BP_DRAWRECTANGLE bpDrawRectangle
+#define BP_SKIP_DRAWRECTANGLE bpSkipDrawRectangle
+#define BP_DRAWLINE bpDrawLine
+#define BP_SKIP_DRAWLINE bpSkipDrawLine
+#define BP_DRAWLINECOLOR bpDrawLineColor
+#define BP_SKIP_DRAWLINECOLOR bpSkipDrawLineColor
+#else
+#define BONEPULSE_DECLARE
+#define BP_DRAWSPRITE e5xDrawSprite
+#define BP_SKIP_DRAWSPRITE skipDrawSprite
+#define BP_DRAWSPRITEPART e5xDrawSpritePart
+#define BP_SKIP_DRAWSPRITEPART skipDrawSpritePart
+#define BP_DRAWSPRITEPARTCOLOR e5xDrawSpritePartColor
+#define BP_SKIP_DRAWSPRITEPARTCOLOR skipDrawSpritePartColor
+#define BP_DRAWRECTANGLE e5xDrawRectangle
+#define BP_SKIP_DRAWRECTANGLE skipDrawRectangle
+#define BP_DRAWLINE e5xDrawLine
+#define BP_SKIP_DRAWLINE skipDrawLine
+#define BP_DRAWLINECOLOR e5xDrawLineColor
+#define BP_SKIP_DRAWLINECOLOR skipDrawLineColor
+#endif
 
 
 // UNDERTALE's console prompts (z_btnprompt_ctr.c): CtrRenderer_setDisplay and CtrDisplay_saveEdits, then the prompts

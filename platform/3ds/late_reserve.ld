@@ -306,7 +306,7 @@ SECTIONS
     *(.text.late.crispart)
     *(.rodata.late.crispart)
     /* First linked by crispart's private-atlas destruction; keep this library entry out of the frozen .text. */
-    *ctrport.dir/source/ctr_gpu_queue.o(.text.C3D_FrameSync)
+    *ctr_gpu_queue.o(.text.C3D_FrameSync)
     /* smartcut (after crispart, so after the frozen host table; both games): Smart smoothing's
        boxes only where read (ctr_renderer.c's and ctr_benchmark.c's tails), then its constants (in the late text
        block, as on its branch). */
@@ -502,7 +502,7 @@ SECTIONS
     *(.text.late.utasgore)
     /* Any other late text (round 14 dropped the wildcard ahead of the host table: it placed nothing). Not
        ctr_renderer.c's or z_itemverdict.c's, whose smartcut sections come last (round 17). */
-    *(SORT_BY_NAME(EXCLUDE_FILE (*z_utlife.o *z_rngexact* *z_thinart.o *z_dlghold.o *z_redpix.o *z_labcut.o *ctr_fpsbox.o *ctr_legal.o *ctr_legal_romfs.o *z_colexact.o *z_utwindow.o *z_asrtext* *z_adpcm* *ctr_adpcm_probe.o *source/ctr_audio_system.o *z_knightnew_history.o *source/z_flowcode.o *ctr_data_version.o *z_gogut* *ctr_pixgrid* *z_builderx_review* *z_builderx_new* *z_builderx_old* *z_builderx_receipt* *runner.o *z_loadscreen.o *z_symverdict* *z_smalltext_dr* *z_utstall* *z_sdmigrate* *source/ctr_renderer.o *source/z_itemverdict.o *z_phaseplan* *z_utold_scalar* *source/ctr_benchmark.o *z_sdlat* *vm_builtins.o *z_gamedir* *ctr_flowervramg_promotion.o *ctr_memory.o *ctr_flowervramg_palette.o *ctr_textures.o *z_hashmenu.o *state_hash.o *random.o *z_saveaudit.o *z_saveaudit_format.o *z_saveaudit_scan.o) .text.late.*))
+    *(SORT_BY_NAME(EXCLUDE_FILE (*z_utlife.o *z_roomload.o *z_upd1_options.o *z_upd1_audio.o *z_upd1_text.o *z_rngexact* *z_thinart.o *z_dlghold.o *z_redpix.o *z_labcut.o *ctr_fpsbox.o *ctr_legal.o *ctr_legal_romfs.o *z_colexact.o *z_utwindow.o *z_asrtext* *z_adpcm* *ctr_adpcm_probe.o *ctr_audio_system.o *z_knightnew_history.o *z_flowcode.o *ctr_data_version.o *z_gogut* *ctr_pixgrid* *z_builderx_review* *z_builderx_new* *z_builderx_old* *z_builderx_receipt* *runner.o *z_loadscreen.o *z_symverdict* *z_smalltext_dr* *z_utstall* *z_sdmigrate* *ctr_renderer.o *z_itemverdict.o *z_phaseplan* *z_utold_scalar* *ctr_benchmark.o *z_sdlat* *vm_builtins.o *z_gamedir* *ctr_flowervramg_promotion.o *ctr_memory.o *ctr_flowervramg_palette.o *ctr_textures.o *z_hashmenu.o *state_hash.o *random.o *z_saveaudit.o *z_saveaudit_format.o *z_saveaudit_scan.o *libswkbd_late.a:*) .text.late.*))
     /* builderx UT-only adapters, after every round-14 fixed section. DR excludes this object. */
     *z_builderx_review*(.text .text.* .rodata .rodata.*)
     *(.text.h1hole.bxreview)
@@ -543,9 +543,24 @@ SECTIONS
        catch-all above leaves them here. z_swkbd.c (a library linked after libctru's original members) with its
        constants and anything else of that library, then the library code it brings in: libctru's keyboard applet and
        the applet launch functions apt.o had not linked. */
-    *(.text.swkbd_late)
+    /* Pin the original compiler order; the applet bodies now have retained branch entries. */
+    *(.text.swkbd_late.readInt)
+    *(.text.swkbd_late.refuseXZ)
+    *(.text.swkbd_late.keyFor)
+    *(.text.swkbd_late.takeText)
+    *(.text.swkbd_late.lookupVarId)
+    *(.text.swkbd_late.resolve)
+    *(.text.swkbd_late.finishFeed)
+    *(.text.swkbd_late.openKeyboard)
+    *(.text.swkbd_late.readPrompt)
+    *(.text.swkbd_late.findEssay)
+    *(.text.swkbd_late.watchStep)
+    *(.text.swkbd_late.feedStep)
+    *(.text.swkbd_late.CTR_STEP_SWKBD)
+    *(.text.swkbd_late.CTR_ENDFRAME_SWKBD)
     *(.rodata.swkbd_late)
-    *libswkbd_late.a:*(.text .text.* .rodata .rodata.*)
+    /* The library's named sections are explicit; leave essayend's new section for the append below. */
+    *libswkbd_late.a:*(.text .rodata)
     *libctru.a:swkbd.o(.text .text.* .rodata .rodata.*)
     *libctru.a:apt.o(.text.aptLaunchLibraryApplet .text.APT_PrepareToStartLibraryApplet .text.APT_StartLibraryApplet
                      .text.aptSetMessageCallback .text.APT_SendParameter)
@@ -565,8 +580,8 @@ SECTIONS
        (every other late section of ctr_renderer.c has its own line before it). */
     *(.text.late.itemverdict)
     *(.rodata.itemverdict_in_text)
-    *source/ctr_renderer.o(SORT_BY_NAME(.text.late.*))
-    *source/z_itemverdict.o(SORT_BY_NAME(.text.late.*))
+    *ctr_renderer.o(SORT_BY_NAME(.text.late.*))
+    *z_itemverdict.o(SORT_BY_NAME(.text.late.*))
     /* rosalina2 (round 17, after smartcut's item verdicts, merge order; both games): the Rosalina watcher
        (ctr_rosalina.c and the accessor at ctr_screens.c's end), then its constants. Named outside .text.late.* so the
        catch-all above leaves them here. */
@@ -607,7 +622,7 @@ SECTIONS
        lines before it). */
     *(.text.late.pacer_rows)
     *(.rodata.pacer_rows_in_text)
-    *source/ctr_benchmark.o(SORT_BY_NAME(.text.late.*))
+    *ctr_benchmark.o(SORT_BY_NAME(.text.late.*))
     /* builderx receipt binding (last, merge order): archive timestamp lookup is cold too. */
     *(.text.late.builderxreceipt)
     *libctru.a:archive_dev.o(.text.archive_getmtime)
@@ -1707,9 +1722,174 @@ SECTIONS
        page waits for its screen's vblank before the copy (z_credclip.c's end, reached from ctr_legal.c's wrap). Named
        outside .text.* so z_credclip.o's catch-all leaves it here; appended, so no earlier late code moves. */
     *(.text_credwait)
+    /* menupress (menusound, after credwait, merge order; both games): a press in the options menu has its sound
+       only if it changed something (ctr_optmenu.c's optKeysHeard, and the hooks at the end of ctr_legal.c and ctr_ctrlui.c).
+       Named outside .text.*, so no catch-all takes it; appended, so no earlier late code moves. Its statics are
+       .bss.menupress_late, below; its constants follow it (polish audit's new row text). */
+    *(.text_menupress)
+    *(.rodata.menupress_in_text)
+    KEEP(*(.rodata.noticekeep_in_text)) /* noticeKeep: no code refers to it */
+    /* homeaudio (after menupress, merge order; UNDERTALE only, empty in DELTARUNE): the sound stops with the picture on HOME
+       (z_argcrash.c's and ctr_audio_system.c's ends). Named outside .text.*, so no catch-all takes it; appended, so no
+       earlier late code moves. No constants. With it libctru's aptShouldJumpToHome (its one caller is this code, so the
+       link only now keeps it; in .text it would move every warm function after apt.o's by 56 B). */
+    *(.text.aptShouldJumpToHome)
+    *(.text_homeaudio)
+    /* poffroom (after credwait, merge order; UNDERTALE Old only, empty elsewhere): the snow floor's Draw at rest
+       (z_snowfloor.c, its wrapper and operands from aot_table.c) and draw_circle's fan as quads (ctr_renderer.c's end).
+       Named outside .text.* so ctr_renderer.o's catch-all leaves it here; appended, so no earlier late code moves. */
+    *(.text_snowfloor)
+    *(.text_snowfloor_ops)
+    *(.text_fanquads)
+    /* dlgblank (crispgap, after poffroom, merge order; UNDERTALE only, empty in DELTARUNE): a bottom transfer into
+       the buffer on screen starts in the bottom's blank (ctr_gpu_queue.c's end). Named outside .text.* so its catch-all
+       leaves it here; appended, so no earlier late code moves. */
+    *(.text_dlgblank)
+    /* menuhold (menusound, review R379 F2, after dlgblank, merge order; both games): held Up or Down on the options
+       menu's lists, the ">" on the rows that open a page, and the FPS counter's corner over that menu (ctr_optmenu.c, and the
+       two list ends in ctr_ctrlui.c and ctr_legal.c), then its constant. Named outside .text.*, so no catch-all takes it;
+       appended, so no earlier late code moves. */
+    *(.text_menuhold)
+    *(.rodata.menuhold_in_text)
+    /* keep-lit (dlglight, after every other append, merge order; UNDERTALE only, empty in DELTARUNE): the bottom
+       backlight stays on with Other screen Off and dialogue there (z_keeplit.c). Appended, so no earlier late code moves.
+       It is the last S7 line: R380c's UT-001 lowering, then the first-update appends, follow it. */
+    *z_keeplit.o(.text .text.* .rodata .rodata.*)
+    /* UT-001 lowering (rosaport, after keep-lit, merge order; UNDERTALE Old only, empty elsewhere): z_rosalow.c's
+       code and constants, and ctr_rosalina.c's one function for it. Named outside .text.late.*, so the catch-alls leave
+       it here; appended, so no earlier late code moves. */
+    *(.text_rosalow)
+    *z_rosalow.o(.text .text.* .rodata .rodata.*)
+    /* First update (upd1), appended after every S7 line and R380c's lowering, in merge order, so no S7 late code moves. */
+    /* upd1-s7: fallible room-code arena, first after the lowering. */
+    *(.text.late.upd1)
+    /* parity: saved-room reinsertion order, after upd1-s7; no per-frame code or state. */
+    *(.text.late.parity)
+    /* drawbatch seam copy (after parity, merge order; UNDERTALE only, empty elsewhere): a fine draw whose texels span
+       tiles draws from one copy of its tiles' parts (ctr_renderer.c's end) and its log formats. Named outside
+       .text.late.* so ctr_renderer.o's catch-all leaves it here. */
+    *(.drawbatch_text)
+    *(.drawbatch_text_ro)
+    /* oflog (first update, bootmask, after drawbatch, merge order; UNDERTALE only, empty in DELTARUNE): a room
+       change's open-files line skips the handle census where the kernel gives no count (z_oflog.c, through --wrap).
+       Its code and its one string; appended, so no earlier late code moves. */
+    *z_oflog.o(.text .text.* .rodata .rodata.*)
+    /* entryload partial tiles (entryload, after oflog, merge order; UNDERTALE Old only, empty elsewhere):
+       the dialogue fonts' tiles kept packed in the heap (ctr_textures.c's end), then its constants. Named
+       outside .text.*, so no catch-all takes it; appended, so no earlier late code moves. */
+    *(.text_entryload)
+    *(.rodata.entryload_in_text)
+    /* thinrule (first update, after entryload, merge order; R414 F2: after every late line S8a links; UNDERTALE
+       only, empty in DELTARUNE): Smart smoothing's whole-rows table (z_thinrule.c) and the fallback that draws from
+       it (ctr_renderer.c; emitPageRegionVisible stays in place, only its call to smartEmitAveraged now goes to
+       thinruleAveraged), then its constants. Named outside .text.* and .rodata.*, so no catch-all takes them;
+       appended, so no earlier late code moves. */
+    *(.text_thinrule)
+    *(.rodata.thinrule_in_text)
+    /* stackfloor (stackfloor, after thinrule, merge order; R414 F2 rule: after every late line S8b links;
+       UNDERTALE only, empty in DELTARUNE): no thread stack under 8 KiB; ctr_memory.c's threadCreate wrap calls
+       it (z_stackfloor.c). Appended, so no earlier late code moves. */
+    *z_stackfloor.o(.text .text.* .rodata .rodata.*)
+    /* menufirst (menufirst, after stackfloor, merge order (F2); UNDERTALE only, empty in DELTARUNE): the options menu's
+       sounds cached at each room load and its page copied at its screen's vblank (ctr_optmenu.c's end). Named outside
+       .text.*, so no catch-all takes it; appended, so no earlier late code moves. No constants, no statics. */
+    *(.text_menufirst)
+    /* scanout (scanout, after entryload on S8a; in S8b after menufirst and every append merged before it, merge
+       order; UNDERTALE only, empty in DELTARUNE): a setup notice's page painted in its screen's spare buffer and copied
+       at that screen's vblank (z_scanout.c). Named outside .text.*, so no catch-all takes it; appended, so no earlier
+       late code moves. No constants, no statics. */
+    *(.text_scanout)
+    /* packopen (packopen, after entryload on S8a; in S8b after scanout and every append merged before it, merge
+       order): startup-only loader handle warming (ctr_audio_system.c's end); no data or bss. The catch-all
+       excludes ctr_audio_system.o, so this line places it; appended, so no earlier late code moves. */
+    *(.text.late.packopen)
+    /* loadclass (loadclass, after packopen, merge order; UNDERTALE only, empty in DELTARUNE): the opener's note
+       link that opens the intro story's song at boot and asks flowend's phase-song spare for the title's noise
+       and the cast roll's first song (ctr_audio_system.c's end). The catch-all excludes ctr_audio_system.o, so
+       this line places it; appended, so no earlier late code moves. No constants, no statics. */
+    *(.text.late.loadclass)
+    /* musicloop (musicloop, after menufirst on its branch; in S8b after loadclass, merge order; UNDERTALE only,
+       empty in DELTARUNE): a stopped stream's PC fade and the both-channel loop seam (ctr_audio_system.c's end).
+       Named outside .text.*, so no catch-all takes it; appended, so no earlier late code moves. No constants, no
+       statics. */
+    *(.text_musicloop)
+    /* errtext E1 (errtext, after keep-lit on S7; in S8b after musicloop, merge order; UNDERTALE only, empty
+       in DELTARUNE): expanded button names and game-font sprites (z_errtext_e1.c), its constants and
+       ctr_renderer.c's two words for it. No file wildcard above matches z_errtext_e1.o; appended, so no
+       earlier late code moves. */
+    *(.text.errtext_e1)
+    *(.rodata.errtext_e1_in_text)
+    *z_errtext_e1.o(.text .text.* .rodata .rodata.*)
+    /* menuborder (menuborder, after packopen on its branch; in S8b after errtext E1, merge order; UNDERTALE
+       only, empty in DELTARUNE): the menu frame's third ring, drawn on the spare page just before its copy
+       (z_menuborder.c). Named outside .text.*, so no catch-all takes it; appended, so no earlier late code moves. */
+    *(.text_menuborder)
+    /* bonepulse (bonepulse, after packopen on its branch; in S8b after menuborder, merge order): bone objects'
+       sprite parts and rectangles moved as one piece on a halved target (ctr_renderer.c's end), then its constants
+       (the three object names). Named outside .text.* and .rodata.*, so no catch-all takes them; appended, so no
+       earlier late code moves. */
+    *(.text_bonepulse)
+    *(.rodata.bonepulse_in_text)
+    /* snowkick (snowkick, after packopen on its branch; in S8b after bonepulse, merge order; UNDERTALE Old
+       only, empty elsewhere): the snow floor's Draw with kicked balls (z_snowkick.c), then gmlaot's wrapper for it
+       and its operands (aot_table.c, UTF_NATIVE_NEXT). Named outside .text.*, so no catch-all takes them; appended,
+       so no earlier late code moves. No statics; its constants are in its code. */
+    *(.text_snowkick)
+    *(.text_snowkick_ops)
+    /* thinslot (logsweep, after entryload on S8a; in S8b after snowkick, merge order; UNDERTALE only, empty in
+       DELTARUNE): UT-028's bubble art after any number of Smart copies and on GOG, as links wrapped around thinart's
+       unchanged ones (z_thinart.c's end), then its one constant. Named outside .text.* and .rodata.*, so no catch-all
+       takes them; appended, so no earlier late code moves. Its one flag is in the padding of thinart's statics. */
+    *(.text_thinslot)
+    *(.rodata.thinslot_in_text)
+    /* noticescroll (after packopen on its branch; in S8b after thinslot, merge order): the Legal/Credits bulk
+       clear, with its r1-preserving ABI bridge. No state. ctr_legal.o is excluded from the catch-all; appended, so
+       every existing symbol keeps its address. */
+    *(.text.late.noticescroll)
+    /* menuquiet (menuborder, 11-08; in S8b after noticescroll, merge order): the options menu's silent
+       back/close classification (ctr_optmenu.c). Appended after every composed input, so no earlier late code
+       moves. */
+    *(.text_menuquiet)
+    /* gmlstubs (gmlstubs, R424b; after entryload on S8a, in S8b after menuquiet, merge order): legacy
+       background variables, code and constants both in appended late text, then its bridge. Appended, so no
+       earlier late code moves. */
+    *z_gmlstubs.o(.text .text.* .rodata .rodata.*)
+    *(.gmlstubs_bridge)
+    /* papvoice (papvoice, after packopen on its branch; in S8b after gmlstubs, merge order; UNDERTALE only,
+       empty in DELTARUNE): the sound plan's small text voices read at their play (z_utsfx.c's and
+       ctr_audio_system.c's ends). Named outside .text.*, so no catch-all takes it; appended, so no earlier late
+       code moves. No constants, no statics. */
+    *(.text_papvoice)
+    /* popbot (popbot, after menuborder on its branch; in S8b after papvoice, merge order; UNDERTALE only,
+       empty in DELTARUNE): overworld popups on
+       the bottom screen with the dialogue (z_popbot.c), its constants and ctr_renderer.c's layout words for it. No
+       file wildcard above matches z_popbot.o; named outside .text.*, appended, so no earlier late code moves. */
+    *(.text_popbot)
+    *(.rodata.popbot_in_text)
+    *z_popbot.o(.text .text.* .rodata .rodata.*)
+    /* quitblack (after packopen on its branch; in S8b after popbot, merge order; UNDERTALE): the two-screen Quit
+       present and menu adapters. Outside .text.late.* so the optmenu/renderer catch-alls above cannot consume the
+       new tail. No state. */
+    *(.text_quitblack)
+    /* essayend (UNDERTALE only): applet return and the hold/alarm finish; original swkbd entries retain their slots. */
+    *(.text.late.essayend)
+    /* btmoving (tilemiss round 6, 11-08; after packopen on its branch, in S8b after essayend; UNDERTALE Old
+       only, empty elsewhere): btlentry's check that the soul is still flying to its battle spot (z_btlentry.c's
+       btMoving) and its choice of what to read ahead (btTarget: a New Home story battle reads its room's own set),
+       then their names. Outside btlentry's fixed slot; named outside .text.*, so no catch-all takes it; appended,
+       so no earlier late code moves. Its state lives in btlentry's bt (taken from the code path's buffer): no bss
+       is added. */
+    *(.text.btmoving_late)
+    *(.rodata.btmoving_in_text)
+    /* errtext centering (errtext R417d; in S8b after btmoving, the last late input, merge order; never beside
+       E1's old line): the long-button cell's centering geometry. No earlier slot grows. */
+    *(.errtext_center_late)
+    /* dlgwhite (dlgtop, white-box fix 78c6b3d19; in S8b after errtext centring, the last late input, merge
+       order): keep fills in recorded dialogue. */
+    *(.text_dlgwhite)
     /* repack test install (repacka, 11-02; build.sh repacktest= test builds only, empty in every release build):
        diag/ctr_repack_test.c's code and constants, last, so a test build keeps every late address of the release
-       build. Keep these two lines last in late text. */
+       build. Keep these two lines last in late text; new appends go above this comment. */
     *(.repack_test)
     *(.repack_test_ro)
   }
@@ -1873,7 +2053,7 @@ SECTIONS
     *(.rodata.late.pacer)
     /* oomport (integrate round 15, after pacer): checked optional renderer/history arrays. */
     *(.rodata.late.oomport)
-    *(SORT_BY_NAME(EXCLUDE_FILE (*z_saveaudit.o *z_saveaudit_format.o *z_saveaudit_scan.o *z_thinart.o *z_dlghold.o *z_redpix.o *ctr_legal.o *z_utwindow.o *z_asrtext* *z_adpcm* *ctr_adpcm_probe.o *source/ctr_audio_system.o *z_knightnew_history.o *source/z_flowcode.o *ctr_flowervramg_promotion.o *ctr_flowervramg_palette.o *z_gogut* *z_builderx_new* *z_builderx_receipt* *z_sdlat*) .rodata.late.*))
+    *(SORT_BY_NAME(EXCLUDE_FILE (*z_upd1_options.o *z_upd1_audio.o *z_upd1_text.o *z_saveaudit.o *z_saveaudit_format.o *z_saveaudit_scan.o *z_thinart.o *z_dlghold.o *z_redpix.o *ctr_legal.o *z_utwindow.o *z_asrtext* *z_adpcm* *ctr_adpcm_probe.o *ctr_audio_system.o *z_knightnew_history.o *z_flowcode.o *ctr_flowervramg_promotion.o *ctr_flowervramg_palette.o *z_gogut* *z_builderx_new* *z_builderx_receipt* *z_sdlat*) .rodata.late.*))
     *(.rodata.late.builderxnew)
     *(.rodata.late.builderxreceipt)
     *(.rodata.late.gogut)
@@ -1965,6 +2145,8 @@ SECTIONS
     *z_saveaudit_format.o(.rodata .rodata.*)
     *z_saveaudit_scan.o(.rodata .rodata.*)
     *(.rodata.late.audpar)
+    /* upd1-s7: pending-settings path, after S7 constants. */
+    *(.rodata.late.upd1)
     __late_rodata_end = ABSOLUTE(.);
   }
   /* 8 KiB (at first 4 KiB): late code's constants are mostly log formats; heapfrag's are 472 B, and
@@ -2034,7 +2216,7 @@ SECTIONS
     *(.data.late.pacer_vc)
     /* utold lava (integrate round 16): its data. */
     *(.data.late.utlava)
-    *(SORT_BY_NAME(EXCLUDE_FILE (*z_thinart.o *z_labcut.o *ctr_fpsbox.o *z_utwindow.o *z_asrtext* *z_adpcm* *ctr_adpcm_probe.o *source/ctr_audio_system.o *z_knightnew_history.o *source/z_flowcode.o *z_gogut* *z_builderx_new* *z_builderx_old* *z_loadscreen.o *source/ctr_benchmark.o *z_sdlat*) .data.late.*))
+    *(SORT_BY_NAME(EXCLUDE_FILE (*z_upd1_options.o *z_upd1_audio.o *z_upd1_text.o *z_thinart.o *z_labcut.o *ctr_fpsbox.o *z_utwindow.o *z_asrtext* *z_adpcm* *ctr_adpcm_probe.o *ctr_audio_system.o *z_knightnew_history.o *z_flowcode.o *z_gogut* *z_builderx_new* *z_builderx_old* *z_loadscreen.o *ctr_benchmark.o *z_sdlat*) .data.late.*))
     *(.data.late.builderxnew)
     *(.data.late.builderxold)
     *(.data.late.builderxoldconst)
@@ -2043,7 +2225,7 @@ SECTIONS
     /* pacer RAM spool (round 17, last, merge order): the spool's pointer, then any other late data of ctr_benchmark.c,
        which is out of the catch-all above. */
     *(.data.late.pacer_rows)
-    *source/ctr_benchmark.o(SORT_BY_NAME(.data.late.*))
+    *ctr_benchmark.o(SORT_BY_NAME(.data.late.*))
     *(.data.late.gogut)
     *(.data.late.sdlat) *z_sdlat*(.data .data.*)
     /* builderx chapter setup (round 19, last, merge order): its progress state. */
@@ -2087,6 +2269,15 @@ SECTIONS
     /* pacer A (last, after thinart, merge order; UNDERTALE Old only): the audio arena's lock, lists and counters. */
     *(.pacer_arena_data)
     *(.data.utcredepi_late)
+    /* drawbatch R400: zeroed draw counters in the paid data reserve, after all existing data. */
+    *(.data.drawbatch_late)
+    /* errtext E1: explicit zero-initialised mutable state in the paid reserve;
+       no new BSS, preserving Old's heap page boundary. */
+    *(.data_errtext_e1)
+    *z_errtext_e1.o(.data .data.*)
+    /* bonepulse (after drawbatch on its branch; in S8b after errtext E1, merge order): the three bone objects'
+       indices, found once (ctr_renderer.c's end). */
+    *(.data.bonepulse_late)
     __late_data_end = ABSOLUTE(.);
   }
   __late_data_limit = __late_data_start + 0x1000;
@@ -2250,7 +2441,7 @@ SECTIONS
     *(.bss.late.bootlog)
     /* utasgore (round 17, after bootlog, before the catch-all): the steady path's plan cache (utaKeys). */
     *(.bss.late.utasgore)
-    *(SORT_BY_NAME(EXCLUDE_FILE (*z_thinart.o *z_labcut.o *ctr_fpsbox.o *z_utwindow.o *z_asrtext* *z_adpcm* *ctr_adpcm_probe.o *source/ctr_audio_system.o *z_knightnew_history.o *source/z_flowcode.o *z_gogut* *z_loadscreen.o *z_symverdict* *z_smalltext_dr* *z_utstall* *z_sdmigrate* *libswkbd_late.a:* *source/ctr_renderer.o *source/z_itemverdict.o *z_phaseplan* *z_sdlat* *z_gamedir* *ctr_flowervramg_palette.o *z_saveaudit_format.o) .bss.late.*))
+    *(SORT_BY_NAME(EXCLUDE_FILE (*z_upd1_options.o *z_upd1_audio.o *z_upd1_text.o *z_thinart.o *z_labcut.o *ctr_fpsbox.o *z_utwindow.o *z_asrtext* *z_adpcm* *ctr_adpcm_probe.o *ctr_audio_system.o *z_knightnew_history.o *z_flowcode.o *z_gogut* *z_loadscreen.o *z_symverdict* *z_smalltext_dr* *z_utstall* *z_sdmigrate* *libswkbd_late.a:* *ctr_renderer.o *z_itemverdict.o *z_phaseplan* *z_sdlat* *z_gamedir* *ctr_flowervramg_palette.o *z_saveaudit_format.o) .bss.late.*))
     /* packscreen (integrate round 16, after the catch-all, merge order): the setup line it draws. */
     *(.bss.late.packscreen)
     /* symverdict (after packscreen; UNDERTALE only): the table's bits. */
@@ -2275,8 +2466,8 @@ SECTIONS
     /* smartcut (round 17, last, merge order): the item table's last load and the direct tile path's test-build
        counters. Then any other late statics of ctr_renderer.c and z_itemverdict.c, both out of the catch-all above. */
     *(.bss.late.smartcut)
-    *source/ctr_renderer.o(SORT_BY_NAME(.bss.late.*))
-    *source/z_itemverdict.o(SORT_BY_NAME(.bss.late.*))
+    *ctr_renderer.o(SORT_BY_NAME(.bss.late.*))
+    *z_itemverdict.o(SORT_BY_NAME(.bss.late.*))
     /* rosalina2 (round 17, after smartcut, merge order): the Rosalina watcher's statics (ctr_rosalina.c). */
     *(.bss.rosalina2_late)
     *ctr_rosalina.o(.bss .bss.* COMMON)
@@ -2664,6 +2855,33 @@ SECTIONS
     /* gounder (gounder, after audpar, merge order; UNDERTALE Old only): the shared decode's state
        (ctr_audio_system.c's end; named outside .bss.late.* so the catch-alls leave it here). */
     *(.bss.gounder_late)
+    /* menupress (menusound, after gounder, merge order; both games): the press being handled (ctr_optmenu.c). */
+    *(.bss.menupress_late)
+    /* homeaudio (after menupress, merge order; UNDERTALE only): the HOME hold's flag and voices (ctr_audio_system.c's end; named outside
+       .bss.late.* so the catch-alls leave it here). */
+    *(.bss.homeaudio_late)
+    /* dlgblank (crispgap, after homeaudio, merge order; UNDERTALE only): VBlank1's time and a clear waiting for it. */
+    *(.bss.dlgblank_late)
+    /* keep-lit (dlglight, after every other append; UNDERTALE only): whether the bottom stays lit. */
+    *z_keeplit.o(.bss .bss.* COMMON)
+    /* UT-001 lowering (rosaport, after keep-lit, merge order; UNDERTALE Old only): z_rosalow.c's state. */
+    *(.bss.rosalow_late)
+    /* First update (upd1), after keep-lit (the last S7 state) and R380c's lowering, in merge order. */
+    /* upd1-s7: pending-options snapshot, first after the lowering. */
+    *(.bss.late.upd1)
+    /* drawbatch seam copy (after upd1-s7, merge order; UNDERTALE only): the copies' slots and counters
+       (ctr_renderer.c's end; named outside .bss.late.* so the catch-alls leave it here). */
+    *(.bss.drawbatch_late)
+    /* entryload partial tiles (after drawbatch, merge order; UNDERTALE Old only): the font tiles it keeps and
+       their cache (ctr_textures.c's end; named outside .bss.late.* so the catch-alls leave it here). */
+    *(.bss.entryload_late)
+    /* thinrule (first update, after entryload, merge order; R414 F2; UNDERTALE only): the whole-rows table's
+       pointers and the data.win it was read for (z_thinrule.c; named outside .bss.late.* so the catch-alls leave it
+       here). */
+    *(.bss.thinrule_late)
+    /* menufirst R420b (after thinrule, merge order (F2); UNDERTALE only): whether a vblank wait just came, ahead of the options
+       menu's copy (ctr_optmenu.c's end; named outside .bss.late.* so the catch-alls leave it here). */
+    *(.bss.menufirst_late)
     /* 3dsxtool refuses a segment whose size isn't a multiple of 4 ("The segments is not word-aligned!"), and this
        block ends the RW segment: late statics of odd sizes (bools) would end it off a word. */
     . = ALIGN(4);

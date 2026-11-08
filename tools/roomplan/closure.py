@@ -14,13 +14,28 @@ For a scene the closure adds:
   hit; build_plan.whole_set).
 - for an ordinary room, the sprite of each object whose Create event first ran in a shown frame
   (code_create_sprite): these instances did not exist when the room's placed objects were marked.
+- for any whole set containing a tile of the player's normal walk family, every direction in that family.
+  The family is resolved from the player's default sprite and its four named siblings in this file; names and
+  store-specific asset numbers never enter the plan. Unvisited player rooms get the same family.
 - for a battle group, the other sprites of each numbered series it draws from (series_of): UNDERTALE's scripts pick a
   pose from a numbered run of sprites (Mettaton EX's arm poses are eight sprites that differ in their last digit), and
   a recording of one run saw some of the numbers. A series is the sprites whose names are the same but for the digits
   they end in, two at least (utmett: the pose a run first drew late in the fight was one the record never saw, a
   14 KB tile read on the game thread in the middle of an attack).
+- for an ordinary room, the art its own objects can draw that the record did not see (placed art rule, a partial
+  preload: codeclose.CodeClosure.placed_art_sprites, build_plan.placed_art): the lab's Alphys, her portraits and
+  Mettaton in the quiz, the floor's Napstablook on the headphones. Every room but build_plan.PLACED_ART_SKIP_ROOMS.
+- for every battle group, the spare puffs (spare_items; build_plan.spare_art): any fight can end in a spare, and no
+  group's record saw them (the playtest's spared first fight, 11-07: a 21 ms load on the game thread at the spare).
+- the speech bubbles' font (bubble_font_items; build_plan.bubble_font), for the battle groups build_plan names.
 """
+import hashlib
 import struct
+
+# The spare puffs' sprite, found by the SHA-256 of its name so that no name is written here.
+SPARE_SPRITE_SHA256 = 'be9f34130038570df413ea8f87723e97894f039bb422c5f8096364336e9cee39'
+# The battle speech bubbles' font, the same way.
+BUBBLE_FONT_SHA256 = 'bf6d0788d535ca1655b2a90fb0ae90b79173eda74c64b8d44ebb62ab12c155d2'
 
 
 def _u32(d, o):
@@ -44,6 +59,10 @@ class Closure:
             self.code_sprite = []
             self.code_create_sprite = []
             self.sprite_series = []
+            self.walk_objects = []
+            self.walk_items = []
+            self.spare_items = []
+            self.bubble_font_items = []
 
     def _parse(self, d):
         chunks = {}
@@ -104,11 +123,33 @@ class Closure:
         backgrounds = [tindex.get(_u32(d, inside(p + 16, b'BGND')), -1) for p in plist(b'BGND')]
         # An object's sprite, and whether it is visible (an invisible one's sprite is its mask, never drawn by itself).
         objects = [(_i32(d, inside(p + 4, b'OBJT')), _u32(d, inside(p + 8, b'OBJT'))) for p in plist(b'OBJT')]
+        players = {i for i, p in enumerate(plist(b'OBJT'))
+                   if self._name(d, _u32(d, inside(p, b'OBJT'))) == b'obj_mainchara'}
+        names = [self._name(d, _u32(d, inside(p, b'SPRT'))) for p in plist(b'SPRT')]
+        named = {name: s for s, name in enumerate(names) if name is not None}
+        self.spare_items = sorted({item for s, name in enumerate(names)
+                                   if name is not None and hashlib.sha256(name).hexdigest() == SPARE_SPRITE_SHA256
+                                   for item in self.sprite_items[s]})
+        # A font's texture page item is the word at 0x1C of its entry (GameMaker 1.x FONT).
+        self.bubble_font_items = []
+        for p in plist(b'FONT') if b'FONT' in chunks else []:
+            name = self._name(d, _u32(d, inside(p, b'FONT')))
+            item = tindex.get(_u32(d, inside(p + 0x1C, b'FONT')))
+            if name is not None and item is not None and hashlib.sha256(name).hexdigest() == BUBBLE_FONT_SHA256:
+                self.bubble_font_items.append(item)
+        self.walk_items = []
+        for obj in sorted(players):
+            sprite = objects[obj][0]
+            name = names[sprite] if 0 <= sprite < len(names) else None
+            if name and name[-1:] in (b'd', b'u', b'r', b'l'):
+                family = [named.get(name[:-1] + direction) for direction in (b'd', b'u', b'r', b'l')]
+                if all(s is not None for s in family):
+                    self.walk_items = sorted({item for s in family for item in self.sprite_items[s]})
         self.code_sprite = self._code_sprites(d, chunks, plist, objects)
         self.code_create_sprite = self._code_sprites(d, chunks, plist, objects, create_only=True)
-        self.plan_items, self.plan_parts = [], []
+        self.plan_items, self.plan_parts, self.walk_objects = [], [], []
         for p in plist(b'ROOM'):
-            items, parts = set(), []
+            items, parts, walkers = set(), [], set()
             bgs, insts, tiles = (_u32(d, inside(p + off, b'ROOM')) for off in (40, 48, 52))
             for q in plist(b'ROOM', bgs):
                 enabled, index = _i32(d, inside(q, b'ROOM')), _i32(d, inside(q + 8, b'ROOM'))
@@ -116,6 +157,8 @@ class Closure:
                     items.add(backgrounds[index])
             for q in plist(b'ROOM', insts):
                 index = _i32(d, inside(q + 8, b'ROOM'))
+                if index in players:
+                    walkers.add(index)
                 if 0 <= index < len(objects):
                     sprite, visible = objects[index]
                     if visible and 0 <= sprite < len(self.sprite_items):
@@ -126,6 +169,17 @@ class Closure:
                     parts.append((backgrounds[index], sx, sy, w, h))
             self.plan_items.append(sorted(items))
             self.plan_parts.append(sorted(set(parts)))
+            self.walk_objects.append(sorted(walkers))
+
+    def walk_frames(self, room):
+        """Normal walk family for an unrecorded room with a placed player, or none."""
+        return self.walk_items if 0 <= room < len(self.walk_objects) and self.walk_objects[room] else []
+
+    def walk_tiles(self, info, tiles):
+        """Close a whole set containing any walk-family tile, including aliases and battle subscenes."""
+        family = {(p, t) for item in self.walk_items
+                  for p, ts in [info.item_tiles(item)] if p is not None for t in ts}
+        return family if family.intersection(tiles) else set()
 
     @staticmethod
     def _name(d, at):

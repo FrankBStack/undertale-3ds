@@ -4711,6 +4711,38 @@ static bool smartEmitTile(CtrRenderer* r, const SmartTile* t, const SmartAxis* x
 static void smartDirectCheck(const SmartTile* t, const SmartAxis* xa, int32_t nx, const SmartAxis* ya, int32_t ny, CtrColor (*cc)[3]);
 #endif
 #endif
+// change drawbatch (UNDERTALE only, the end of this file): a page draw whose texels span tiles draws each tile's part
+// from one copy of them all, so its quads share a texture. Build with -DCTRPORT_SEAM_OFF for the per-tile draws alone.
+#if defined(SMART_DIRECT) && !defined(CTRPORT_SEAM_OFF)
+#define SEAM_COPY 1
+static void seamColoursAxes(CtrRenderer* r, const CtrColor* c, SmartAxis* xa, int32_t nx, SmartAxis* ya, int32_t ny, const SmartTile* tile, CtrColor (*cc)[3]);
+static void seamEmitPageTiles(CtrRenderer* r, CtrPage* page, float sx0, float sy0, float sx1, float sy1, const float* px, const float* py, const CtrColor* c);
+static void seamEmitRegion(CtrRenderer* r, CtrPage* page, float sx0, float sy0, float sx1, float sy1, const float* px, const float* py, const CtrColor* c);
+#define SMART_COLOURS_AXES seamColoursAxes
+#define SMART_STRADDLE_TILES seamEmitPageTiles
+#define REGION_TILES seamEmitRegion
+// The copies are looked after at each frame's start and freed before their cache is destroyed (z_seamcopy.c).
+void CtrSeam_beginFrame(CtrTextureCache* cache, uint32_t frame);
+void CtrSeam_destroy(CtrTextureCache* cache);
+#define SEAM_BEGIN_FRAME CtrSeam_beginFrame
+#define SEAM_DESTROY_NEXT CtrSeam_destroy
+void CtrSeam_prefetchRoom(CtrTextureCache* cache, Runner* runner);
+#define SEAM_PREFETCH_ROOM CtrSeam_prefetchRoom
+// What the Old models' VRAM wraps call, in place of citro3d (same arguments, so those wraps keep their size).
+bool CtrSeam_texInit(C3D_Tex* tex, C3D_TexCube* cube, C3D_TexInitParams p);
+C3D_RenderTarget* CtrSeam_renderTarget(int width, int height, GPU_COLORBUF colorFmt, C3D_DEPTHTYPE depthFmt);
+#define SEAM_TEX_INIT CtrSeam_texInit
+#define SEAM_RENDER_TARGET CtrSeam_renderTarget
+#else
+#define SMART_COLOURS_AXES smartColoursAxes
+#define SMART_STRADDLE_TILES emitPageTiles
+#define REGION_TILES emitPageTiles
+#define SEAM_BEGIN_FRAME CtrTextures_beginFrame
+#define SEAM_DESTROY_NEXT __real_CtrTextures_destroy
+#define SEAM_PREFETCH_ROOM CtrTextures_prefetchRoom
+#define SEAM_TEX_INIT __real_C3D_TexInitWithParams
+#define SEAM_RENDER_TARGET __real_C3D_RenderTargetCreate
+#endif
 #line 4643
 
 static inline void smartAxes(const float (*span)[5], int32_t n, float back, float o, float k, int32_t a0, float len, bool flip, SmartAxis* out) {
@@ -4893,7 +4925,7 @@ static bool smartEmitAveraged(CtrRenderer* r, CtrPage* page, float sx0, float sy
         for (int32_t j = 0; ny > j; j++) smartAxisTile(&ya[j], tile.whole, tile.tileH, tile.ty);
     }
 #else
-    smartColoursAxes(r, c, xa, nx, ya, ny, &tile, cc);
+    SMART_COLOURS_AXES(r, c, xa, nx, ya, ny, &tile, cc);
 #endif
 #if defined(SMART_DIRECT) && !defined(CTRPORT_SMART_DIRECT_CHECK)
     if (r->smart.copy != nullptr || tile.tile == nullptr || !smartEmitTile(r, &tile, xa, nx, ya, ny, cc))
@@ -4908,7 +4940,7 @@ static bool smartEmitAveraged(CtrRenderer* r, CtrPage* page, float sx0, float sy
                 if (r->smart.copy != nullptr || tile.tile == nullptr) {
                     CtrColor cs[4] = { cc[j][i], cc[j][i], cc[j][i], cc[j][i] };
                     if (r->smart.copy != nullptr) smartCopyQuad(r, x->t0, y->t0, x->t1, y->t1, qx, qy, cs);
-                    else emitPageTiles(r, page, x->t0, y->t0, x->t1, y->t1, qx, qy, cs);
+                    else SMART_STRADDLE_TILES(r, page, x->t0, y->t0, x->t1, y->t1, qx, qy, cs);
                     continue;
                 }
                 if (!tile.tile->valid || !x->on || !y->on) continue;
@@ -4972,6 +5004,249 @@ static void __attribute__((used, noinline, section(".text.late.smartbatch"))) sm
 #endif
 }
 #endif
+
+// ===[ Whole rows (change thinrule, first update; UNDERTALE) ]===
+// Smart smoothing averages a fine sprite only at exactly two texels a surface
+// pixel (smartEmitAveraged); any other shrink fell back to a linear blur, so
+// a one-texel line drawn between 2/3 and 1 raster pixel a texel went grey
+// (Madjick's white hem). For the fine items the build lists (z_thinrule.c,
+// tools/aot/thinrule.py), an upright draw in that range on the application
+// surface, neither axis magnified, is drawn sharp and nearest instead, as PC
+// draws it. Below 1 pixel a
+// texel a row gets at most one sample, so a row one texel thick is skipped
+// whenever no pixel centre falls in it; above 2/3 pixel skipped rows are at
+// least 3 apart, so a skipped row's neighbours are always drawn. A listed row
+// (bright detail its neighbours lack) takes the pixel of its donor (the
+// dimmer neighbour) on the frames that would skip it: the quad is split at
+// that pixel's edges, which samples the listed row, and the rest keeps the
+// draw's own mapping. A pixel next to a listed row whose centre is too near
+// a texel edge for the GPU's rounding to be sure is pinned the same way to
+// the texel it falls in, so a listed row is never drawn twice or lost. Every
+// other draw keeps the blur.
+#if defined(ENABLE_WAD16)
+#include "z_thinrule.h"
+#define THINRULE_TEXT __attribute__((noinline, section(".text_thinrule")))
+// Below this texel side (raster pixels) the fallback keeps its blur.
+#define THINRULE_MIN_SIDE 0.667f
+// Above this one too: an axis magnified even slightly draws one texel two
+// pixels wide, and which one moves as the sprite breathes (bara's shoes at
+// 1.006-1.05, Moldessa's stem), where the blur has no uneven widths.
+#define THINRULE_MAX_SIDE 1.004f
+// A pixel centre this close to a texel's edge (in texels) may sample either
+// texel on the GPU (vertices land on its subpixel grid), so such a pixel next
+// to a listed row is pinned to the texel the rule wants.
+#define THINRULE_EDGE (1.0f / 16.0f)
+// Pinned pixels an axis at most (up to three a listed row).
+#define THINRULE_FORCED 8
+#define THINRULE_SEGS (2 * THINRULE_FORCED + 1)
+
+// One axis of the draw in segments, each from its corner-0 side edge q0 to
+// its corner-1 side edge q1 (drawing units), showing texels t0 to t1.
+typedef struct {
+    float q0[THINRULE_SEGS], q1[THINRULE_SEGS], t0[THINRULE_SEGS], t1[THINRULE_SEGS];
+    int32_t n;
+} ThinruleAxis;
+
+static THINRULE_TEXT const ThinruleEntry* thinruleFind(uint32_t key) {
+    const ThinruleEntry* e = Thinrule_table.entries;
+    uint32_t lo = 0, hi = Thinrule_table.count;
+    while (hi > lo) {
+        uint32_t mid = (lo + hi) >> 1;
+        if (key > e[mid].key) lo = mid + 1;
+        else hi = mid;
+    }
+    return Thinrule_table.count > lo && e[lo].key == key ? &e[lo] : nullptr;
+}
+
+// The axis whose corner-0 side edge is at p0 and corner-1 side edge at p1
+// (drawing units; surface pixel k * p + o, a raster pixel being two surface
+// pixels, moved half a surface pixel by nativeOffset), showing texels t0 to
+// t0 + len, with its nrows listed rows: split at the pixels pinned to a
+// texel. A listed row no pixel centre falls in takes the donor's pixel next
+// to it; a pixel centre within THINRULE_EDGE of the row's edges, which the GPU
+// could round either way, is pinned to the texel it falls in, so the row is
+// drawn once, never twice and never lost. Returns the number of pinned pixels.
+static THINRULE_TEXT int32_t thinrulePin(int32_t* at, float* row, int32_t nf, int32_t j, float texel) {
+    int32_t n = nf;
+    while (n > 0 && at[n - 1] > j) n--;
+    if (n > 0 && at[n - 1] == j) return nf; // already pinned (by an earlier row)
+    for (int32_t m = nf; m > n; m--) {
+        at[m] = at[m - 1];
+        row[m] = row[m - 1];
+    }
+    at[n] = j;
+    row[n] = texel;
+    return nf + 1;
+}
+
+static THINRULE_TEXT int32_t thinruleAxis(const uint8_t* rows, int32_t nrows, float p0, float p1, float k, float o, float t0, int32_t len,
+                                          ThinruleAxis* a) {
+    float c0 = (k * p0 + o + 0.5f) * 0.5f, c1 = (k * p1 + o + 0.5f) * 0.5f;
+    bool mirrored = c0 > c1;
+    float lo = mirrored ? c1 : c0, hi = mirrored ? c0 : c1, s = (hi - lo) / (float) len;
+    int32_t at[THINRULE_FORCED], nf = 0;
+    float row[THINRULE_FORCED];
+    for (int32_t i = 0; 1.0f > s && nrows > i && THINRULE_FORCED - 2 > nf; i++) {
+        int32_t r = rows[i] & 0x7f, donor = (rows[i] & 0x80) != 0 ? r + 1 : r - 1;
+        if (r >= len || 0 > donor || donor >= len) continue;
+        // Their places left to right (top to bottom) on the raster; p, the
+        // first pixel whose centre is at or past the row's start (u: a centre
+        // in texels from lo). s < 1, so at most one centre falls in the row.
+        int32_t d = mirrored ? len - 1 - r : r, dd = mirrored ? len - 1 - donor : donor;
+        int32_t p = (int32_t) ceilf(lo + (float) d * s - 0.5f);
+        float u = ((float) p + 0.5f - lo) / s;
+        bool shown = (float) (d + 1) > u;
+        int32_t before = p - 1, after = shown ? p + 1 : p, j = -1;
+        if (shown) {
+            // Pinned when its centre is near an edge.
+            if (THINRULE_EDGE > u - (float) d || THINRULE_EDGE > (float) (d + 1) - u) nf = thinrulePin(at, row, nf, p, t0 + (float) r + 0.5f);
+        } else {
+            // Skipped: the donor's pixel next to the row takes it.
+            j = dd > d ? after : before;
+            float uj = ((float) j + 0.5f - lo) / s;
+            if (0.0f >= uj || uj >= (float) len || (int32_t) floorf(uj) != dd) continue;
+            nf = thinrulePin(at, row, nf, j, t0 + (float) r + 0.5f);
+        }
+        // The pixels either side, if near the row's edges, keep their own
+        // texel (else the GPU might show the row there too).
+        for (int32_t side = 0; 2 > side; side++) {
+            int32_t q = side == 0 ? before : after;
+            float uq = ((float) q + 0.5f - lo) / s;
+            if (q == j || 0.0f >= uq || uq >= (float) len || THINRULE_EDGE <= (side == 0 ? (float) d - uq : uq - (float) (d + 1))) continue;
+            int32_t own = (int32_t) floorf(uq);
+            nf = thinrulePin(at, row, nf, q, t0 + (float) (mirrored ? len - 1 - own : own) + 0.5f);
+        }
+    }
+    // The segments' edges on the raster, left to right, and the row each
+    // forced one shows (-1: the draw's own mapping).
+    float e[THINRULE_SEGS + 1], f[THINRULE_SEGS];
+    int32_t n = 0;
+    float at0 = lo;
+    for (int32_t m = 0; nf > m; m++) {
+        float a0 = maxF((float) at[m], lo);
+        if (a0 > at0) {
+            e[n] = at0;
+            f[n++] = -1.0f;
+        }
+        e[n] = a0;
+        f[n++] = row[m];
+        at0 = minF((float) at[m] + 1.0f, hi);
+    }
+    if (hi > at0 || n == 0) {
+        e[n] = at0;
+        f[n++] = -1.0f;
+    }
+    e[n] = hi;
+    float t1 = t0 + (float) len;
+    for (int32_t m = 0; n > m; m++) {
+        // Drawing units and texels at the segment's left (a) and right (b)
+        // edges: the draw's own at its ends.
+        float pa = m == 0 ? (mirrored ? p1 : p0) : (2.0f * e[m] - 0.5f - o) / k;
+        float pb = m + 1 == n ? (mirrored ? p0 : p1) : (2.0f * e[m + 1] - 0.5f - o) / k;
+        float ta, tb;
+        if (f[m] >= 0.0f) {
+            // The listed row's centre, either way round.
+            ta = f[m] + (mirrored ? 1.0f : -1.0f) / 64.0f;
+            tb = f[m] + (mirrored ? -1.0f : 1.0f) / 64.0f;
+        } else if (mirrored) {
+            ta = m == 0 ? t1 : t1 - (e[m] - lo) / s;
+            tb = m + 1 == n ? t0 : t1 - (e[m + 1] - lo) / s;
+        } else {
+            ta = m == 0 ? t0 : t0 + (e[m] - lo) / s;
+            tb = m + 1 == n ? t1 : t0 + (e[m + 1] - lo) / s;
+        }
+        // Corner 0 holds the lower texel, as in the draw: the right edge when mirrored.
+        a->q0[m] = mirrored ? pb : pa;
+        a->q1[m] = mirrored ? pa : pb;
+        a->t0[m] = mirrored ? tb : ta;
+        a->t1[m] = mirrored ? ta : tb;
+    }
+    a->n = n;
+    return nf;
+}
+
+static THINRULE_TEXT void thinruleEmit(CtrRenderer* r, CtrPage* page, float sx0, float sy0, float sx1, float sy1, const float* px, const float* py,
+                                       const CtrColor* c) {
+    if (r->smart.copy != nullptr) smartCopyQuad(r, sx0, sy0, sx1, sy1, px, py, c);
+    else emitPageTiles(r, page, sx0, sy0, sx1, sy1, px, py, c);
+}
+
+// emitPageRegionVisible's Smart fallback, before its blur: whether it drew
+// the quad sharp (see "Whole rows").
+static THINRULE_TEXT bool thinruleSharp(CtrRenderer* r, CtrPage* page, float sx0, float sy0, float sx1, float sy1, const float* px, const float* py,
+                                        const CtrColor* c) {
+    if (Thinrule_table.count == 0 || 0 > r->boundSurface || r->base.runner == nullptr) return false;
+    const CtrSurface* app = &r->surfaces[r->boundSurface];
+    if (app->shift != 1 || !(app->nativeScale || r->boundSurface == r->base.runner->applicationSurfaceId)) return false;
+    if (r->textures.pages > page || page >= r->textures.pages + r->textures.pageCount) return false;
+    const C3D_Mtx* m = &r->projection;
+    if (!r->gameProjection || m->r[0].y != 0.0f || m->r[1].x != 0.0f || m->r[3].x != 0.0f || m->r[3].y != 0.0f || m->r[3].w != 1.0f) return false;
+    if (px[0] != px[3] || px[1] != px[2] || py[0] != py[1] || py[2] != py[3]) return false;
+    float fw = sx1 - sx0, fh = sy1 - sy0;
+    if (!(sx0 >= 0.0f && sy0 >= 0.0f && 4096.0f > sx0 && 4096.0f > sy0 && fw >= 1.0f && fh >= 1.0f && 256.0f > fw && 256.0f > fh)) return false;
+    int32_t x0 = (int32_t) sx0, y0 = (int32_t) sy0, w = (int32_t) fw, h = (int32_t) fh;
+    if ((float) x0 != sx0 || (float) y0 != sy0 || (float) w != fw || (float) h != fh) return false;
+    float kx = m->r[0].x * 0.5f * (float) r->viewport.w, ky = -m->r[1].y * 0.5f * (float) r->viewport.h;
+    if (kx == 0.0f || ky == 0.0f) return false;
+    // Texel sides in raster pixels, before the search: most fine draws that
+    // get here (Asgore's flames) are out of range.
+    float sideX = fabsf(kx * (px[1] - px[0])) * 0.5f / fw, sideY = fabsf(ky * (py[2] - py[0])) * 0.5f / fh;
+    if (!(sideX >= THINRULE_MIN_SIDE && sideY >= THINRULE_MIN_SIDE && 0.99f > minF(sideX, sideY) && THINRULE_MAX_SIDE >= maxF(sideX, sideY))) return false;
+    uint32_t pageId = (uint32_t) (page - r->textures.pages);
+    if (pageId > 255) return false;
+    const ThinruleEntry* e = thinruleFind(pageId << 24 | (uint32_t) y0 << 12 | (uint32_t) x0);
+    if (e == nullptr || e->w != w || e->h != h) return false;
+    float ox = (m->r[0].w + 1.0f) * 0.5f * (float) r->viewport.w + (float) r->viewport.x;
+    float oy = (1.0f - m->r[1].w) * 0.5f * (float) r->viewport.h + (float) r->viewport.y;
+    CtrColor cs[4];
+    for (int32_t i = 0; 4 > i; i++) {
+        uint32_t a = c[i].a;
+        cs[i] = r->smart.straight ? c[i]
+                                  : (CtrColor) { (uint8_t) ((c[i].r * a + 127u) / 255u), (uint8_t) ((c[i].g * a + 127u) / 255u),
+                                                 (uint8_t) ((c[i].b * a + 127u) / 255u), c[i].a };
+    }
+    ThinruleAxis ax, ay;
+    int32_t forced = 0;
+    // Split only a draw of one colour (a split corner's colour would need working out).
+    if (e->off != THINRULE_NONE && memcmp(&c[0], &c[1], sizeof(CtrColor)) == 0 && memcmp(&c[0], &c[2], sizeof(CtrColor)) == 0 &&
+        memcmp(&c[0], &c[3], sizeof(CtrColor)) == 0) {
+        const uint8_t* b = Thinrule_table.bytes + e->off;
+        forced = thinruleAxis(b + 2 + b[0], b[1], px[0], px[1], kx, ox, sx0, w, &ax);
+        forced += thinruleAxis(b + 2, b[0], py[0], py[2], ky, oy, sy0, h, &ay);
+    }
+    flushBatch(r);
+    int8_t keep = r->filterOverride;
+    r->filterOverride = FILTER_NEAREST;
+    if (forced == 0) {
+        thinruleEmit(r, page, sx0, sy0, sx1, sy1, px, py, cs);
+    } else {
+        for (int32_t j = 0; ay.n > j; j++) {
+            for (int32_t i = 0; ax.n > i; i++) {
+                float qx[4] = { ax.q0[i], ax.q1[i], ax.q1[i], ax.q0[i] }, qy[4] = { ay.q0[j], ay.q0[j], ay.q1[j], ay.q1[j] };
+                thinruleEmit(r, page, ax.t0[i], ay.t0[j], ax.t1[i], ay.t1[j], qx, qy, cs);
+            }
+        }
+    }
+    flushBatch(r);
+    r->filterOverride = keep;
+    return true;
+}
+
+// emitPageRegionVisible's Smart fallback asks this instead of
+// smartEmitAveraged (the only change to its code is that call's target, so
+// it and everything after it keep their addresses): averaged, else sharp.
+// A draw whose source corner has no bit (most unlisted items, as Asgore's
+// flames, some 250 a frame) stops at the bit, before the full gate.
+static THINRULE_TEXT bool thinruleAveraged(CtrRenderer* r, CtrPage* page, float sx0, float sy0, float sx1, float sy1, const float* px,
+                                           const float* py, const CtrColor* c) {
+    if (smartEmitAveraged(r, page, sx0, sy0, sx1, sy1, px, py, c)) return true;
+    const uint32_t* bits = Thinrule_table.bits;
+    if (bits == nullptr) return false;
+    uint32_t bit = thinruleHash((uint32_t) (int32_t) sx0, (uint32_t) (int32_t) sy0);
+    return (bits[bit >> 5] >> (bit & 31) & 1u) != 0 && thinruleSharp(r, page, sx0, sy0, sx1, sy1, px, py, c);
+}
+#define smartEmitAveraged thinruleAveraged
+#endif
 #line 4881
 
 // The visible-quad part of a page draw, after effects and recording are
@@ -5031,13 +5306,17 @@ static void emitPageRegionVisible(CtrRenderer* r, CtrPage* page, bool dataPage, 
         CtrSurface* s = &r->surfaces[r->boundSurface];
         if (s->pattern.version == s->version) {
             bool kept = patternAdd(r, (int32_t) (page - r->textures.pages), sx0, sy0, sx1, sy1, px, py);
-            emitPageTiles(r, page, sx0, sy0, sx1, sy1, px, py, c);
+            REGION_TILES(r, page, sx0, sy0, sx1, sy1, px, py, c);
             if (kept) s->pattern.version = s->version;
             return;
         }
     }
-    emitPageTiles(r, page, sx0, sy0, sx1, sy1, px, py, c);
+    REGION_TILES(r, page, sx0, sy0, sx1, sy1, px, py, c);
 }
+#if defined(ENABLE_WAD16)
+#undef smartEmitAveraged
+#endif
+#line 4946
 
 // Tiled draws can resolve the stable page/effect/recording checks once,
 // but every quad still needs its own clip test, grid and pattern handling.
@@ -13394,7 +13673,13 @@ static void utxEmitPageRegion(CtrRenderer* r, CtrPage* page, float sx0, float sy
 // to the alignment for fonts whose cursor never steps back. Declared without a body here: it is a thunk in assembly
 // (see there), so this call is built as for any outside function. DELTARUNE keeps fontReach.
 #if defined(ENABLE_WAD16) && !defined(CTRPORT_RENDER_TIMING)
+#if !defined(NDEBUG) || defined(__OPTIMIZE_SIZE__)
+static const struct CtrFontReach* cdReachBoxDev(CtrRenderer* r, int32_t fontIndex, Font* font, int32_t textLen);
+#define cdReachBox(r, index, font) cdReachBoxDev(r, index, font, textLen)
+#define cdReachBoxLen cdReachBoxDev
+#else
 const struct CtrFontReach* cdReachBox(CtrRenderer* r, int32_t fontIndex, Font* font);
+#endif
 #else
 #define cdReachBox fontReach
 #endif
@@ -19596,14 +19881,14 @@ static void skipFreeAll(CtrRenderer* r) {
 }
 E5X_DECLARE
 #define SKIP_WRAPPERS(X)                                                                                                                             \
-    X(drawSprite, e5xDrawSprite, skipDrawSprite)                                                                                                     \
-    X(drawSpritePart, e5xDrawSpritePart, skipDrawSpritePart)                                                                                         \
-    X(drawSpritePartColor, e5xDrawSpritePartColor, skipDrawSpritePartColor)                                                                          \
+    X(drawSprite, BP_DRAWSPRITE, BP_SKIP_DRAWSPRITE)                                                                                                 \
+    X(drawSpritePart, BP_DRAWSPRITEPART, BP_SKIP_DRAWSPRITEPART)                                                                                     \
+    X(drawSpritePartColor, BP_DRAWSPRITEPARTCOLOR, BP_SKIP_DRAWSPRITEPARTCOLOR)                                                                      \
     X(drawSpritePos, e5xDrawSpritePos, skipDrawSpritePos)                                                                                            \
-    X(drawRectangle, e5xDrawRectangle, skipDrawRectangle)                                                                                            \
+    X(drawRectangle, BP_DRAWRECTANGLE, BP_SKIP_DRAWRECTANGLE)                                                                                        \
     X(drawRectangleColor, e5xDrawRectangleColor, skipDrawRectangleColor)                                                                             \
-    X(drawLine, e5xDrawLine, skipDrawLine)                                                                                                           \
-    X(drawLineColor, e5xDrawLineColor, skipDrawLineColor)                                                                                            \
+    X(drawLine, BP_DRAWLINE, BP_SKIP_DRAWLINE)                                                                                                       \
+    X(drawLineColor, BP_DRAWLINECOLOR, BP_SKIP_DRAWLINECOLOR)                                                                                        \
     X(drawTriangle, e5xDrawTriangle, skipDrawTriangle)                                                                                               \
     X(drawTriangleFan, e5xDrawTriangleFan, skipDrawTriangleFan)                                                                                      \
     X(drawLines, KGL_CHKS(ctrDrawLines), skipDrawLines)                                                                                              \
@@ -19952,7 +20237,7 @@ void CtrRenderer_beginFrame(Renderer* renderer) {
         r->probe.listing = r->probe.batches;
         probeCheckAll(r);
     } FW_T(fwB2);
-    CtrTextures_beginFrame(&r->textures, r->frame); FW_ACC(6, fwB2); FW_T(fwB4);
+    SEAM_BEGIN_FRAME(&r->textures, r->frame); FW_ACC(6, fwB2); FW_T(fwB4);
     mirrorHotTiles(r); FW_ACC(13, fwB4); FW_T(fwB3);
     if (r->palFrameTicks > r->palStats.worstTicks) {
         r->palStats.worstTicks = r->palFrameTicks;
@@ -21513,7 +21798,7 @@ void CtrRenderer_releaseVideo(Renderer* renderer) {
 void CtrRenderer_prefetchRoom(Renderer* renderer) {
     CtrRenderer* r = (CtrRenderer*) renderer;
     CtrSlotDiag_room();
-    CtrTextures_prefetchRoom(&r->textures, r->base.runner);
+    SEAM_PREFETCH_ROOM(&r->textures, r->base.runner);
 }
 
 void CtrRenderer_stopBackgroundWork(Renderer* renderer) {
@@ -22434,18 +22719,18 @@ Renderer* CtrRenderer_create(FileSystem* fileSystem, int32_t appW, int32_t appH,
     ctrVtable.beginGUI = KGL_CHK(ctrBeginGUI);
     ctrVtable.setGuiProjection = KGL_CHK(ctrSetGuiProjection);
     ctrVtable.endGUI = KGL_CHK(ctrEndGUI);
-    ctrVtable.drawSprite = e5xDrawSprite;
-    ctrVtable.drawSpritePart = e5xDrawSpritePart;
-    ctrVtable.drawSpritePartColor = e5xDrawSpritePartColor;
+    ctrVtable.drawSprite = BP_DRAWSPRITE;
+    ctrVtable.drawSpritePart = BP_DRAWSPRITEPART;
+    ctrVtable.drawSpritePartColor = BP_DRAWSPRITEPARTCOLOR;
     ctrVtable.drawSpritePos = e5xDrawSpritePos;
-    ctrVtable.drawRectangle = e5xDrawRectangle;
+    ctrVtable.drawRectangle = BP_DRAWRECTANGLE;
     ctrVtable.drawRectangleColor = e5xDrawRectangleColor;
-    ctrVtable.drawLine = e5xDrawLine;
+    ctrVtable.drawLine = BP_DRAWLINE;
     ctrVtable.drawTriangle = e5xDrawTriangle;
     ctrVtable.drawTriangleFan = e5xDrawTriangleFan;
     ctrVtable.drawLines = KGL_CHK(ctrDrawLines);
     ctrVtable.rectOutsideView = ctrRectOutsideView;
-    ctrVtable.drawLineColor = e5xDrawLineColor;
+    ctrVtable.drawLineColor = BP_DRAWLINECOLOR;
     ctrVtable.drawText = e5xDrawText;
     ctrVtable.drawTextColor = e5xDrawTextColor;
     ctrVtable.drawTextUI = nullptr;
@@ -22782,11 +23067,11 @@ static void E5X_LATE e5xDrawTriangle(Renderer* renderer, float x1, float y1, flo
     if (makeColor(0, alpha).a == 0 && e5xNoop(renderer)) return;
     E5X_OPAQUE(ctrDrawTriangle)(renderer, x1, y1, x2, y2, x3, y3, color1, color2, color3, alpha, outline);
 }
-
+#include "ctr_fanquads.inc"
 static void E5X_LATE e5xDrawTriangleFan(Renderer* renderer, float cx, float cy, const float* xs, const float* ys, int32_t pointCount,
                                         uint32_t centerColor, uint32_t edgeColor, float alpha) {
     if (makeColor(0, alpha).a == 0 && e5xNoop(renderer)) return;
-    E5X_OPAQUE(ctrDrawTriangleFan)(renderer, cx, cy, xs, ys, pointCount, centerColor, edgeColor, alpha);
+    E5X_OPAQUE(E5X_FAN)(renderer, cx, cy, xs, ys, pointCount, centerColor, edgeColor, alpha);
 }
 
 static void E5X_LATE e5xDrawText(Renderer* renderer, const char* text, float x, float y, float xscale, float yscale, float angleDeg,
@@ -23057,7 +23342,7 @@ void* CTR_VRAMALLOCNOW_CONTENTION(size_t size) {
 
 // A VRAM texture: on the Old models with copies there, again after giving them back.
 bool __wrap_C3D_TexInitWithParams(C3D_Tex* tex, C3D_TexCube* cube, C3D_TexInitParams p) {
-    if (__real_C3D_TexInitWithParams(tex, cube, p)) return true;
+    if (SEAM_TEX_INIT(tex, cube, p)) return true;
     if (!p.onVram) return false;
     size_t need = (size_t) p.width * (size_t) p.height * 4u;
     // yieldMirrors gives back all the copies by its second call.
@@ -23077,14 +23362,14 @@ C3D_RenderTarget* __wrap_C3D_RenderTargetCreate(int width, int height, GPU_COLOR
         for (int32_t i = 0; 4 > i && oldGiveBack(r, need); i++) {}
         oldMirror.yields = r->mirror.yields;
     }
-    return __real_C3D_RenderTargetCreate(width, height, colorFmt, depthFmt);
+    return SEAM_RENDER_TARGET(width, height, colorFmt, depthFmt);
 }
 
 // The renderer going (ctrDestroy, at a chapter change): the next one starts
 // afresh, from its first frame.
 void CTR_DESTROY_CONTENTION(CtrTextureCache* cache) {
     if (oldMirror.r != nullptr && &oldMirror.r->textures == cache) memset(&oldMirror, 0, sizeof(oldMirror));
-    __real_CtrTextures_destroy(cache);
+    SEAM_DESTROY_NEXT(cache);
 }
 
 #ifdef CTRPORT_RENDER_TIMING
@@ -23397,7 +23682,7 @@ __attribute__((noinline, no_reorder, section(".text.late.engfix6"))) static void
     }
     dst->version = ++r->contentSerial;
 }
-#if defined(__3DS__) && defined(NDEBUG) && !defined(CTRPORT_RENDER_TIMING) && !defined(CTRPORT_DEBUG_RECORD_FAIL_AFTER)
+#if defined(__3DS__) && defined(NDEBUG) && !defined(__OPTIMIZE_SIZE__) && !defined(CTRPORT_RENDER_TIMING) && !defined(CTRPORT_DEBUG_RECORD_FAIL_AFTER)
 // This section contains two functions. Keep the first function's original
 // extent before emitting the second, after its final return and literal pool.
 // no_reorder keeps these definitions on either side of this assembly fence.
@@ -27708,10 +27993,13 @@ full:
 }
 // D2' and d keep utxEmitPageRegion's section at its former 2504 bytes, so that no late function after it moves (subsection
 // 1 follows the body and its literal pool; the assembler stops if they ever pass that).
+#if defined(NDEBUG) && !defined(__OPTIMIZE_SIZE__)
 __asm__(".pushsection .text.utext_late, 1\n"
         "utxEmitPageRegion_pad:\n"
         ".org 2504\n"
         ".popsection\n");
+#endif
+#line 24293
 #undef quadOutsideView
 #if defined(ENABLE_WAD16) && !defined(CTRPORT_RENDER_TIMING)
 // ===[ Glyph view test with integer compares (creddodge) ]===
@@ -27723,7 +28011,12 @@ __asm__(".pushsection .text.utext_late, 1\n"
 // offset. A non-finite x or y (w is then not 1, or a compare is unordered), depth mode and any other projection take quadOutsideView's own test: its
 // out-of-line part (GCC splits the gameProjection check off into utxEmitPageRegion), named by its assembler name
 // so that no copy is made; the build fails at link time if GCC ever stops splitting it.
+#if defined(NDEBUG) && !defined(__OPTIMIZE_SIZE__)
 __attribute__((pure)) bool cdOutsideFull(CtrRenderer* r, const float* px, const float* py) __asm__("quadOutsideView.part.0");
+#else
+#define cdOutsideFull quadOutsideView
+#endif
+#line 24305
 static inline __attribute__((always_inline)) uint32_t cdBits(float f) {
     uint32_t u;
     memcpy(&u, &f, sizeof u);
@@ -27754,10 +28047,13 @@ static __attribute__((noinline, noclone, section(".text.creddodge_late"))) bool 
 }
 // D1 keeps this section at its former 320 bytes, so that no late function after it moves (subsection 1 follows the
 // body and its literal pool; the assembler stops if they ever pass that).
+#if defined(NDEBUG) && !defined(__OPTIMIZE_SIZE__)
 __asm__(".pushsection .text.creddodge_late, 1\n"
         "cdGlyphOutside_pad:\n"
         ".org 320\n"
         ".popsection\n");
+#endif
+#line 24339
 // Smart's premultiplied colour for utxEmitPageRegion (D2', above), the sums it made in place before.
 static __attribute__((noinline, noclone, section(".text.cdtail_late"))) CtrColor cdPremul(CtrColor cc) {
     // (v * a + 127) / 255 for bytes v and a: t / 255 is (t + 1 + (t >> 8)) >> 8 for t up to 65534 (here t <= 65152).
@@ -27836,6 +28132,7 @@ static __attribute__((used, noipa, section(".text.tbox_late"))) const struct Ctr
     cdTbReach.extent = reach->extent + 2.0f;
     return &cdTbReach;
 }
+#if defined(NDEBUG) && !defined(__OPTIMIZE_SIZE__)
 __asm__(".pushsection .text.tbox_late, \"ax\", %progbits\n"
         "\t.balign 4\n"
         "\t.global cdReachBox\n"
@@ -27846,6 +28143,8 @@ __asm__(".pushsection .text.tbox_late, \"ax\", %progbits\n"
         "\tb cdReachBoxLen\n"
         "\t.size cdReachBox, . - cdReachBox\n"
         "\t.popsection\n");
+#endif
+#line 24427
 #endif
 
 #endif
@@ -29460,4 +29759,887 @@ void z_thinart_rectOutline(CtrRenderer* r, float x1, float y1, float x2, float y
         z_utqa_rectOutline(r, x1, y1, x2, y2, c);
     }
 }
+#endif
+
+// draw_circle's fan as quads (poffroom, 11-06; UNDERTALE Old, ctr_fanquads.inc declares it): a fan's triangles (h, a, b),
+// (h, b, c) are one quad's (h, a, b, c) through quadIndices (0 1 2 0 2 3), so the GPU gets the same triangles in the same
+// order with a third fewer vertices to write, and the fan joins a batch of quads instead of ending it. In a batch that
+// isn't one of quads, it writes each quad's six vertices, those same triangles. Anything ctrDrawTriangleFan doesn't draw
+// as one batch stays there, with an odd fan, which has a triangle left over.
+#if !defined(ENABLE_WAD17) && !defined(CTRPORT_TARGET_N3DS)
+static void fanQuads(Renderer* renderer, float cx, float cy, const float* xs, const float* ys, int32_t pointCount, uint32_t centerColor,
+                     uint32_t edgeColor, float alpha) {
+    CtrRenderer* r = (CtrRenderer*) renderer;
+    uint32_t tris = pointCount >= 2 ? (uint32_t) (pointCount - 1) : 0;
+    if (tris == 0 || (tris & 1) != 0 || 3 * tris > VERTEX_CAPACITY || (r->shaderFx == SHADER_FX_CASTLE && !r->plainTexEnv && !r->fxSuspended) ||
+        recordingSurface(r) != nullptr) {
+        E5X_OPAQUE(ctrDrawTriangleFan)(renderer, cx, cy, xs, ys, pointCount, centerColor, edgeColor, alpha);
+        return;
+    }
+    RENDER_TIMED(r, TIME_DRAW);
+    extern __typeof__(reserveBatch) fanReserve __asm__("reserveBatch");
+    uint32_t quads = tris / 2;
+    CtrVertex* v = fanReserve(r, &r->white, 3 * tris, false, quads);
+    if (v == nullptr) return;
+    CtrColor center = makeColor(centerColor, alpha);
+    CtrColor edge = makeColor(edgeColor, alpha);
+    float z = r->vertexZ;
+    CtrVertex hub, rim;
+    setVertex(&hub, cx, cy, z, 0.5f, 0.5f, center);
+    setVertex(&rim, xs[0], ys[0], z, 0.5f, 0.5f, edge);
+    bool four = r->batchQuads;
+    xs++;
+    ys++;
+    for (uint32_t i = 0; quads > i; i++, xs += 2, ys += 2) {
+        v[0] = hub;
+        v[1] = rim;
+        rim.x = xs[0];
+        rim.y = ys[0];
+        v[2] = rim;
+        if (four) {
+            rim.x = xs[1];
+            rim.y = ys[1];
+            v[3] = rim;
+            v += 4;
+        } else {
+            v[3] = hub;
+            v[4] = rim;
+            rim.x = xs[1];
+            rim.y = ys[1];
+            v[5] = rim;
+            v += 6;
+        }
+    }
+}
+#endif
+
+// keep-lit (z_keeplit.c, which says why it isn't here) reaches these two fields by the offsets CMake gives it.
+#if defined(ENABLE_WAD16)
+_Static_assert(__builtin_offsetof(CtrRenderer, displayDirty) == CTRPORT_KEEPLIT_DIRTY_AT, "z_keeplit.c's offset");
+_Static_assert(__builtin_offsetof(CtrRenderer, bottomBacklightOff) == CTRPORT_KEEPLIT_BACKLIGHT_AT, "z_keeplit.c's offset");
+#endif
+// ===[ Seam copies (change drawbatch; UNDERTALE only) ]===
+//
+// Append only. A page draw whose texels cross a cache tile's edge (26.7% of UNDERTALE's texture page items cross one
+// of the 256-texel seams) finds no single tile, so it is drawn through emitPageTiles, which splits it at the seam and
+// draws each part from its own tile: two textures for every such item and, as a batch ends at every change of
+// texture, a draw call for nearly every part (Asriel's star burst: 355 draw calls in a frame, ~218 of them the
+// bullets' two halves). That is smartEmitAveraged's fine draws, emitPageRegionVisible's turned, scaled and Crisp ones
+// and partEmit's. Here each such draw takes its parts from one copy of the tiles' texels instead (z_seamcopy.c): each
+// part with the ring of texels a filter reads around it, at the part's own place on a texture of the tile's size, so
+// the same quads with the same texture coordinates read the same texels under either filter, from one texture. A
+// region gets a copy once it is drawn twice in a frame; copies live at the top of VRAM (z_seamcopy.c says why), at most
+// SEAM_BYTES_MAX in all, and are freed no sooner than two frames after they were last drawn. Anything else, or with no
+// copy to be had, draws as before.
+#ifdef SEAM_COPY
+#include "ctr_seamcopy.h"
+
+#define SEAM_TEXT __attribute__((noinline, noclone, section(".drawbatch_text")))
+#define SEAM_RO __attribute__((section(".drawbatch_text_ro")))
+// Keeps a float as it is: -ffast-math may otherwise regroup the arithmetic below, which must round as
+// emitPageTiles' does.
+#define SEAM_PIN(x) __asm__ volatile("" : "+t"(x))
+
+#ifdef CTRPORT_SEAM_CHECK
+typedef struct {
+    float x[4], y[4];
+    float u0, v0, u1, v1; // on the tile, as emitPageTiles takes them
+    float cu0, cv0, cu1, cv1; // on the copy (cu0 -1: the tile's own texture)
+    CtrColor c;
+    int32_t tx, ty;
+} SeamQuad;
+#endif
+
+static struct {
+    bool armed; // the current fine draw found no single tile (seamColoursAxes)
+    bool looked; // and its copy has been looked up
+    float x0, y0, x1, y1; // its texels' bounds
+    SeamCopy* copy; // what it draws from, or nullptr
+#ifdef CTRPORT_SEAM_CHECK
+    uint32_t checkDraws, checkQuads, checkMismatches, checkTexels, checkSkipped, checkRegion;
+    uint32_t checkShape[2][3]; // copied quads by filter (nearest, linear) and shape (as drawn, turned, scaled not turned)
+    uint32_t checkYoung; // copied quads whose texels weren't compared: the copy's GX copies may not have run yet
+#endif
+} seam __attribute__((section(".bss.drawbatch_late")));
+
+#ifdef CTRPORT_SEAM_CHECK
+// The log lines, at file scope so they take no GCC-numbered names (check_layout matches names).
+static const char seamBadFmt[] SEAM_RO =
+    "[drawbatch] seam check MISMATCH: %ld of %ld quads, %ld texels/coords (draw %lu)\n";
+static const char seamSumFmt[] SEAM_RO =
+    "[drawbatch] seam check: %lu draws (%lu turned, scaled or Crisp), %lu quads, %lu mismatched draws, %lu texel/coord diffs, %lu skipped, "
+    "%lu B held at most, %lu quads before the copy was filled\n";
+static const char seamShapeFmt[] SEAM_RO =
+    "[drawbatch] seam check quads from copies: nearest %lu as drawn, %lu turned, %lu scaled; linear %lu as drawn, %lu turned, %lu scaled\n";
+static const char seamTexelFmt[] SEAM_RO =
+    "[drawbatch] seam texel diff: draw %lu quad %ld tile %ld,%ld at %ld,%ld (on tile %ld,%ld, copy %ld,%ld of %ux%u) uv %ld,%ld..%ld,%ld /4096 tile %08lx copy %08lx\n";
+static const char seamCoordFmt[] SEAM_RO =
+    "[drawbatch] seam coord diff: draw %lu quad %ld u0 %ld cu0 %ld v1 %ld cv1 %ld (1/65536) tile %ldx%ld copy %ux%u\n";
+#endif
+
+// Takes room in the GX queue for count copies of a seam copy's fill, or false if the queue is nearly full (the copy
+// waits). reserveGxCommands' accounting, done here: calling that static function from this one changes the order GCC
+// gives this file's functions and static guards (check_layout), and a frame is in hand (seamLookup).
+bool SEAM_TEXT CtrSeam_gxRoom(CtrTextureCache* cache, uint32_t count) {
+    CtrRenderer* r = (CtrRenderer*) (void*) ((char*) cache - offsetof(CtrRenderer, textures));
+    if (r->gxFrame != r->frame) {
+        r->gxFrame = r->frame;
+        r->gxCommands = 0;
+    }
+    if (CtrGpu_queueCapacity() < r->gxCommands + count + GX_QUEUE_RESERVE) return false;
+    r->clearedTarget = nullptr;
+    r->gxCommands += count;
+    return true;
+}
+
+// smartColoursAxes, noting the draw's texels' bounds when they lie in more than one tile and it should be looked up
+// (CtrSeam_demand).
+static void SEAM_TEXT seamColoursAxes(CtrRenderer* r, const CtrColor* c, SmartAxis* xa, int32_t nx, SmartAxis* ya, int32_t ny,
+                                      const SmartTile* tile, CtrColor (*cc)[3]) {
+    seam.armed = false;
+    if (tile->tile == nullptr && 0 < nx && 0 < ny) {
+        // Any key a region always gives will do: its corners' bits, as they are, which costs no conversion. All of them,
+        // as one draw's finding goes for all draws with its key.
+        union {
+            float f;
+            uint32_t u;
+        } tx = {xa[0].t0}, ty = {ya[0].t0}, tx1 = {xa[nx - 1].t1}, ty1 = {ya[ny - 1].t1};
+        uint32_t key = tx.u ^ (ty.u >> 15 | ty.u << 17) ^ (tx1.u >> 7 | tx1.u << 25) ^ (ty1.u >> 23 | ty1.u << 9);
+        if (CtrSeam_worthAsking(r->frame, key) && !CtrSeam_knownNoFit(r->frame)) seam.armed = CtrSeam_demand((int32_t) tx.f, (int32_t) ty.f);
+    }
+    if (seam.armed) {
+        seam.looked = false;
+        seam.copy = nullptr;
+        float x0 = xa[0].t0, x1 = xa[0].t1, y0 = ya[0].t0, y1 = ya[0].t1;
+        for (int32_t i = 1; nx > i; i++) {
+            x0 = xa[i].t0 < x0 ? xa[i].t0 : x0;
+            x1 = xa[i].t1 > x1 ? xa[i].t1 : x1;
+        }
+        for (int32_t j = 1; ny > j; j++) {
+            y0 = ya[j].t0 < y0 ? ya[j].t0 : y0;
+            y1 = ya[j].t1 > y1 ? ya[j].t1 : y1;
+        }
+        seam.x0 = x0, seam.y0 = y0, seam.x1 = x1, seam.y1 = y1;
+    }
+    smartColoursAxes(r, c, xa, nx, ya, ny, tile, cc);
+}
+
+// The copy a draw of page texels [x0, x1) x [y0, y1) (rounded out) takes its texels from, or nullptr.
+static SeamCopy* SEAM_TEXT seamLookup(CtrRenderer* r, CtrPage* page, float x0, float y0, float x1, float y1) {
+    // Copies are GX copies queued in a frame, and 3D wants VRAM ("Tiles' copies in VRAM on the Old models").
+    if (!r->inFrame || r->topRightTarget != nullptr) return nullptr;
+    // What smartTileBegin and emitQuad take another way, and what makes palTileTex give another texture.
+    if (r->palKind != PAL_NONE || r->smart.copy != nullptr || r->shaderFx != SHADER_FX_NONE || r->palNextB != nullptr || recordingSurface(r) != nullptr)
+        return nullptr;
+    return CtrSeam_lookup(&r->textures, page, r->frame, x0, y0, x1, y1);
+}
+
+// regionTilePart and quadPosition as emitPageTiles' code has them (its arithmetic, regrouped as GCC regroups it
+// there, rounding at each step), so the parts' corners and texture coordinates are the floats it gives.
+static inline __attribute__((always_inline)) void seamPosition(const float* px, const float* py, float s, float t, float* outX, float* outY) {
+    float a = (px[1] - px[0]) * s, b = (py[1] - py[0]) * s, c = (px[2] - px[3]) * s, d = (py[2] - py[3]) * s;
+    SEAM_PIN(a);
+    SEAM_PIN(b);
+    SEAM_PIN(c);
+    SEAM_PIN(d);
+    float topX = px[0] + a, topY = py[0] + b, botX = px[3] + c, botY = py[3] + d;
+    SEAM_PIN(topX);
+    SEAM_PIN(topY);
+    SEAM_PIN(botX);
+    SEAM_PIN(botY);
+    float e = (botX - topX) * t, f = (botY - topY) * t;
+    SEAM_PIN(e);
+    SEAM_PIN(f);
+    *outX = topX + e;
+    *outY = topY + f;
+}
+
+// One fine quad's parts, as emitPageTiles' loop over tiles draws them for a uniform colour c, but those on tiles k
+// copied from k. Test builds note them in rec instead (emitPageTiles then draws them).
+static void SEAM_TEXT seamTiles(CtrRenderer* r, const SeamCopy* k, CtrPage* page, float sx0, float sy0, float sx1, float sy1, const float* px,
+                                const float* py, CtrColor c
+#ifdef CTRPORT_SEAM_CHECK
+                                ,
+                                void* rec, int32_t* nrec
+#endif
+) {
+    float tileW = (float) page->tileW;
+    float tileH = (float) page->tileH;
+    float w = sx1 - sx0;
+    float h = sy1 - sy0;
+    if (w == 0.0f || h == 0.0f) return;
+    float minX = sx0 < sx1 ? sx0 : sx1, maxX = sx0 < sx1 ? sx1 : sx0;
+    float minY = sy0 < sy1 ? sy0 : sy1, maxY = sy0 < sy1 ? sy1 : sy0;
+    int32_t tx0 = (int32_t) (minX / tileW), tx1 = (int32_t) ((maxX - 0.001f) / tileW);
+    int32_t ty0 = (int32_t) (minY / tileH), ty1 = (int32_t) ((maxY - 0.001f) / tileH);
+    if (0 > tx0) tx0 = 0;
+    if (0 > ty0) ty0 = 0;
+    if (tx1 >= page->tilesX) tx1 = page->tilesX - 1;
+    if (ty1 >= page->tilesY) ty1 = page->tilesY - 1;
+    if (tx0 > tx1 || ty0 > ty1) return;
+#ifndef CTRPORT_SEAM_CHECK
+    CtrTextures_ensureTilesBut(&r->textures, page, tx0, ty0, tx1, ty1, 0);
+#endif
+    float rw = 1.0f / w, rh = 1.0f / h, rtw = 1.0f / tileW, rth = 1.0f / tileH;
+    SEAM_PIN(rw);
+    SEAM_PIN(rh);
+    SEAM_PIN(rtw);
+    SEAM_PIN(rth);
+    for (int32_t ty = ty0; ty1 >= ty; ty++) {
+        for (int32_t tx = tx0; tx1 >= tx; tx++) {
+            CtrTile* tile = &page->tiles[ty * page->tilesX + tx];
+            if (!tile->valid) continue;
+            float ox = (float) tx * tileW, oy = (float) ty * tileH;
+            float cx0 = ox, cx1 = ox + tileW, cy0 = oy, cy1 = oy + tileH;
+            if (cx0 < minX) cx0 = minX;
+            if (cx1 > maxX) cx1 = maxX;
+            if (cy0 < minY) cy0 = minY;
+            if (cy1 > maxY) cy1 = maxY;
+            if (cx0 >= cx1 || cy0 >= cy1) continue;
+            float s0 = (cx0 - sx0) * rw, s2 = (cx1 - sx0) * rw, s1 = (cy0 - sy0) * rh, s3 = (cy1 - sy0) * rh;
+            SEAM_PIN(s0);
+            SEAM_PIN(s1);
+            SEAM_PIN(s2);
+            SEAM_PIN(s3);
+            float dx = sx0 - ox, dy = sy0 - oy;
+            SEAM_PIN(dx);
+            SEAM_PIN(dy);
+            float p0 = w * s0, p2 = w * s2, p1 = h * s1, p3 = h * s3;
+            SEAM_PIN(p0);
+            SEAM_PIN(p1);
+            SEAM_PIN(p2);
+            SEAM_PIN(p3);
+            float a0 = dx + p0, a2 = dx + p2, a1 = dy + p1, a3 = dy + p3; // texels from the tile's corner
+            SEAM_PIN(a0);
+            SEAM_PIN(a1);
+            SEAM_PIN(a2);
+            SEAM_PIN(a3);
+            float u0 = a0 * rtw, u1 = a2 * rtw, v0 = a1 * rth, v1 = a3 * rth;
+            float qx[4], qy[4];
+            seamPosition(px, py, s0, s1, &qx[0], &qy[0]);
+            seamPosition(px, py, s2, s1, &qx[1], &qy[1]);
+            seamPosition(px, py, s2, s3, &qx[2], &qy[2]);
+            seamPosition(px, py, s0, s3, &qx[3], &qy[3]);
+            int32_t m = tx - k->tx0, l = ty - k->ty0;
+            bool copied = 0 <= m && k->ntx > m && 0 <= l && k->nty > l && k->data[l][m] == tile->tex.data && tile->format == k->format;
+            C3D_Tex* tex = CtrTextures_drawTex(tile);
+            // The copy holds the tile's part at its place on the tile, on a texture of the tile's size: the same
+            // texture coordinates read the same texels, under either filter.
+            float du0 = u0, dv0 = v0, du1 = u1, dv1 = v1;
+            if (copied) tex = (C3D_Tex*) &k->tex;
+            // As emitQuad has it, from the coordinates drawn.
+            bool multiSafe = dv0 >= MULTI_MIN_V && dv1 >= MULTI_MIN_V && 1.0f >= dv0 && 1.0f >= dv1;
+#ifdef CTRPORT_SEAM_CHECK
+            (void) r;
+            (void) multiSafe;
+            (void) tex;
+            SeamQuad* q = &((SeamQuad*) rec)[(*nrec)++];
+            memcpy(q->x, qx, sizeof(qx));
+            memcpy(q->y, qy, sizeof(qy));
+            q->u0 = u0, q->v0 = v0, q->u1 = u1, q->v1 = v1;
+            q->cu0 = copied ? du0 : -1.0f, q->cv0 = dv0, q->cu1 = du1, q->cv1 = dv1;
+            q->c = c;
+            q->tx = tx, q->ty = ty;
+#else
+            // emitQuad's drawing (seamEmitPageTiles has taken its other paths).
+            CtrVertex* v = reserveBatch(r, tex, 6, multiSafe, 1);
+            if (v != nullptr) {
+                float z = r->vertexZ;
+                setVertex(&v[0], qx[0], qy[0], z, du0, dv0, c);
+                setVertex(&v[1], qx[1], qy[1], z, du1, dv0, c);
+                setVertex(&v[2], qx[2], qy[2], z, du1, dv1, c);
+                if (r->batchQuads) {
+                    setVertex(&v[3], qx[3], qy[3], z, du0, dv1, c);
+                } else {
+                    setVertex(&v[3], qx[0], qy[0], z, du0, dv0, c);
+                    setVertex(&v[4], qx[2], qy[2], z, du1, dv1, c);
+                    setVertex(&v[5], qx[3], qy[3], z, du0, dv1, c);
+                }
+            }
+            r->palNextB = nullptr;
+#endif
+        }
+    }
+}
+
+#ifdef CTRPORT_SEAM_CHECK
+static inline __attribute__((always_inline)) bool seamSameVertex(const CtrVertex* v, float x, float y, float u, float tv, CtrColor c) {
+    return memcmp(&v->x, &x, 4) == 0 && memcmp(&v->y, &y, 4) == 0 && memcmp(&v->u, &u, 4) == 0 && memcmp(&v->v, &tv, 4) == 0 && v->r == c.r &&
+           v->g == c.g && v->b == c.b && v->a == c.a;
+}
+
+// Test builds: the quads emitPageTiles just put in the batch from vertex `from` on against those noted, bit for bit,
+// and every texel each noted quad can sample on its tile against the copy's, once its GX copies have surely run: the
+// frame they were queued in has gone to the GPU and the GPU is done with it three frames on. VRAM is cached on a console.
+static void SEAM_TEXT seamCheck(CtrRenderer* r, const SeamCopy* k, CtrPage* page, uint32_t from, const SeamQuad* rec, int32_t n) {
+    seam.checkDraws++;
+    if (from > r->vertexCount) {
+        seam.checkSkipped++;
+        return;
+    }
+    bool filled = r->frame - k->builtFrame >= 3u;
+    if (filled && !k->checked) {
+        GSPGPU_InvalidateDataCache(k->tex.data, k->tex.size);
+        ((SeamCopy*) k)->checked = true;
+    }
+    uint32_t at = from;
+    int32_t bad = 0, texels = 0;
+    for (int32_t i = 0; n > i; i++) {
+        const SeamQuad* q = &rec[i];
+        bool found = false;
+        for (uint32_t o = 0; 4 > o && !found; o++) {
+            if (at + o + 3 > r->vertexCount) break;
+            const CtrVertex* v = &r->vertices[at + o];
+            if (!seamSameVertex(&v[0], q->x[0], q->y[0], q->u0, q->v0, q->c) || !seamSameVertex(&v[1], q->x[1], q->y[1], q->u1, q->v0, q->c) ||
+                !seamSameVertex(&v[2], q->x[2], q->y[2], q->u1, q->v1, q->c))
+                continue;
+            found = true;
+            bool four = at + o + 4 <= r->vertexCount && seamSameVertex(&v[3], q->x[3], q->y[3], q->u0, q->v1, q->c);
+            at += o + (four ? 4u : 6u);
+        }
+        if (!found) bad++;
+        seam.checkQuads++;
+        if (q->cu0 < 0.0f) continue;
+        {
+            bool linear = r->filterOverride != 0 ? r->filterOverride == FILTER_LINEAR : r->base.texFilter;
+            bool turned = q->y[1] != q->y[0] || q->x[3] != q->x[0];
+            float sw = (q->u1 - q->u0) * (float) page->tileW, sh = (q->v1 - q->v0) * (float) page->tileH;
+            float dw = q->x[1] - q->x[0], dh = q->y[3] - q->y[0];
+            bool scaled = !turned && (fabsf(fabsf(dw) - fabsf(sw)) > 0.01f || fabsf(fabsf(dh) - fabsf(sh)) > 0.01f);
+            seam.checkShape[linear ? 1 : 0][turned ? 1 : scaled ? 2 : 0]++;
+        }
+        if (!filled) seam.checkYoung++;
+        // Texels within one of the part's texture coordinates each way (clamped to the edges), on the tile and on the
+        // copy, which has the tile's size.
+        const CtrTile* t = &page->tiles[q->ty * page->tilesX + q->tx];
+        int32_t tw = page->tileW, th = page->tileH;
+        float ua = q->u0 < q->u1 ? q->u0 : q->u1, ub = q->u0 < q->u1 ? q->u1 : q->u0;
+        float va = q->v0 < q->v1 ? q->v0 : q->v1, vb = q->v0 < q->v1 ? q->v1 : q->v0;
+        int32_t xa = (int32_t) floorf(ua * (float) tw) - 1, xb = (int32_t) ceilf(ub * (float) tw);
+        int32_t ya = (int32_t) floorf(va * (float) th) - 1, yb = (int32_t) ceilf(vb * (float) th);
+        uint32_t bpp = k->format == CTR_TILE_RGBA8 ? 4u : k->format == CTR_TILE_RGB8 ? 3u : 2u;
+        for (int32_t y = ya; filled && yb >= y; y++) {
+            for (int32_t x = xa; xb >= x; x++) {
+                int32_t lx = 0 > x ? 0 : x >= tw ? tw - 1 : x, ly = 0 > y ? 0 : y >= th ? th - 1 : y;
+                int32_t cx = lx, cy = ly;
+                if (0 > cx || 0 > cy || cx >= k->tex.width || cy >= k->tex.height ||
+                    memcmp((const uint8_t*) t->tex.data + holoMorton(lx, ly, tw) * bpp,
+                           (const uint8_t*) k->tex.data + holoMorton(cx, cy, k->tex.width) * bpp, bpp) != 0) {
+                    texels++;
+                    static uint32_t shown;
+                    if (24 > shown) {
+                        shown++;
+                        uint32_t a = 0, b = 0;
+                        memcpy(&a, (const uint8_t*) t->tex.data + holoMorton(lx, ly, tw) * bpp, bpp);
+                        if (!(0 > cx || 0 > cy || cx >= k->tex.width || cy >= k->tex.height))
+                            memcpy(&b, (const uint8_t*) k->tex.data + holoMorton(cx, cy, k->tex.width) * bpp, bpp);
+                        logInfo(seamTexelFmt, (unsigned long) seam.checkDraws, (long) i, (long) q->tx, (long) q->ty, (long) x, (long) y, (long) lx,
+                                (long) ly, (long) cx, (long) cy, (unsigned) k->tex.width, (unsigned) k->tex.height, (long) (ua * 4096.0f),
+                                (long) (va * 4096.0f), (long) (ub * 4096.0f), (long) (vb * 4096.0f), (unsigned long) a, (unsigned long) b);
+                    }
+                }
+            }
+        }
+        // And the copy's coordinates and size are the tile's, bit for bit.
+        if (memcmp(&q->cu0, &q->u0, 4) != 0 || memcmp(&q->cv0, &q->v0, 4) != 0 || memcmp(&q->cu1, &q->u1, 4) != 0 ||
+            memcmp(&q->cv1, &q->v1, 4) != 0 || k->tex.width != tw || k->tex.height != th) {
+            texels++;
+            static uint32_t shownc;
+            if (24 > shownc) {
+                shownc++;
+                logInfo(seamCoordFmt, (unsigned long) seam.checkDraws, (long) i, (long) (q->u0 * 65536.0f), (long) (q->cu0 * 65536.0f),
+                        (long) (q->v1 * 65536.0f), (long) (q->cv1 * 65536.0f), (long) tw, (long) th, (unsigned) k->tex.width,
+                        (unsigned) k->tex.height);
+            }
+        }
+    }
+    if (bad != 0 || texels != 0) {
+        if (bad != 0) seam.checkMismatches++;
+        seam.checkTexels += (uint32_t) texels;
+        if (16 > seam.checkMismatches + (seam.checkTexels != 0 ? 1u : 0u)) {
+            logInfo(seamBadFmt, (long) bad, (long) n, (long) texels, (unsigned long) seam.checkDraws);
+        }
+    }
+    if ((seam.checkDraws & 0x3ffu) == 0) {
+        logInfo(seamSumFmt, (unsigned long) seam.checkDraws, (unsigned long) seam.checkRegion, (unsigned long) seam.checkQuads, (unsigned long) seam.checkMismatches,
+                (unsigned long) seam.checkTexels, (unsigned long) seam.checkSkipped, (unsigned long) CtrSeam_peakBytes(),
+                (unsigned long) seam.checkYoung);
+        logInfo(seamShapeFmt, (unsigned long) seam.checkShape[0][0], (unsigned long) seam.checkShape[0][1], (unsigned long) seam.checkShape[0][2],
+                (unsigned long) seam.checkShape[1][0], (unsigned long) seam.checkShape[1][1], (unsigned long) seam.checkShape[1][2]);
+    }
+}
+#endif
+
+// One quad's parts from copy k, uniform colour c[0]; test builds draw them as emitPageTiles does and check those
+// against what the copy would have drawn.
+static void SEAM_TEXT seamDraw(CtrRenderer* r, const SeamCopy* k, CtrPage* page, float sx0, float sy0, float sx1, float sy1, const float* px,
+                               const float* py, const CtrColor* c) {
+#ifdef CTRPORT_SEAM_CHECK
+    SeamQuad rec[4];
+    int32_t n = 0;
+    seamTiles(r, k, page, sx0, sy0, sx1, sy1, px, py, c[0], rec, &n);
+    uint32_t from = r->vertexCount;
+    emitPageTiles(r, page, sx0, sy0, sx1, sy1, px, py, c);
+    seamCheck(r, k, page, from, rec, n);
+#else
+    seamTiles(r, k, page, sx0, sy0, sx1, sy1, px, py, c[0]);
+#endif
+}
+
+// smartEmitAveraged's quads of a draw whose texels span tiles: from its copy where it has one.
+static void SEAM_TEXT seamEmitPageTiles(CtrRenderer* r, CtrPage* page, float sx0, float sy0, float sx1, float sy1, const float* px, const float* py,
+                                        const CtrColor* c) {
+    if (seam.armed && !seam.looked) {
+        seam.looked = true;
+        seam.copy = seamLookup(r, page, seam.x0, seam.y0, seam.x1, seam.y1);
+    }
+    const SeamCopy* k = seam.armed ? seam.copy : nullptr;
+    if (k == nullptr || k->page != page) {
+        emitPageTiles(r, page, sx0, sy0, sx1, sy1, px, py, c);
+        return;
+    }
+    // emitQuad leaves a clear quad out or not (transparentDrawIsNoop); emitPageTiles lerps colours that differ.
+    bool uniform = c[0].r == c[1].r && c[0].g == c[1].g && c[0].b == c[1].b && c[0].a == c[1].a && c[0].r == c[2].r && c[0].g == c[2].g &&
+                   c[0].b == c[2].b && c[0].a == c[2].a && c[0].r == c[3].r && c[0].g == c[3].g && c[0].b == c[3].b && c[0].a == c[3].a;
+    if (!uniform || c[0].a == 0) {
+        emitPageTiles(r, page, sx0, sy0, sx1, sy1, px, py, c);
+        return;
+    }
+    seamDraw(r, k, page, sx0, sy0, sx1, sy1, px, py, c);
+}
+
+// emitPageRegionVisible's quads (those smartEmitAveraged doesn't take: turned or scaled under Smart, and every Crisp
+// draw): from a copy when the quad's texels span tiles. seamEmitRegion is the part most such draws go no further than.
+static void SEAM_TEXT seamEmitRegionAsked(CtrRenderer* r, CtrPage* page, float sx0, float sy0, float sx1, float sy1, const float* px, const float* py,
+                                          const CtrColor* c) {
+    int32_t tw = page->tileW, th = page->tileH;
+    if (!CtrSeam_knownNoFit(r->frame) && 0 < tw && 0 < th && (tw & (tw - 1)) == 0 && (th & (th - 1)) == 0) {
+        // Truncated corners in one tile have equal bits above the tile's size, so a draw that fails this lies in one tile
+        // (or starts left of or above the page, which has no copy: the sign bit makes the difference negative).
+        int32_t ix0 = (int32_t) sx0, iy0 = (int32_t) sy0, ix1 = (int32_t) sx1, iy1 = (int32_t) sy1;
+        if ((ix0 ^ ix1) < tw && (iy0 ^ iy1) < th) {
+            CtrSeam_noCopy(r->frame);
+        } else if (CtrSeam_demand(ix0 < ix1 ? ix0 : ix1, iy0 < iy1 ? iy0 : iy1)) {
+            // The tiles emitPageTiles takes (it works them out again, dividing: a power of two's reciprocal gives the same).
+            union {
+                uint32_t u;
+                float f;
+            } rw = {(uint32_t) (127 - __builtin_ctz((unsigned) tw)) << 23}, rh = {(uint32_t) (127 - __builtin_ctz((unsigned) th)) << 23};
+            float minX = sx0 < sx1 ? sx0 : sx1, maxX = sx0 < sx1 ? sx1 : sx0;
+            float minY = sy0 < sy1 ? sy0 : sy1, maxY = sy0 < sy1 ? sy1 : sy0;
+            int32_t tx0 = (int32_t) (minX * rw.f), tx1 = (int32_t) ((maxX - 0.001f) * rw.f);
+            int32_t ty0 = (int32_t) (minY * rh.f), ty1 = (int32_t) ((maxY - 0.001f) * rh.f);
+            // Spanning tiles, and none of what no copy can hold (z_seamcopy.c's seamFits, which rounds the texels out and
+            // so finds as many tiles or more, as wide or wider): more than 2 x 2 tiles, across a seam a tile less a texel
+            // wide or high (its parts would meet), or a first tile of 32 or 24 bits a texel.
+            bool may = (tx0 != tx1 || ty0 != ty1) && 1 >= tx1 - tx0 && 1 >= ty1 - ty0 && 0.0f <= minX && 0.0f <= minY && page->tilesX > tx0 &&
+                       page->tilesY > ty0 && (tx0 == tx1 || (float) (tw - 1) > maxX - minX) && (ty0 == ty1 || (float) (th - 1) > maxY - minY);
+            if (may) {
+                const CtrTile* t = &page->tiles[ty0 * page->tilesX + tx0];
+                may = !(t->valid && (t->format == CTR_TILE_RGBA8 || t->format == CTR_TILE_RGB8));
+            }
+            if (!may) {
+                CtrSeam_noCopy(r->frame);
+            } else {
+                bool uniform = c[0].r == c[1].r && c[0].g == c[1].g && c[0].b == c[1].b && c[0].a == c[1].a && c[0].r == c[2].r && c[0].g == c[2].g &&
+                               c[0].b == c[2].b && c[0].a == c[2].a && c[0].r == c[3].r && c[0].g == c[3].g && c[0].b == c[3].b && c[0].a == c[3].a;
+                if (uniform && c[0].a != 0 && sx1 != sx0 && sy1 != sy0) {
+                    const SeamCopy* k = seamLookup(r, page, minX, minY, maxX, maxY);
+                    if (k != nullptr) {
+#ifdef CTRPORT_SEAM_CHECK
+                        seam.checkRegion++;
+#endif
+                        seamDraw(r, k, page, sx0, sy0, sx1, sy1, px, py, c);
+                        return;
+                    }
+                }
+            }
+        }
+    }
+    emitPageTiles(r, page, sx0, sy0, sx1, sy1, px, py, c);
+}
+
+static void SEAM_TEXT seamEmitRegion(CtrRenderer* r, CtrPage* page, float sx0, float sy0, float sx1, float sy1, const float* px, const float* py,
+                                     const CtrColor* c) {
+    if (page->tilesX != 1 || page->tilesY != 1) {
+        // Any key a region always gives will do: its page and corners' bits, as they are, which costs no conversion. All of
+        // them, as one draw's refusal goes for all draws with its key: a draw in one tile with a crossing one's corner, say.
+        union {
+            float f;
+            uint32_t u;
+        } x0 = {sx0}, y0 = {sy0}, x1 = {sx1}, y1 = {sy1};
+        uint32_t key = (uint32_t) page ^ x0.u ^ (y0.u >> 15 | y0.u << 17) ^ (x1.u >> 7 | x1.u << 25) ^ (y1.u >> 23 | y1.u << 9);
+        if (CtrSeam_worthAsking(r->frame, key)) {
+            seamEmitRegionAsked(r, page, sx0, sy0, sx1, sy1, px, py, c);
+            return;
+        }
+    }
+    emitPageTiles(r, page, sx0, sy0, sx1, sy1, px, py, c);
+}
+#endif // SEAM_COPY
+
+#ifdef ENABLE_WAD16
+// ===[ scanout: a Game screen change with no refresh of a half-written or wrong-format buffer (UNDERTALE only) ]===
+//
+// screensMoveGame carries the game's last frame into the buffer the destination screen is showing, still read as the
+// consoles' RGB565 until the move's present: a refresh of BGR8 bytes read as RGB565, colour noise. It also clears the
+// buffer the screen the game leaves is showing, during the scan: a part-done wipe. scanoutMove instead gives each
+// screen its new picture in the buffer it is not showing, presented with its new format at its vblank; each buffer it
+// was showing is written only once that present has landed.
+//
+// The other screen first: its spare cleared and presented RGB565 right after one of its vblanks, so moveConsoles
+// (main.c) puts the consoles there, the menu's page with them, before the next vblank shows it. That page is read from
+// the menu console's buffer, which while the menu is open is the destination's spare (ctr_optmenu.c's optPlace), so
+// it is read before the frame goes there (R428c: the frame first showed as RGB565 noise on the bottom for a frame when
+// the game moved up from it). Then the game's screen: the frame (the top's sides black) in its spare, presented BGR8.
+// Then, as screensMoveGame leaves them, the frame goes into the game screen's other buffer too and the other screen's
+// old buffer is cleared. dlgtop's backup copy (Loadgame_guardedCarry) is not needed.
+//
+// No code above changes (the late layout): screensConfigureKeepBottom, every UNDERTALE move but the renderer's
+// destroy, calls CtrTextures_releaseMirrors just before its move, and that call (linker --wrap, UNDERTALE only) does
+// the move first, as keepBottom would, which then finds the game already there. A move this can't do (wide, an
+// unexpected buffer) is left to screensMoveGame as before.
+#define SCANOUT_MOVE __attribute__((noinline, noipa, section(".text_scanout")))
+// Return addresses this far into screensConfigureKeepBottom are its releaseMirrors call, which -O2 copies into each
+// branch of onBottom (three copies; test_scanout_move.py checks every copy is in range and keepBottom is longer).
+#define SCANOUT_KEEP_CALL_WITHIN 0x400u
+void CtrScreens_pacerWaitShown(gfxScreen_t screen, bool nextEvent);
+
+// Until the screen shows what was presented to it last (taken at one of its vblanks; no held flip).
+SCANOUT_MOVE static void scanoutLanded(gfxScreen_t screen) {
+    while (!CtrPacer_screenReady(screen)) CtrScreens_pacerWaitShown(screen, true);
+}
+
+SCANOUT_MOVE static bool scanoutMove(CtrRenderer* r, bool onBottom) {
+    gfxScreen_t game = onBottom ? GFX_BOTTOM : GFX_TOP, other = onBottom ? GFX_TOP : GFX_BOTTOM;
+    bool top = game == GFX_TOP;
+    // The last frame's transfer and flip done first.
+    CtrGpu_waitIdle();
+    scanoutLanded(other);
+    scanoutLanded(game);
+    u16 fw = 0, fh = 0, tw = 0, th = 0;
+    u8* src = CtrPacer_shownFramebuffer(other, GFX_LEFT, &fw, &fh); // the game's frame, on screen
+    u8* back = CtrPacer_backFramebuffer(other, GFX_LEFT);
+    u8* now = CtrPacer_shownFramebuffer(game, GFX_LEFT, &tw, &th); // the consoles, on screen; leaves it double buffered
+    u8* spare = CtrPacer_backFramebuffer(game, GFX_LEFT);
+    if (gfxIsWide() || gfxGetScreenFormat(other) != GSP_BGR8_OES || src == nullptr || back == nullptr || now == nullptr ||
+        spare == nullptr || back == src || spare == now || fw != 240 || tw != 240 ||
+        fh != (top ? BOTTOM_SCREEN_W : 400) || th != (top ? 400 : BOTTOM_SCREEN_W)) {
+        gfxSetDoubleBuffering(game, false); // as found: the consoles' single buffer
+        return false;
+    }
+    u32 gameBytes = (u32) tw * th * 3u, otherBytes = (u32) fw * fh * 3u;
+    deleteTarget(&r->topTarget);
+    CtrLog_beginConsole();
+    // A screenshot's notice on the consoles goes with them (screensConfigure paints it again).
+    CtrScreens_noticeShown = false;
+    memset(back, 0, otherBytes);
+    GSPGPU_FlushDataCache(back, otherBytes);
+    if (onBottom) {
+        gfxSetWide(false);
+        gfxSet3D(false);
+    }
+    // The pacer counts the game's screen's flips as the frames' from here on, not this one.
+    CtrPacer_setGameScreen(game);
+    CtrScreens_onBottom = onBottom;
+    CtrScreens_pacerWaitShown(other, true); // a whole refresh to go before the other screen's next vblank
+    gfxSetScreenFormat(other, GSP_RGB565_OES);
+    CtrScreens_pacerShow(other); // its cleared spare, RGB565
+    gfxSetDoubleBuffering(other, false);
+    CtrScreens_moveConsoles(onBottom); // onto that spare, before it is shown; the menu's page from the game's spare
+    u8* in = src + (top ? 0 : SCREENS_CARRY_AT);
+    u8* out = spare + (top ? SCREENS_CARRY_AT : 0);
+    GSPGPU_InvalidateDataCache(in, SCREENS_CARRY_BYTES);
+    if (top) {
+        memset(spare, 0, SCREENS_CARRY_AT);
+        memset(out + SCREENS_CARRY_BYTES, 0, gameBytes - SCREENS_CARRY_AT - SCREENS_CARRY_BYTES);
+    }
+    memcpy(out, in, SCREENS_CARRY_BYTES);
+    GSPGPU_FlushDataCache(spare, gameBytes);
+    gfxSetScreenFormat(game, GSP_BGR8_OES);
+    CtrScreens_pacerShow(game); // libctru's current buffer becomes the spare, shown BGR8 at the next vblank
+    scanoutLanded(other);
+    scanoutLanded(game);
+    memcpy(now, spare, gameBytes);
+    GSPGPU_FlushDataCache(now, gameBytes);
+    memset(src, 0, otherBytes);
+    GSPGPU_FlushDataCache(src, otherBytes);
+    CtrLog_endConsole();
+    logInfo(screensMoved, onBottom ? screensBottom : screensTop);
+    return true;
+}
+
+#ifdef CTRPORT_PLAYER_SHOTS
+// Test builds: each refresh during the move recorded (z_scanout.c); with scanout_oldmove.txt on the card,
+// screensMoveGame's move (S8a's) instead, for the comparison.
+void CtrScanout_traceBegin(void);
+void CtrScanout_traceEnd(void);
+SCANOUT_MOVE static void scanoutTraced(CtrRenderer* r, bool onBottom) {
+    CtrGpu_waitIdle();
+    FILE* old = fopen(CTRPORT_GAME_DIR "/scanout_oldmove.txt", "r");
+    if (old != nullptr) fclose(old);
+    logInfo("scanout: Game screen change to the %s screen, %s move\n", onBottom ? "bottom" : "top",
+            old != nullptr ? "S8a's" : "the new");
+    CtrScanout_traceBegin();
+    if (old != nullptr || !scanoutMove(r, onBottom)) screensMoveGame(r, onBottom);
+    CtrScanout_traceEnd();
+}
+#endif
+
+uint32_t __real_CtrTextures_releaseMirrors(CtrTextureCache* cache, bool inUse);
+uint32_t __wrap_CtrTextures_releaseMirrors(CtrTextureCache* cache, bool inUse);
+SCANOUT_MOVE uint32_t __wrap_CtrTextures_releaseMirrors(CtrTextureCache* cache, bool inUse) {
+    uintptr_t from = (uintptr_t) __builtin_return_address(0), keep;
+    // keepBottom's address by assembler name: no C reference, so the compiler's view of the code above is as before.
+    __asm__("ldr %0, 1f\n\tb 2f\n\t.p2align 2\n1:\t.word screensConfigureKeepBottom\n2:" : "=r"(keep));
+    uint32_t freed = __real_CtrTextures_releaseMirrors(cache, inUse);
+    if (!inUse || from <= keep || from - keep >= SCANOUT_KEEP_CALL_WITHIN) return freed;
+    // keepBottom's first steps, then the move it is about to make.
+    CtrRenderer* r = (CtrRenderer*) ((u8*) cache - offsetof(CtrRenderer, textures));
+    bool onBottom = CtrScreens_gameBelow() && !r->bottomYielded;
+    if (onBottom == CtrScreens_onBottom) return freed;
+    if (onBottom) deleteTarget(&r->bottomTarget);
+#ifdef CTRPORT_PLAYER_SHOTS
+    scanoutTraced(r, onBottom);
+#else
+    scanoutMove(r, onBottom);
+#endif
+    return freed;
+}
+#endif
+
+// E1 reads font coverage through the existing CPU texture reader. Both words
+// live in appended late text; the original reader keeps its symbol and body.
+#if defined(ENABLE_WAD16)
+const uint32_t Errtext_textureCacheAt __attribute__((used, section(".rodata.errtext_e1_in_text"))) =
+    __builtin_offsetof(CtrRenderer, textures);
+bool (*const Errtext_fontTexel)(CtrPage*, int32_t, int32_t, uint32_t*)
+    __attribute__((used, section(".rodata.errtext_e1_in_text"))) = smartTexel;
+#endif
+
+// ===[ Bones in one piece (change bonepulse) ]===
+// UNDERTALE's bones are drawn in three pieces: two end caps (draw_sprite_part of the cap sprites, 13 texels wide;
+// Sans's, 10) and between them the shaft, a filled rectangle 7 pixels wide.
+// On a halved target each screen pixel shows its 2x2 block's even column (Pixel grid), so the shaft shows 4 screen
+// pixels wide from an even x and 3 from an odd one, and a bone moving 3 or 3.5 pixels a frame (Papyrus's white and
+// blue bones) changes parity every frame or two: the shaft pulses 3, 4, 3, 4 and the caps change shape with it, under
+// Smooth and Crisp alike. On PC every frame shows 7. The pixel grid leaves odd-sized pieces and rectangles where they
+// are, and moving the caps alone would part them from the shaft. So while a listed object's Draw event runs,
+// everything it draws (sprites, sprite parts, rectangles and lines) moves by one amount, the one that puts the
+// instance's x, or y, on the even surface pixel at or before it: the object keeps one shape on every frame and moves
+// in whole screen pixels, as sprites in 2x pixels do. Only the picture moves, by under a screen pixel; x and y
+// themselves never do. Each object moves in the axes its pieces are placed from:
+// - the bones (Papyrus's two kinds and Sans's): x. A bone's other cap is drawn at the battle box's edge, not from y.
+// - Sans's bone platforms: x. Two rectangle outlines from x; at 2.5 pixels a frame they showed 27 and 26 screen pixels
+//   wide by turns.
+// - Mettaton's arms (box form): y. Two filled bars, 17 and 13 rows tall, line dividers and sprites, all from y; falling
+//   3.3 to 5 pixels a frame, the white bar showed 7 and 6 rows thick by turns.
+// The vtable's normal and frame-skip entries for these draws point here (SKIP_WRAPPERS, CtrRenderer_create);
+// everything goes on to the draw that was there. Late code, constants and statics, appended (late_reserve.ld:
+// .text_bonepulse, .rodata.bonepulse_in_text, .data.bonepulse_late).
+// UNDERTALE only (ENABLE_WAD16): DELTARUNE has none of these objects, and its vtable keeps the draws it had
+// (ctr_renderer.h, BP_*).
+#if defined(ENABLE_WAD16)
+#define BONEPULSE_TEXT __attribute__((noinline, section(".text_bonepulse")))
+#define BONEPULSE_OBJECTS 6
+static int16_t bonePieceObj[BONEPULSE_OBJECTS] __attribute__((section(".data.bonepulse_late"))) = { -2, -2, -2, -2, -2, -2 };
+static const char bonePieceNames[BONEPULSE_OBJECTS][17] __attribute__((section(".rodata.bonepulse_in_text"))) = {
+    "blt_sizebone", "blt_topbone", "obj_sans_bonebul", "obj_boneplat", "obj_metthand_l", "obj_metthand_r" };
+// The axes each moves in: 1 x, 2 y.
+static const uint8_t bonePieceAxes[BONEPULSE_OBJECTS] __attribute__((section(".rodata.bonepulse_in_text"))) = { 1, 1, 1, 1, 2, 2 };
+
+// The y move bonePieceDx found. A static, not an out parameter, and each wrapper copies it to a local before the call:
+// an address-taken local, or a static read inside the call's arguments, makes GCC name a temporary, and that renumbers
+// the switch tables of code compiled after it (CSWTCH.N; check_layout).
+static float bonePieceDyNow __attribute__((section(".data.bonepulse_late"))) = 0.0f;
+
+// The move for what the running code draws now: the x move returned, the y move left in bonePieceDyNow (both 0 unless
+// it is a listed object's Draw event on a halved target).
+static float BONEPULSE_TEXT bonePieceDx(Renderer* renderer) {
+    bonePieceDyNow = 0.0f;
+    const VMContext* vm = renderer->runner != nullptr ? renderer->runner->vmContext : nullptr;
+    const Instance* inst = vm != nullptr ? vm->currentInstance : nullptr;
+    if (inst == nullptr || vm->currentEventType != EVENT_DRAW) return 0.0f;
+    if (bonePieceObj[0] == -2) {
+        // The objects by name, once (one data.win a run); -1 where it has none (DELTARUNE).
+        const DataWin* dw = renderer->dataWin;
+        for (int32_t i = 0; BONEPULSE_OBJECTS > i; i++) {
+            bonePieceObj[i] = -1;
+            for (uint32_t o = 0; dw != nullptr && dw->objt.count > o && 0x7fff >= o; o++) {
+                const char* name = dw->objt.objects[o].name;
+                if (name != nullptr && strcmp(name, bonePieceNames[i]) == 0) {
+                    bonePieceObj[i] = (int16_t) o;
+                    break;
+                }
+            }
+        }
+    }
+    int32_t o = inst->objectIndex;
+    // Not an object (the global instance layer scripts run as, STRUCT_OBJECT_INDEX -1): never a listed one, even where a
+    // name is missing and its slot holds -1 (review c26rev3 R433-1).
+    if (o < 0) return 0.0f;
+    int32_t i = 0;
+    while (BONEPULSE_OBJECTS > i && o != bonePieceObj[i]) i++;
+    if (i == BONEPULSE_OBJECTS) return 0.0f;
+    CtrRenderer* r = (CtrRenderer*) renderer;
+    if (r->gridHold != 0 || !gridActive(r)) return 0.0f;
+    if ((bonePieceAxes[i] & 2) != 0 && r->gridMap.y) bonePieceDyNow = -gridExcess(r->gridMap.ky * inst->y + r->gridMap.oy) * r->gridMap.invKy;
+    if ((bonePieceAxes[i] & 1) == 0 || !r->gridMap.x) return 0.0f;
+    return -gridExcess(r->gridMap.kx * inst->x + r->gridMap.ox) * r->gridMap.invKx;
+}
+
+static void BONEPULSE_TEXT bpDrawSpritePart(Renderer* renderer, int32_t tpagIndex, float srcOffX, float srcOffY, float srcW, float srcH,
+                                            float x, float y, float xscale, float yscale, float angleDeg, float pivotX, float pivotY,
+                                            uint32_t color, float alpha) {
+    float dx = bonePieceDx(renderer);
+    float dy = bonePieceDyNow;
+    E5X_OPAQUE(e5xDrawSpritePart)(renderer, tpagIndex, srcOffX, srcOffY, srcW, srcH, x + dx, y + dy, xscale, yscale, angleDeg, pivotX, pivotY,
+                                  color, alpha);
+}
+
+static void BONEPULSE_TEXT bpSkipDrawSpritePart(Renderer* renderer, int32_t tpagIndex, float srcOffX, float srcOffY, float srcW, float srcH,
+                                                float x, float y, float xscale, float yscale, float angleDeg, float pivotX, float pivotY,
+                                                uint32_t color, float alpha) {
+    float dx = bonePieceDx(renderer);
+    float dy = bonePieceDyNow;
+    E5X_OPAQUE(skipDrawSpritePart)(renderer, tpagIndex, srcOffX, srcOffY, srcW, srcH, x + dx, y + dy, xscale, yscale, angleDeg, pivotX, pivotY,
+                                   color, alpha);
+}
+
+static void BONEPULSE_TEXT bpDrawSpritePartColor(Renderer* renderer, int32_t tpagIndex, float srcOffX, float srcOffY, float srcW, float srcH,
+                                                 float x, float y, float xscale, float yscale, float angleDeg, float pivotX, float pivotY,
+                                                 uint32_t color1, uint32_t color2, uint32_t color3, uint32_t color4, float alpha) {
+    float dx = bonePieceDx(renderer);
+    float dy = bonePieceDyNow;
+    E5X_OPAQUE(e5xDrawSpritePartColor)(renderer, tpagIndex, srcOffX, srcOffY, srcW, srcH, x + dx, y + dy, xscale, yscale, angleDeg, pivotX,
+                                       pivotY, color1, color2, color3, color4, alpha);
+}
+
+static void BONEPULSE_TEXT bpSkipDrawSpritePartColor(Renderer* renderer, int32_t tpagIndex, float srcOffX, float srcOffY, float srcW,
+                                                     float srcH, float x, float y, float xscale, float yscale, float angleDeg, float pivotX,
+                                                     float pivotY, uint32_t color1, uint32_t color2, uint32_t color3, uint32_t color4,
+                                                     float alpha) {
+    float dx = bonePieceDx(renderer);
+    float dy = bonePieceDyNow;
+    E5X_OPAQUE(skipDrawSpritePartColor)(renderer, tpagIndex, srcOffX, srcOffY, srcW, srcH, x + dx, y + dy, xscale, yscale, angleDeg, pivotX,
+                                        pivotY, color1, color2, color3, color4, alpha);
+}
+
+static void BONEPULSE_TEXT bpDrawRectangle(Renderer* renderer, float x1, float y1, float x2, float y2, uint32_t color, float alpha, bool outline) {
+    float dx = bonePieceDx(renderer);
+    float dy = bonePieceDyNow;
+    E5X_OPAQUE(e5xDrawRectangle)(renderer, x1 + dx, y1 + dy, x2 + dx, y2 + dy, color, alpha, outline);
+}
+
+static void BONEPULSE_TEXT bpSkipDrawRectangle(Renderer* renderer, float x1, float y1, float x2, float y2, uint32_t color, float alpha,
+                                               bool outline) {
+    float dx = bonePieceDx(renderer);
+    float dy = bonePieceDyNow;
+    E5X_OPAQUE(skipDrawRectangle)(renderer, x1 + dx, y1 + dy, x2 + dx, y2 + dy, color, alpha, outline);
+}
+
+static void BONEPULSE_TEXT bpDrawSprite(Renderer* renderer, int32_t tpagIndex, float x, float y, float originX, float originY, float xscale,
+                                        float yscale, float angleDeg, uint32_t color, float alpha) {
+    float dx = bonePieceDx(renderer);
+    float dy = bonePieceDyNow;
+    E5X_OPAQUE(e5xDrawSprite)(renderer, tpagIndex, x + dx, y + dy, originX, originY, xscale, yscale, angleDeg, color, alpha);
+}
+
+static void BONEPULSE_TEXT bpSkipDrawSprite(Renderer* renderer, int32_t tpagIndex, float x, float y, float originX, float originY, float xscale,
+                                            float yscale, float angleDeg, uint32_t color, float alpha) {
+    float dx = bonePieceDx(renderer);
+    float dy = bonePieceDyNow;
+    E5X_OPAQUE(skipDrawSprite)(renderer, tpagIndex, x + dx, y + dy, originX, originY, xscale, yscale, angleDeg, color, alpha);
+}
+
+static void BONEPULSE_TEXT bpDrawLine(Renderer* renderer, float x1, float y1, float x2, float y2, float width, uint32_t color, float alpha) {
+    float dx = bonePieceDx(renderer);
+    float dy = bonePieceDyNow;
+    E5X_OPAQUE(e5xDrawLine)(renderer, x1 + dx, y1 + dy, x2 + dx, y2 + dy, width, color, alpha);
+}
+
+static void BONEPULSE_TEXT bpSkipDrawLine(Renderer* renderer, float x1, float y1, float x2, float y2, float width, uint32_t color, float alpha) {
+    float dx = bonePieceDx(renderer);
+    float dy = bonePieceDyNow;
+    E5X_OPAQUE(skipDrawLine)(renderer, x1 + dx, y1 + dy, x2 + dx, y2 + dy, width, color, alpha);
+}
+
+static void BONEPULSE_TEXT bpDrawLineColor(Renderer* renderer, float x1, float y1, float x2, float y2, float width, uint32_t color1,
+                                           uint32_t color2, float alpha) {
+    float dx = bonePieceDx(renderer);
+    float dy = bonePieceDyNow;
+    E5X_OPAQUE(e5xDrawLineColor)(renderer, x1 + dx, y1 + dy, x2 + dx, y2 + dy, width, color1, color2, alpha);
+}
+
+static void BONEPULSE_TEXT bpSkipDrawLineColor(Renderer* renderer, float x1, float y1, float x2, float y2, float width, uint32_t color1,
+                                               uint32_t color2, float alpha) {
+    float dx = bonePieceDx(renderer);
+    float dy = bonePieceDyNow;
+    E5X_OPAQUE(skipDrawLineColor)(renderer, x1 + dx, y1 + dy, x2 + dx, y2 + dy, width, color1, color2, alpha);
+}
+#endif // ENABLE_WAD16 (bonepulse)
+
+// popbot (z_popbot.c) reaches the dialogue recorder through these words: the policy, the recording's array and the
+// row presentDialogue keeps, as offsets into the renderer, and the recorded quad's layout. Appended late text only;
+// nothing above refers to them.
+#if defined(ENABLE_WAD16)
+const uint32_t Popbot_layout[7] __attribute__((used, section(".rodata.popbot_in_text"))) = {
+    __builtin_offsetof(CtrRenderer, dlg.policy), __builtin_offsetof(CtrRenderer, dlg.rec.ops),
+    __builtin_offsetof(CtrRenderer, dlg.top),    sizeof(CtrRecOp),
+    __builtin_offsetof(CtrRecOp, pageId),        __builtin_offsetof(CtrRecOp, x),
+    __builtin_offsetof(CtrRecOp, y),
+};
+#endif
+
+// Confirmed options-menu Quit: a prepared black pair, presented in one refresh.
+// No framebuffer that the LCD still scans is changed. The menu's old flush
+// waited for its page's vblank; this replaces that wait, and does not wait for
+// the black pair to land: normal teardown overlaps that refresh.
+#if defined(ENABLE_WAD16)
+u32 __real_C3D_FrameCounter(int id);
+u8* CtrQuitblack_present(CtrTextureCache* cache);
+__attribute__((noinline, noipa, optimize("Os"), section(".text_quitblack")))
+u8* CtrQuitblack_present(CtrTextureCache* cache) {
+    if (cache == nullptr || gfxIsWide() || gfxIs3D()) return nullptr;
+    CtrRenderer* r = (CtrRenderer*) ((u8*) cache - offsetof(CtrRenderer, textures));
+    CtrGpu_waitIdle();
+    for (u32 s = 0; s != 2; s++)
+        while (!CtrPacer_screenReady((gfxScreen_t) s)) CtrScreens_pacerWaitShown((gfxScreen_t) s, true);
+    gfxScreen_t other = CtrScreens_onBottom ? GFX_TOP : GFX_BOTTOM;
+    u8* spare[2];
+    u32 bytes[2];
+    CtrLog_beginConsole();
+    for (u32 s = 0; s != 2; s++) {
+        u16 w = 0, h = 0;
+        u8* shown = CtrPacer_shownFramebuffer((gfxScreen_t) s, GFX_LEFT, &w, &h);
+        spare[s] = CtrPacer_backFramebuffer((gfxScreen_t) s, GFX_LEFT);
+        if (shown == nullptr || spare[s] == nullptr || shown == spare[s] || w != 240u || h != (s == 0 ? 400u : 320u)) {
+            gfxSetDoubleBuffering(other, false);
+            CtrLog_endConsole();
+            return nullptr;
+        }
+        bytes[s] = (u32) w * h * gspGetBytesPerPixel(gfxGetScreenFormat((gfxScreen_t) s));
+    }
+    for (u32 s = 0; s != 2; s++) {
+        memset(spare[s], 0, bytes[s]);
+        GSPGPU_FlushDataCache(spare[s], bytes[s]);
+    }
+    // Both vblank callbacks have passed before either submission. Submitting
+    // from just one callback races the other screen's near-simultaneous vblank.
+    u32 top = __real_C3D_FrameCounter(0), bottom = __real_C3D_FrameCounter(1);
+    u32 next = (s32) (top - bottom) >= 0 ? top + 1u : bottom + 1u;
+    for (u32 s = 0; s != 2; s++)
+        while ((s32) (__real_C3D_FrameCounter((int) s) - next) < 0)
+            CtrScreens_pacerWaitShown((gfxScreen_t) s, false);
+    CtrRenderer_skipPresent(&r->base); // the final endFrame must not transfer the old game over black
+    CtrScreens_pacerShow(GFX_TOP);
+    CtrScreens_pacerShow(GFX_BOTTOM);
+    gfxSetDoubleBuffering(other, false);
+    CtrLog_endConsole();
+    return spare[other];
+}
+#endif
+
+#ifdef CTRPORT_DLGWHITE_HELPER
+#include "ctr_dlgwhite.inc"
 #endif

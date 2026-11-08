@@ -26,6 +26,15 @@ build_plan.py's, which lists the code each group ran), the constant each of its 
 HURT_VARS variable. Those come after the group's recorded sounds and before KILL_SOUNDS, on the worker; a group the
 sound record has no scene for gets a scene of them.
 
+Code sounds (change tilemiss): the sound record lists what our recordings heard, and a recording can stop before a fight
+does: Mettaton EX's stopped 697 frames in, so the bombs, the heart's hits and the heart's explosion were read or decoded
+at their first play (Old 3DS, 11-08: a big frame drop as the heart first exploded). code_sounds reads each battle
+group's sounds from the bytecode instead (codeclose.py's battle_sounds: the group's code in the room plan's record, what
+it creates, each constant passed to a sound-playing call), leaving out the common machinery that most groups reach (an
+object more than 1/MACHINERY_SHARE of the groups reach: the dialogue writer's voices, the weapons' hits, the generic
+bullets). They come after the group's kill sounds, on the worker, within SCENE_BYTES like the rest; one already
+listed isn't listed twice, and one the 3DS doesn't copy (a file of its own, or a big one) is left out here.
+
 Stream scenes (change omegaflowey, --streams: UNDERTALE Old builds): the sound record's "streams" list (stream_records.py,
 from our playthrough logs) names, per room, the big compressed sounds that room decoded into the sound cache. Each
 room gets a scene of them with sub STREAM_SUB (entries u16 sound, u16 0), which the Old runtime reads at the room
@@ -38,6 +47,33 @@ opened a stream over and over before their background decode came in (Omega Flow
 flame, about every 67 ms, for the 1.7 s the Old models took to decode it). Each comes first in the room's scene (its
 decoded size from the Ogg headers, inside `first`), so the room change's preload asks for its decode then
 (ctr_audio_system.c's flamePreload) and flowend keeps the copy for the room.
+
+Boot sounds (change firstuse2): the record lists a sound only in the rooms and battle groups our tours played it in, so
+the common ones of every session (the encounter's alert and the soul's fall, the save point's two, the attack's slash,
+the player's and the enemy's hurt, the menu's choice and move, the game over's two breaks) were read at their first
+play in any other room: a read on the audio loader thread, whose first read of the session also opens data.win (54-262
+ms an open on an SD card measured on an Old 3DS), so the sound starts late. BOOT_SOUNDS go after the recorded sounds
+of each BOOT_ROOMS scene (the intro story and the title menu, which every launch loads, New Game and Continue alike),
+on the worker: a best-effort prefetch under the plan's usual rules (SCENE_BYTES, the 6 MiB cache cap counting queued
+copies, the worker's free-memory floor). The worker drops what it hadn't started at the next room change, and the
+title menu asks again for what is missing. A copy can be declined, and a cached one can go later: as a cold entry it
+is an early pick for LRU eviction, and texture shedding takes it once it is 10 s old, keeping the cache's 2 MiB
+minimum. While cached it counts against the cap, so a later room's plan copy can be declined where it would have
+fitted. A sound not in the cache at its play loads then, as before.
+
+Voices (change papvoice): UNDERTALE's dialogue writer stops and plays its voice at every letter, so a voice not in the
+cache lost a line's first blips while its read was on its way (each letter's stop dropped the waiting voice; Papyrus's
+"HUMAN." in the fog room lost up to all six). The record lists a voice only where our tours first read it, so the
+census (voice_census.py) finds each room's and battle group's text voices in the bytecode: the typers its code sets and
+the `\\T` codes of the text it names. They go first on the worker in their scene (after the room change's own copies),
+smallest first, each once, so a line at a scene's start waits for one small read: a copy the cache can't take now is
+declined, and a cached one is as cold as any planned copy. Each has VOICE_KIB set in its size: the runtime
+(ctr_audio_system.c's CtrAudioSystem_queuePlanned) queues it without the flag and outside flowend's FLOWEND_KEEP
+kept sounds, which stay the ones the scene keeps without its voices (the first that many of its other entries). One
+more scene (room
+VOICE_ROOM, sub VOICE_SUB, which no scene lookup asks for: z_utsfx.c reads it by that sub) lists every text voice whose
+read is VOICE_DIRECT_MAX bytes or less: the 3DS reads one of those at its play on the game thread, so it starts at
+the letter that asked for it (a voice the census missed, or a planned one the worker had not finished).
 
 Exit status: 0 written, 3 no game data or no record for it (the build goes on without a plan), 2 an error.
 """
@@ -56,6 +92,11 @@ MAGIC = 0x50535444            # "DTSP" (UTSFX_MAGIC)
 VERSION = 2
 NO_SUB = 0xFFFF
 STREAM_SUB = 0xFFFE              # UTSFX_STREAM_SUB (z_utsfx.c): the room's sounds that stream
+VOICE_SUB = 0xFFFD               # UTSFX_VOICE_SUB (z_utsfx.c): the text voices read at their play (change papvoice)
+VOICE_ROOM = 0                   # the room the voice scene is filed under (any room: no lookup asks for its sub)
+VOICE_DIRECT_MAX = 32 * 1024     # a voice read at its play has a WAV of this many bytes at most
+VOICE_KIB = 0x8000               # set in an added voice's size: queued unflagged, not one of flowend's kept
+FLOWEND_KEEP = 8                 # ctr_audio_system.c: a scene's first this many entries are kept from shedding
 SECTION_MIN = 512 * 1024      # AUDO_SECTION_MIN_BYTES: from this size a sound streams from its section of data.win
 ENTRY_MAX = 2 * 1024 * 1024   # SFX_CACHE_MAX_ENTRY_BYTES
 SCENE_BYTES = 2 * 1024 * 1024  # copies planned per scene at most (the cache holds 6 MiB; Old linear memory is tight)
@@ -68,7 +109,17 @@ FLAG_REGULAR = 0x64
 KILL_SOUNDS = ('f76722798e48e2149950ae7cd3a4344eb184fb9b',)
 # The variable a monster's Create event stores its hurt sound in (hurt_sounds), by the SHA-1 of its name.
 HURT_VARS = ('ef9769fc4b5d3fde444079123b464f9fae3d5559',)
+MACHINERY_SHARE = 4           # code_sounds: an object more than 1/4 of the battle groups reach adds no sounds
 LATER = 1 << 30               # the frame given to a kill sound: after the first frames, so copied on the worker
+# Boot sounds (see above), by the SHA-1 of each name, in the order the worker copies them: the encounter's two, the save
+# point's two, the attack, the two hurts, the menu's two, the game over's two.
+BOOT_SOUNDS = ('433fc66aa67b4ed3c04f312317df45da949c2a44', 'f746c8d8f323f7427b524584faedca5613d86c78',
+               '4c8952cbf07d1effb7d21d47819fa3887ee681aa', '4c752e880240ec0d7ca3bfdd462338fbca9c2769',
+               'c3a031e43c78538f26d4a8f9ee4d11983c036aac', 'cc617967655b453b1c5c551efbfe469d30f0af4b',
+               'f3fe84697ef008972dd2233cab76d15001e2773f',
+               '4e9d5d5d4a22e4766158e0e29ad8550448131ca5', '0576409aaec72859aad84b140a81ce96a6d18d4a',
+               '5859960fac293f94b052f1b5a762de79837d192d', '3f3cf6e327074053411654bda902bd721bfee4cd')
+BOOT_ROOMS = (1, 3)           # UNDERTALE's intro story (room 0 is the logo) and title menu
 
 
 def fnv1a(data):
@@ -179,18 +230,19 @@ def read_sounds(path):
         af = struct.unpack_from('<i', d, p + 32)[0]
         regular = (flags & FLAG_REGULAR) == FLAG_REGULAR
         in_audo = not regular or (flags & (FLAG_EMBEDDED | FLAG_COMPRESSED)) != 0
-        copy = warm = None
+        copy = warm = blob = None
         if in_audo and group == 0 and 0 <= af < na:
             q = aptrs[af]
             size = struct.unpack_from('<I', d, q)[0]
             # The lazy parser may take the distance to the next entry as the size (AudioEntry.sizeIsUpperBound).
             bound = (aptrs[af + 1] if af + 1 < na else aend) - q - 4
             if 0 < size and max(size, bound) < SECTION_MIN:
+                blob = size
                 copy = wav_copy_bytes(d[q + 4:q + 4 + size])
                 if flags & FLAG_COMPRESSED:
                     warm = ogg_copy_bytes(d[q + 4:q + 4 + size])
                     warm = warm if warm is not None and warm <= WARM_MAX else None
-        out.append({'name': name, 'copy': copy, 'warm': warm})
+        out.append({'name': name, 'copy': copy, 'warm': warm, 'blob': blob})
     return out
 
 
@@ -250,27 +302,54 @@ def hurt_sounds(path, info, plan_record):
     return out
 
 
-def with_battle_sounds(record_scenes, sounds, hurt=None):
+def code_sounds(path, plan_record):
+    """{(room, sub): [sound]} for the battle groups of the room plan's record (made on this data.win): the sounds their
+    code can play (codeclose.CodeClosure.battle_sounds, seeded with the code each group ran in the record), the common
+    machinery left out (an object more than 1/MACHINERY_SHARE of the groups reach). Empty if the bytecode can't be read."""
+    import codeclose
+    cc = codeclose.CodeClosure(path)
+    if not cc.ok:
+        return {}
+    groups = []
+    for s in plan_record.get('scenes', []):
+        if s.get('sub', -1) >= 0:
+            groups.append(((s['room'], s['sub']), {c for df, c in s.get('code', []) if df >= 0}))
+    reach = {}
+    for _key, seeds in groups:
+        for o in cc.battle_objects(seeds):
+            reach[o] = reach.get(o, 0) + 1
+    machinery = frozenset(o for o, n in reach.items() if n * MACHINERY_SHARE > len(groups))
+    out = {}
+    for key, seeds in groups:
+        found = cc.battle_sounds(seeds, machinery)
+        if found:
+            out[key] = found
+    return out
+
+
+def with_battle_sounds(record_scenes, sounds, hurt=None, code=None):
     """The record's scenes with each battle group's hurt sounds (hurt_sounds: those the record's scene doesn't list,
-    after its own) and then KILL_SOUNDS added last to each battle scene; a group with hurt sounds but no recorded
-    scene gets a scene of them; the battle room gets its own scene of KILL_SOUNDS when the record has none for it."""
+    after its own), then KILL_SOUNDS, then its code sounds (code_sounds) added last to each battle scene; a group with
+    hurt or code sounds but no recorded scene gets a scene of them; the battle room gets its own scene of KILL_SOUNDS
+    when the record has none for it."""
     hurt = hurt or {}
+    code = code or {}
     kills = [k for k, snd in enumerate(sounds) if hashlib.sha1(snd['name'].encode('utf-8')).hexdigest() in KILL_SOUNDS]
-    battle = {s['room'] for s in record_scenes if s['sub'] >= 0} | {room for room, _sub in hurt}
+    battle = {s['room'] for s in record_scenes if s['sub'] >= 0} | {room for room, _sub in hurt} | {room for room, _sub in code}
     out = []
     for s in record_scenes:
         if s['room'] in battle:
             have = [k for _df, k in s['sounds']]
-            for k in hurt.get((s['room'], s['sub']), []) + kills:
+            for k in hurt.get((s['room'], s['sub']), []) + kills + code.get((s['room'], s['sub']), []):
                 if 0 <= k < len(sounds) and k not in have:
                     have.append(k)
                     s = dict(s, sounds=list(s['sounds']) + [[LATER, k]])
         out.append(s)
     recorded = {(s['room'], s['sub']) for s in record_scenes}
-    for room, sub in sorted(hurt):
+    for room, sub in sorted(set(hurt) | set(code)):
         if (room, sub) not in recorded:
             ks = []
-            for k in hurt[(room, sub)] + kills:
+            for k in hurt.get((room, sub), []) + kills + code.get((room, sub), []):
                 if 0 <= k < len(sounds) and k not in ks:
                     ks.append(k)
             out.append({'room': room, 'sub': sub, 'sounds': [[LATER, k] for k in ks]})
@@ -280,16 +359,77 @@ def with_battle_sounds(record_scenes, sounds, hurt=None):
     return out
 
 
-def build(info, sounds, record, hurt=None, streams=False):
+def with_boot_sounds(scenes, sounds):
+    """The scenes with BOOT_SOUNDS after each BOOT_ROOMS room's own (sub -1) sounds, on the worker, each once; a boot room
+    gets a scene of them when it has none. Nothing changes when none of them is in this data.win."""
+    by_hash = {hashlib.sha1(snd['name'].encode('utf-8')).hexdigest(): k for k, snd in enumerate(sounds)}
+    boot = [by_hash[h] for h in BOOT_SOUNDS if h in by_hash]
+    if not boot:
+        return scenes
+    out = list(scenes)
+    for room in BOOT_ROOMS:
+        at = next((i for i, s in enumerate(out) if s['room'] == room and s['sub'] < 0), None)
+        if at is None:
+            out.append({'room': room, 'sub': -1, 'sounds': []})
+            at = len(out) - 1
+        have = [k for _df, k in out[at]['sounds']]
+        out[at] = dict(out[at], sounds=list(out[at]['sounds']) + [[LATER, k] for k in boot if k not in have])
+    return out
+
+
+def voice_scenes(path, plan_record):
+    """({(room, sub): [sound]}, [sound]): each scene's text voices (voice_census.py: every room; each battle group of
+    the room plan's record, from the code it ran) and every text voice; ({}, []) if the census can't read the data."""
+    import voice_census
+    vc = voice_census.VoiceCensus(path)
+    if not vc.ok:
+        print('Sound plan: no voice census (%s)' % vc.note)
+        return {}, []
+    scenes = (plan_record or {}).get('scenes', [])
+    out = {}
+    for room in range(len(vc.cc.insts_by_room)):
+        code = [c for s in scenes if s['room'] == room and s.get('sub', -1) < 0 for _df, c in s.get('code', [])]
+        out[(room, -1)] = vc.scene_voices(room, code)
+    for s in scenes:
+        if s.get('sub', -1) >= 0:
+            code = [c for df, c in s.get('code', []) if df >= 0]   # the group's own (as hurt_sounds)
+            out[(s['room'], s['sub'])] = vc.scene_voices(s['room'], code, battle=True)
+    return {k: v for k, v in out.items() if v}, vc.all_voices()
+
+
+def with_voice_sounds(scenes, sounds, voices):
+    """The scenes with each scene's voices (voice_scenes) first on the worker, after the room change's own copies, each
+    once; a scene the others don't have gets one of them."""
+    out, have_keys = [], set()
+    for s in scenes:
+        key = (s['room'], s['sub'])
+        have_keys.add(key)
+        ks = [k for k in voices.get(key, []) if 0 <= k < len(sounds) and sounds[k]['copy'] is not None]
+        have = [k for _df, k in s['sounds']]
+        add = [k for k in ks if k not in have]
+        # 'voices': how many of the scene's last sounds are these (build() copies them first on the worker).
+        out.append(dict(s, sounds=list(s['sounds']) + [[LATER, k] for k in add], voices=len(add)) if add else s)
+    for key in sorted(voices):
+        if key not in have_keys:
+            ks = [k for k in voices[key] if 0 <= k < len(sounds) and sounds[k]['copy'] is not None]
+            if ks:
+                out.append({'room': key[0], 'sub': key[1], 'sounds': [[LATER, k] for k in ks], 'voices': len(ks)})
+    return out
+
+
+def build(info, sounds, record, hurt=None, streams=False, voices=None, direct=None, code=None):
     """The plan's bytes. info: dwinfo.DataWinInfo; sounds: read_sounds(); record: a sound record for this data.win;
-    hurt: hurt_sounds() or None; streams: add the record's stream scenes and warm sounds (UNDERTALE Old)."""
+    hurt: hurt_sounds() or None; streams: add the record's stream scenes and warm sounds (UNDERTALE Old); voices,
+    direct: voice_scenes()'s two (None: no voices); code: code_sounds() or None."""
     warm = {}
     for w in (record.get('warm', []) if streams else []):
         ks = [k for k in w['sounds'] if 0 <= k < len(sounds) and sounds[k].get('warm')]
         if ks and 0 <= w['room'] < info.room_count:
             warm[w['room']] = ks
     scenes = []
-    rooms = with_battle_sounds(record['scenes'], sounds, hurt)
+    rooms = with_boot_sounds(with_battle_sounds(record['scenes'], sounds, hurt, code), sounds)
+    if voices:
+        rooms = with_voice_sounds(rooms, sounds, voices)
     rooms += [{'room': r, 'sub': -1, 'sounds': []} for r in sorted(warm) if not any(s['room'] == r and s['sub'] < 0 for s in rooms)]
     for s in rooms:
         room, sub = s['room'], s['sub']
@@ -300,20 +440,33 @@ def build(info, sounds, record, hurt=None, streams=False):
         entries = [(k, (sounds[k]['warm'] + 1023) // 1024) for k in ks]
         total = sum(sounds[k]['warm'] for k in ks)
         first = len(entries)
-        for df, k in s['sounds']:
+        voice_at, voice_entries = len(s['sounds']) - s.get('voices', 0), []
+        for i, (df, k) in enumerate(s['sounds']):
             copy = sounds[k]['copy'] if 0 <= k < len(sounds) else None
             if copy is None or total + copy > SCENE_BYTES:
                 continue
             total += copy
+            if i >= voice_at:
+                voice_entries.append((k, (copy + 1023) // 1024))
+                continue
             entries.append((k, (copy + 1023) // 1024))
             if df < FIRST_FRAMES and first == len(entries) - 1:
                 first += 1
+        # The voices with_voice_sounds added: chosen last (the scene's other sounds keep their place under the
+        # budget), copied first on the worker, so a line at the scene's start waits for one small read, not for the
+        # copies ahead of it (change papvoice: maintainer's card took 105.7 ms for one voice read while a save was written).
+        # VOICE_KIB keeps them out of flowend's kept sounds (R435 F2): the scene keeps the same ones as without them.
+        entries[first:first] = [(k, kb | VOICE_KIB) for k, kb in sorted(voice_entries, key=lambda e: e[1])]   # the smallest first
         if entries:
             scenes.append((room, NO_SUB if sub < 0 else sub, entries, first))
     for st in (record.get('streams', []) if streams else []):
         ks = [k for k in st['sounds'] if 0 <= k < len(sounds)]
         if ks and 0 <= st['room'] < info.room_count:
             scenes.append((st['room'], STREAM_SUB, [(k, 0) for k in ks], 0))
+    reads = [k for k in (direct or []) if 0 <= k < len(sounds) and sounds[k]['copy'] is not None
+             and sounds[k].get('blob') is not None and sounds[k]['blob'] <= VOICE_DIRECT_MAX]
+    if reads:
+        scenes.append((VOICE_ROOM, VOICE_SUB, [(k, (sounds[k]['copy'] + 1023) // 1024) for k in reads], 0))
     scenes.sort(key=lambda t: (t[0], t[1]))
     body = bytearray()
     for room, sub, entries, first in scenes:
@@ -370,7 +523,12 @@ def write_plan(path, records, out, plan_records=None, streams=False):
     plan_record = find_plan_record(plan_records, info.sha256)
     hurt = hurt_sounds(path, info, plan_record) if plan_record is not None else {}
     print('Sound plan: hurt sounds for %d battle groups (%d sounds)' % (len(hurt), sum(len(v) for v in hurt.values())))
-    data = build(info, sounds, record, hurt, streams)
+    voices, direct = voice_scenes(path, plan_record)
+    print('Sound plan: voices for %d scenes (%d entries), %d voices' % (len(voices), sum(len(v) for v in voices.values()),
+                                                                     len(direct)))
+    code = code_sounds(path, plan_record) if plan_record is not None else {}
+    print('Sound plan: code sounds for %d battle groups (%d sounds)' % (len(code), sum(len(v) for v in code.values())))
+    data = build(info, sounds, record, hurt, streams, voices, direct, code)
     os.makedirs(os.path.dirname(os.path.abspath(out)), exist_ok=True)
     tmp = out + '.tmp'
     with open(tmp, 'wb') as f:

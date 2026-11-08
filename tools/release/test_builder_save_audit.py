@@ -169,9 +169,13 @@ class CancelCleanupTests(SaveFixture):
                 seen = []
                 def progress(event):
                     seen.append(event)
-                with self.assertRaises(ftp_delivery.Cancelled):
+                with self.assertRaises(ftp_delivery.Cancelled) as caught:
                     ftp_saves.copy(self.address, UT, scan, expected, overwrite=True,
                         progress=progress, cancelled=lambda: len(seen) >= cancel_at)
+                self.assertIn('No saves were changed.', str(caught.exception))
+                self.assertIn('choose Next again', str(caught.exception))
+                self.assertNotIn('Send', str(caught.exception))
+                self.assertNotIn('update', str(caught.exception))
                 self.assertEqual(self.live(), old)
                 self.assertEqual(sorted(p.name for p in self.saves.iterdir()), sorted([*old, 'backup-keep']))
                 self.assertEqual((self.saves/'backup-keep/file0').read_bytes(), b'OLDER\n1\n0\n')
@@ -467,7 +471,9 @@ class WizardResumeTests(unittest.TestCase):
         widget = mock.Mock()
         scan = SimpleNamespace(has_corrupt=False, valid_files=[object()], player_summary='PC')
         app = mock.Mock(index=7)
-        app.state = SimpleNamespace(save_scan=scan, ftp_console='127.0.0.1:5000', product=UT)
+        app.state = gui.State('undertale')
+        app.state.save_scan, app.state.ftp_console = scan, '127.0.0.1:5000'
+        app.state.deliver_how = 'wifi'
         app.opts.confirm_overwrite = lambda *args: True
         app.work = lambda job, after, errors=False: after(_run(job))
         page = gui.SavesPage.__new__(gui.SavesPage)
@@ -478,7 +484,8 @@ class WizardResumeTests(unittest.TestCase):
         page.ftp_job, page.ftp_importing = 0, False
         page.copy_controls = lambda: (widget,)
         page.bar = page.card = widget
-        page.copy_key = lambda: ('wifi', '127.0.0.1:5000', scan)
+        page.choice = mock.Mock()
+        page.choice.get.return_value = 'wifi'
         page.addr = mock.Mock()
         page.addr.get.return_value = '127.0.0.1:5000'
         with mock.patch.object(ftp_saves, 'copy', side_effect=copy):
@@ -488,6 +495,8 @@ class WizardResumeTests(unittest.TestCase):
             page.import_ftp()
         self.assertEqual(calls, [None, stopped])
         self.assertIsNone(page.ftp_resume)
+        self.assertIs(app.state.current_save_result(), app.state.save_result)
+        self.assertEqual(app.state.save_destination, '127.0.0.1:5000')
 
 
 class SavesPageJobTests(unittest.TestCase):
@@ -509,7 +518,8 @@ class SavesPageJobTests(unittest.TestCase):
         app.work = lambda job, done, errors=False: self.jobs.append((job, done))
         app.root = mock.Mock()
         self.scan_result = SimpleNamespace(has_corrupt=False, valid_files=[object()], files=[object()],
-                                           corrupt_files=[], player_summary='PC', folder='/fixture-pc', exists=True)
+                                           corrupt_files=[], player_summary='PC', folder='/fixture-pc', exists=True,
+                                           error=None)
         self.scan_result.files = []
         state.save_scan = self.scan_result
         page = gui.SavesPage.__new__(gui.SavesPage)

@@ -651,7 +651,7 @@ def build_tables(game, data, romfs, target=None):
     looks up (undertale, deltarune for the chapter select, chapterN_windows), and beside it the item verdicts
     (tools/aot/itemverdict.py) as <name>.dtiv. Skipped when the inputs are unchanged. UNDERTALE, and DELTARUNE for
     New 3DS (target n3ds), also get symmetric halving's plain items (tools/aot/symverdict.py) beside each as
-    <name>.dtsy."""
+    <name>.dtsy. UNDERTALE also gets Smart smoothing's whole-rows table (tools/aot/thinrule.py) as <name>.dttr."""
     import hashlib
     import os
     sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))  # -I leaves the script's folder off the path
@@ -683,6 +683,13 @@ def build_tables(game, data, romfs, target=None):
         import symverdict
         with open(symverdict.__file__, "rb") as f:
             stamp.append("generator " + hashlib.sha1(f.read()).hexdigest())
+    # Whole rows (thinrule, first update): UNDERTALE only (z_thinrule.c is compiled for it alone).
+    rows = game == "undertale"
+    if rows:
+        import thinrule
+        exts += (".dttr",)
+        with open(thinrule.__file__, "rb") as f:
+            stamp.append("generator " + hashlib.sha1(f.read()).hexdigest())
     # Include optional GOG profile inputs so a changed/removed profile cannot leave a stale trailer cached.
     for extra in ('gog_smart.py', 'gog-smart-1.08.json'):
         profile_path = Path(__file__).with_name(extra)
@@ -702,7 +709,7 @@ def build_tables(game, data, romfs, target=None):
         print(f"fonts: {len(wins)} font and item tables up to date in {out_dir}")
         return 0
     for old in os.listdir(out_dir):
-        if old.endswith((".dtfv", ".dtiv", ".dtsy")) and old not in names:
+        if old.endswith((".dtfv", ".dtiv", ".dtsy", ".dttr")) and old not in names:
             os.remove(os.path.join(out_dir, old))
     t0 = time.time()
     for name, path in wins:
@@ -710,6 +717,12 @@ def build_tables(game, data, romfs, target=None):
         write(os.path.join(out_dir, name + ".dtfv"), win, verdicts)
         win, items, _ = itemverdict.analyse(path, quiet=True, game=game)
         itemverdict.write(os.path.join(out_dir, name + ".dtiv"), win, items)
+        if rows:
+            if win.gog_smart:
+                import gog_smart
+                items, _ = gog_smart.item_overrides(win, items)
+            win, table = thinrule.analyse(path, fine=thinrule.fine_items(items))
+            thinrule.write(os.path.join(out_dir, name + ".dttr"), win, table)
         if sym:
             win, bits = symverdict.analyse(path, game=game)
             symverdict.write(os.path.join(out_dir, name + ".dtsy"), win, bits)

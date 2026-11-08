@@ -40,4 +40,15 @@ const char ctrReleaseStatsFormat[] RELEASE_RODATA =
     STATS_FOOTER;
 const char ctrReleaseWrongModelFormat[] RELEASE_RODATA =
     "This n3ds build needs a New 3DS\nor New 2DS XL.\n\n"
-    "On this Old 3DS/2DS, use\n" CTR_RELEASE_O3DS_FILENAME "\n";
+    "On this Old 3DS/2DS, use\n"
+#ifdef ENABLE_WAD16
+    // main supplies GAME_DIR's final component, which already includes -3ds.
+    // Keep the original constant extent so the following constants do not move.
+    "%s-o3ds.3dsx    "
+#else
+    CTR_RELEASE_O3DS_FILENAME
+#endif
+    "\n";
+#ifdef ENABLE_WAD16
+_Static_assert(sizeof("%s-o3ds.3dsx    ") == sizeof(CTR_RELEASE_O3DS_FILENAME), "wrong-model format extent");
+#endif

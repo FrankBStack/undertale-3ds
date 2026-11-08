@@ -261,3 +261,9 @@ BTN_LATE void Btnprompt_setLabels(const char letters[3], const char* title) {
     }
 #endif
 }
+
+// E1 uses these identities to expand only the already-guarded replacements.
+// Alias only: the existing STRG slot table keeps its bytes, size and address.
+#if defined(ENABLE_WAD16) && defined(__3DS__)
+__asm__(".global Errtext_slots\n.set Errtext_slots, btnpromptSlot\n");
+#endif

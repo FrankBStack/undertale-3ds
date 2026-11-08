@@ -1569,9 +1569,9 @@ static PackStatus packPage(WorkerThread* self, uint32_t pageId) {
     uint64_t start = nowNanos();
     bool busy = false;
     if (findExisting(worker, pageId, &busy)) return PACK_DONE;
-    // Too many files open to tell: tried again later, as when short of
-    // memory, rather than packed again.
-    if (busy) return PACK_NO_MEMORY;
+    // An unreadable cache must not hold first setup forever. Use the bounded
+    // foreground retry; a failed page falls back to data.win during play.
+    if (busy) return PACK_NO_MEMORY_ALONE;
 
     // Check memory from the image header before reading the whole image.
     uint8_t head[64];

@@ -7,6 +7,10 @@ endif()
 set(CTRPORT_ROMFS_DIR "${CMAKE_CURRENT_BINARY_DIR}/romfs")
 file(MAKE_DIRECTORY "${CTRPORT_ROMFS_DIR}/legal")
 get_filename_component(RELEASE_LEGAL_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/../.." ABSOLUTE)
+set(RELEASE_NOTICE_FILE "${RELEASE_LEGAL_ROOT}/THIRD_PARTY_NOTICES")
+if(CTRPORT_GAME STREQUAL "undertale" AND EXISTS "${RELEASE_LEGAL_ROOT}/tools/release/templates/THIRD_PARTY_NOTICES-undertale.txt")
+    set(RELEASE_NOTICE_FILE "${RELEASE_LEGAL_ROOT}/tools/release/templates/THIRD_PARTY_NOTICES-undertale.txt")
+endif()
 set(RELEASE_LEGAL_FILES "")
 foreach(name LICENSE THIRD_PARTY_NOTICES)
     list(APPEND RELEASE_LEGAL_FILES "${CTRPORT_ROMFS_DIR}/legal/${name}" "${CTRPORT_ROMFS_DIR}/legal/${name}.pages")
@@ -14,7 +18,8 @@ endforeach()
 add_custom_command(OUTPUT ${RELEASE_LEGAL_FILES}
     COMMAND "${CTRPORT_PYTHON_EXECUTABLE}" -X utf8 -I "${RELEASE_LEGAL_ROOT}/tools/release/prepare_legal.py"
             --root "${RELEASE_LEGAL_ROOT}" --output "${CTRPORT_ROMFS_DIR}/legal"
-    DEPENDS "${RELEASE_LEGAL_ROOT}/LICENSE" "${RELEASE_LEGAL_ROOT}/THIRD_PARTY_NOTICES"
+            --notices "${RELEASE_NOTICE_FILE}"
+    DEPENDS "${RELEASE_LEGAL_ROOT}/LICENSE" "${RELEASE_NOTICE_FILE}"
             "${RELEASE_LEGAL_ROOT}/tools/release/prepare_legal.py"
             "${RELEASE_LEGAL_ROOT}/docs/release/build-contract.json"
     COMMENT "Bundling full licences, third-party notices and console pages"

@@ -464,3 +464,12 @@ __asm__(".global CtrRosalina_dark\n"
         ".type CtrRosalina_threadPub, %function\n"
         ".set CtrRosalina_threadPub, CtrRosalina_pubBody\n");
 #endif
+#ifdef CTRPORT_ROSALOW
+// UT-001 on UNDERTALE Old (z_rosalow.c): the watcher from the session's start, whatever the bottom backlight does. Named
+// like the code above (the statics by their link names, nothing here called), so no function or static of this file moves.
+extern void rosaStartRef(void) __asm__("rosaStart");
+extern bool rosaTriedRef __asm__("rosaTried");
+__attribute__((noinline, noipa, section(".text_rosalow"))) void CtrRosalina_startAll(void) {
+    if (!rosaTriedRef) rosaStartRef();
+}
+#endif

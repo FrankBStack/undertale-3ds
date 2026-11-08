@@ -11,8 +11,8 @@
 // the prompt's own "(No X or Z)": the game cannot take them (on PC they are confirm and cancel).
 //
 // The applet stops the game while it is open (libctru runs the same suspend and restore hooks as the HOME menu), so
-// the player gets unlimited thinking time, unlike PC; the essay's 15 s run on afterwards. The text is capped at what
-// the essay's remaining time can take at one character per step. The step after the applet gets a nominal delta_time
+// the player gets unlimited thinking time, unlike PC. After feeding it, hold 15 frames then expire the game's alarm.
+// Text is capped to the remaining time at one character per step. The step after the applet gets a nominal delta_time
 // instead of the time the applet was open (UNDERTALE does not read it; nothing else in the game clock jumps).
 //
 // Tests: while a benchmark runs the applet never opens; the text comes from swkbd_test.txt in the save folder (the
@@ -35,55 +35,61 @@
 #include "stb_ds.h"
 #include "vm.h"
 
-#define CODE __attribute__((noinline, section(".text.swkbd_late")))
-#define BSS __attribute__((section(".bss.late.swkbd")))
-#define RO __attribute__((section(".rodata.swkbd_late")))
+#define CODE __attribute__((noinline))
+#define SLOT(name) __attribute__((section(".text.swkbd_late." #name)))
+#define BSS __attribute__((no_reorder, section(".bss.late.swkbd")))
+#define RO __attribute__((no_reorder, section(".rodata.swkbd_late")))
 
 enum { SWKBD_IDLE, SWKBD_PENDING, SWKBD_FEEDING };
 enum { SWKBD_MAX_CHARS = 300, SWKBD_TIME_MARGIN = 12 };
 
-static const char kObject[] RO = "obj_essaystuff";
-static const char kCantype[] RO = "cantype";
-static const char kKeyboardPresent[] RO = "keyboard_present";
-static const char kEndbuffer[] RO = "endbuffer";
-static const char kGettext[] RO = "gml_Script_scr_gettext";
-static const char kPrompt[] RO = "mett_essay_prompt_pc";
-static const char kTestFile[] RO = "swkbd_test.txt";
-static const char kAppletMarker[] RO = "#applet";  // a test file starting with this opens the real applet
+// Baseline storage order, pinned so moving applet callers does not reorder these existing objects.
+static const char kShiftedDigits[] RO = ")!@#$%^&*(";
 // US-layout virtual keys for the punctuation a PC player types (the shifted character shares its key).
 static const char kPunct[] RO = ";:=+,<-_.>/?`~[{\\|]}'\"";
 static const uint8_t kPunctKey[] RO = {186, 186, 187, 187, 188, 188, 189, 189, 190, 190, 191, 191,
                                        192, 192, 219, 219, 220, 220, 221, 221, 222, 222};
-static const char kShiftedDigits[] RO = ")!@#$%^&*(";
+static const char kObject[] RO = "obj_essaystuff";
+static const char kCantype[] RO = "cantype";
+static const char kKeyboardPresent[] RO = "keyboard_present";
+static const char kEndbuffer[] RO = "endbuffer";
 static const char logOpen[] RO = "swkbd: essay %lu, keyboard for up to %d characters\n";
-static const char logTyped[] RO = "swkbd: essay %lu, %d characters to type (%s)\n";
 static const char kFromApplet[] RO = "keyboard";
+static const char logTyped[] RO = "swkbd: essay %lu, %d characters to type (%s)\n";
+static const char kGettext[] RO = "gml_Script_scr_gettext";
+static const char kPrompt[] RO = "mett_essay_prompt_pc";
+static const char kTestFile[] RO = "swkbd_test.txt";
+static const char kAppletMarker[] RO = "#applet";  // a test file starting with this opens the real applet
 static const char kFromTest[] RO = "test file";
 
+static char refusal[64] BSS;    // the prompt's last line, "(No X or Z)"
+static uint16_t textPos BSS;
+static uint16_t textLen BSS;
+static int32_t capChars BSS;
+static char text[SWKBD_MAX_CHARS + 1] BSS;
+static uint8_t phase BSS;
 static Runner* swRunner BSS;
 static DataWin* swData BSS;
 static int32_t essayObject BSS;  // object index + 1, 0 = not resolved, -1 = not in this game
-static int32_t idCantype BSS, idKeyboardPresent BSS, idEndbuffer BSS;  // varNameMap ids + 1, 0 = unresolved
-static uint8_t phase BSS;
-static bool resetDelta BSS;
 static uint32_t handledId BSS;  // the essay instance already given its keyboard
-static uint32_t essayId BSS;
-static int32_t capChars BSS;
 static int32_t heldKey BSS;     // the simulated key still down, 0 = none
-static uint16_t textLen BSS, textPos BSS;
-static char text[SWKBD_MAX_CHARS + 1] BSS;
+static int32_t idCantype BSS;   // varNameMap ids + 1, 0 = unresolved
+static int32_t idKeyboardPresent BSS;
+static int32_t idEndbuffer BSS;
+static uint32_t essayId BSS;
 static char hint[200] BSS;      // the prompt, UTF-8 (the applet keeps 64 UTF-16 units)
-static char refusal[64] BSS;    // the prompt's last line, "(No X or Z)"
+static bool resetDelta BSS;
 
+#line 85
 void __real_Runner_step(Runner* runner);
 void __real_CtrRenderer_endFrame(Renderer* renderer);
 
-CODE static int32_t lookupVarId(VMContext* ctx, const char* name) {
+SLOT(lookupVarId) CODE static int32_t lookupVarId(VMContext* ctx, const char* name) {
     ptrdiff_t slot = shgeti(ctx->varNameMap, (char*) name);
     return slot < 0 ? 0 : ctx->varNameMap[slot].value + 1;
 }
 
-CODE static int32_t readInt(Instance* inst, int32_t idPlusOne) {
+SLOT(readInt) CODE static int32_t readInt(Instance* inst, int32_t idPlusOne) {
     if (idPlusOne <= 0) return 0;
     RValue* v = IntRValueHashMap_findSlot(&inst->selfVars, idPlusOne - 1);
     if (v == nullptr) return 0;
@@ -98,7 +104,7 @@ CODE static int32_t readInt(Instance* inst, int32_t idPlusOne) {
     }
 }
 
-CODE static void resolve(Runner* runner) {
+SLOT(resolve) CODE static void resolve(Runner* runner) {
     swRunner = runner;
     swData = runner->dataWin;
     essayObject = -1;
@@ -119,7 +125,7 @@ CODE static void resolve(Runner* runner) {
 }
 
 // The live essay with the given id, or the first live one when id is 0.
-CODE static Instance* findEssay(Runner* runner, uint32_t id) {
+SLOT(findEssay) CODE static Instance* findEssay(Runner* runner, uint32_t id) {
     Instance** list = runner->instancesByObject[essayObject - 1];
     for (ptrdiff_t i = 0; arrlen(list) > i; i++) {
         Instance* inst = list[i];
@@ -129,7 +135,7 @@ CODE static Instance* findEssay(Runner* runner, uint32_t id) {
 }
 
 // scr_gettext("mett_essay_prompt_pc") with its line breaks as spaces into hint, its last line into refusal.
-CODE static void readPrompt(Runner* runner, Instance* essay) {
+SLOT(readPrompt) CODE static void readPrompt(Runner* runner, Instance* essay) {
     hint[0] = refusal[0] = 0;
     VMContext* ctx = runner->vmContext;
     ptrdiff_t slot = shgeti(ctx->codeIndexByName, (char*) kGettext);
@@ -161,7 +167,7 @@ CODE static void readPrompt(Runner* runner, Instance* essay) {
     RValue_free(&result);
 }
 
-CODE static SwkbdCallbackResult refuseXZ(void* user, const char** ppMessage, const char* typed, size_t len) {
+SLOT(refuseXZ) CODE static SwkbdCallbackResult refuseXZ(void* user, const char** ppMessage, const char* typed, size_t len) {
     (void) user;
     for (size_t i = 0; len > i && typed[i] != 0; i++) {
         char c = typed[i];
@@ -174,7 +180,7 @@ CODE static SwkbdCallbackResult refuseXZ(void* user, const char** ppMessage, con
 }
 
 // The key a PC player presses for c, 0 for a character the essay cannot take.
-CODE static int32_t keyFor(char c) {
+SLOT(keyFor) CODE static int32_t keyFor(char c) {
     if (c >= 'a' && c <= 'z') c = (char) (c - 'a' + 'A');
     if (c == 'X' || c == 'Z') return 0;
     if ((c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == ' ') return (uint8_t) c;
@@ -188,7 +194,7 @@ CODE static int32_t keyFor(char c) {
 }
 
 // Keep only what the essay can take (printable ASCII, no X or Z), up to the cap.
-CODE static void takeText(const char* source) {
+SLOT(takeText) CODE static void takeText(const char* source) {
     textLen = textPos = 0;
     for (const char* p = source; *p != 0 && capChars > textLen; p++) {
         if (keyFor(*p) != 0) text[textLen++] = *p;
@@ -197,14 +203,13 @@ CODE static void takeText(const char* source) {
     if (textLen != 0) phase = SWKBD_FEEDING;
 }
 
-CODE static void finishFeed(Runner* runner) {
-    if (heldKey != 0) RunnerKeyboard_simulateRelease(runner->keyboard, heldKey);
-    heldKey = 0;
-    runner->keyboard->lastChar[0] = 0;
-    phase = SWKBD_IDLE;
+// Keep the original 60 B entry so every existing late symbol retains its address.
+SLOT(finishFeed) CODE __attribute__((naked)) static void finishFeed(Runner*) {
+    __asm__("b essayendFinish\n.fill 14, 4, 0xe7f000f0\n");
 }
+#line 206
 
-CODE static void feedStep(Runner* runner) {
+SLOT(feedStep) CODE static void feedStep(Runner* runner) {
     RunnerKeyboardState* kb = runner->keyboard;
     if (heldKey != 0) {
         RunnerKeyboard_simulateRelease(kb, heldKey);
@@ -234,7 +239,7 @@ CODE static void feedStep(Runner* runner) {
     }
 }
 
-CODE static void watchStep(Runner* runner) {
+SLOT(watchStep) CODE static void watchStep(Runner* runner) {
     if (runner->instancesByObject == nullptr) return;
     Instance** list = runner->instancesByObject[essayObject - 1];
     if (arrlen(list) == 0) return;
@@ -267,7 +272,7 @@ CODE static void watchStep(Runner* runner) {
     phase = SWKBD_PENDING;
 }
 
-CODE void CTR_STEP_SWKBD(Runner* runner) {
+SLOT(CTR_STEP_SWKBD) CODE void CTR_STEP_SWKBD(Runner* runner) {
     if (runner != swRunner || runner->dataWin != swData) resolve(runner);
     if (resetDelta) {
         resetDelta = false;
@@ -281,7 +286,43 @@ CODE void CTR_STEP_SWKBD(Runner* runner) {
     __real_Runner_step(runner);
 }
 
-CODE static void openKeyboard(void) {
+// Keep the original 208 B entry, including its unexecuted tail (same size on Old and New).
+SLOT(openKeyboard) CODE __attribute__((naked)) static void openKeyboard(void) {
+    __asm__("b essayendOpen\n.fill 51, 4, 0xe7f000f0\n");
+}
+#line 301
+
+SLOT(CTR_ENDFRAME_SWKBD) CODE void CTR_ENDFRAME_SWKBD(Renderer* renderer) {
+    CTR_ENDFRAME_AFTER_SWKBD(renderer);
+    if (phase == SWKBD_PENDING) openKeyboard();
+}
+
+// Applet-only finish, appended to the late text. capChars is no longer needed after takeText: negative
+// values reuse its storage as the 15-frame hold countdown. A regular bench keeps its positive character cap and
+// therefore reaches the original finish path, without changing the game's alarm. No new data or BSS.
+#define ESSAYEND __attribute__((used, noinline, section(".text.late.essayend")))
+
+ESSAYEND static void essayendFinish(Runner* runner) {
+    if (heldKey != 0) RunnerKeyboard_simulateRelease(runner->keyboard, heldKey);
+    heldKey = 0;
+    runner->keyboard->lastChar[0] = 0;
+    phase = SWKBD_IDLE;
+    if (capChars >= 0) return;
+    Instance* essay = findEssay(runner, essayId);
+    if (essay == nullptr || readInt(essay, idCantype) != 1) {
+        capChars = 0;
+        return;
+    }
+    if (++capChars < 0) {
+        phase = SWKBD_FEEDING;
+        return;
+    }
+    // Runner_step ticks alarms before Step: the game's Alarm 0 sets cantype=0/con=1, then its Draw evaluates
+    // the essay, awards the rating, saves the flag and starts the reply. Never extend an already expired alarm.
+    if (essay->alarm[0] > 1) essay->alarm[0] = 1;
+}
+
+ESSAYEND static void essayendOpen(void) {
     phase = SWKBD_IDLE;
     logInfo(logOpen, (unsigned long) essayId, (int) capChars);
     SwkbdState swkbd;
@@ -293,13 +334,11 @@ CODE static void openKeyboard(void) {
     typed[0] = 0;
     swkbdInputText(&swkbd, typed, sizeof(typed));
     resetDelta = true;
+    textLen = textPos = 0;  // Cancel/empty must not replay a previous essay's text.
     if (swkbdGetResult(&swkbd) == SWKBD_D1_CLICK1) {
         takeText(typed);
         logInfo(logTyped, (unsigned long) essayId, (int) textLen, kFromApplet);
     }
-}
-
-CODE void CTR_ENDFRAME_SWKBD(Renderer* renderer) {
-    CTR_ENDFRAME_AFTER_SWKBD(renderer);
-    if (phase == SWKBD_PENDING) openKeyboard();
+    capChars = -15;
+    phase = SWKBD_FEEDING;  // Also count the hold when Cancel or OK supplies no characters.
 }

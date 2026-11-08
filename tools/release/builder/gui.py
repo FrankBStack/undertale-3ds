@@ -13,6 +13,7 @@ UNDERTALE theme:
 from __future__ import annotations
 
 import os
+import json
 import queue
 import struct
 import subprocess
@@ -42,8 +43,30 @@ DISCLAIMER = "Unofficial fan project. Not affiliated with Toby Fox, Fangamer, Yo
 WHAT = ('Makes a 3DS version of your own PC game and puts it on your 3DS by SD card or Wi-Fi.\n'
         'The first setup and first build need an internet connection.')
 TERMS = "Store terms for your copy (Steam, GOG) may restrict modifying or converting the game. Building is your decision."
-ABOUT = ("{app} builder\n\nFree software under the GNU AGPL-3.0. Source ZIP:\n{source}\n\n"
-         "The builder checks your game files against known official copies.\n\n" + DISCLAIMER)
+# Toby Fox's credit first, the port's copyright last (ruled 10-22: the game's author first, the port's name lower).
+# One notice inside the main window (App.inform), without headings, so its OK button stays in the window at the
+# window's smallest size. {holder} is port_holder(): the port's name is written once, in the approved public credit.
+ABOUT = ("UNDERTALE and DELTARUNE are by Toby Fox. All game art, music and text belong to Toby Fox "
+         "and are read from your own copy of the game.\n\n"
+         "{app} builder\n\n"
+         "Free software under the GNU AGPL-3.0. Source ZIP:\n{source}\n\n"
+         "The builder checks your game files against known official copies.\n\n" + DISCLAIMER + "\n\n"
+         "Port source code: Copyright (C) 2026 {holder} and contributors. AGPL-3.0.")
+ABOUT_NO_HOLDER = "this port's authors"
+
+
+def port_holder():
+    """The name under "3DS port" in docs/release/credits-port.txt, as the options menu's Credits page shows it
+    (tools/aot/credits.py), or None. That file is the one place the kit's owner-name rule allows the port's name
+    (tools/release/check_kit_hygiene.py); the 3DS Legal page takes it from there too (platform/3ds/CMakeLists.txt)."""
+    try:
+        with open(os.path.join(pipeline.SOURCE_ROOT, 'docs', 'release', 'credits-port.txt'), encoding='utf-8') as f:
+            lines = [line.rstrip('\r\n') for line in f]
+        line = lines[lines.index('H3DS port') + 1]
+    except (OSError, UnicodeError, ValueError, IndexError):
+        return None
+    name = line[1:].strip()
+    return name if line.startswith('N') and name else None
 WRAP = 640
 SHORT_TARGET = {"n3ds": "New 3DS", "o3ds": "Old 3DS"}
 
@@ -388,7 +411,7 @@ class Theme:
     def __init__(self, root, boring=False):
         self.root = root
         self.boring = boring
-        self.glyphs = _fallback_glyphs()
+        self.glyphs = self._builtin_glyphs = _fallback_glyphs()
         self.soul_mask = _fallback_soul()
         self.loaded_folder = None
         self.runtime_loaded = False
@@ -729,11 +752,19 @@ class Theme:
         if not lines:
             return ""
         lh = self.line_height(scale)
+        # The built-in font (before the game is found) is 16 px tall and wraps sooner than the game's, so its blank
+        # lines between paragraphs are half a line: the About notice then fits the smallest window (680x560).
+        # The game's font keeps whole blank lines.
+        gap = lh // 2 if self.glyphs is self._builtin_glyphs else lh
+        tops, y = [], 0
+        for line in lines:
+            tops.append(y)
+            y += lh if line else gap
         w = max(4, max(self.measure_line(line, scale) for line in lines) + 2)
-        h = max(4, len(lines) * lh)
+        h = max(4, y)
         buf = bytearray(w * h * 3)
-        for i, line in enumerate(lines):
-            self.draw_text_buf(buf, w, h, 0, i * lh + 1, line, color=color, scale=scale)
+        for top, line in zip(tops, lines):
+            self.draw_text_buf(buf, w, h, 0, top + 1, line, color=color, scale=scale)
         ppm = ("P6\n%d %d\n255\n" % (w, h)).encode("ascii") + bytes(buf)
         img = tk.PhotoImage(master=self.root, data=ppm)
         if len(self._text_cache) > 512:
@@ -1395,8 +1426,10 @@ class State:
         self.artifacts = []
         self.records = []
         self.build_ok = False
+        self.build_key = None
         self.delivered = False
         self.delivered_key = None  # DeliverPage.delivery_key() of the copy that succeeded (AUD-05).
+        self.delivery_visit = 0  # A replacement card can reuse the same path and delivery key.
         self.inputs = 0  # Counts builds and game folder choices: each one makes earlier copies stale (R175 F4).
         self.deliver_how = "sd"
         self.sd_root = None
@@ -1405,7 +1438,38 @@ class State:
         self.save_scan = None
         self.save_result = None
         self.save_how = None
+        self.save_destination = None
+        self.save_receipt = None
         self.saves_done = False
+        self.texture_result = None
+
+    def build_input_key(self):
+        fields = ('root', 'bash', 'platform', 'makerom', 'bannertool', 'package_versions', 'compiler_info')
+        tools = tuple(json.dumps(getattr(self.tc, field, None), sort_keys=True, default=str) for field in fields)
+        return self.game, self.folder, self.inputs, tools
+
+    def invalidate_build(self):
+        self.build_ok = False
+        self.build_key = None
+        self.artifacts, self.records = [], []
+        self.delivered = False
+
+    def new_delivery(self):
+        self.delivery_visit += 1
+        self.texture_result = None
+        self.save_result = self.save_how = self.save_destination = self.save_receipt = None
+        self.saves_done = False
+
+    def delivery_context(self):
+        destination = (self.sd_root if self.deliver_how == 'sd' else
+                       self.ftp_console if self.deliver_how == 'wifi' else self.files_root)
+        if destination and self.deliver_how != 'wifi':
+            destination = os.path.normcase(os.path.normpath(destination))
+        return self.delivery_visit, self.deliver_how, destination, self.delivered_key
+
+    def current_save_result(self):
+        receipt = self.delivery_context(), self.save_how, self.save_destination
+        return self.save_result if self.save_receipt == receipt else None
 
     @property
     def product(self):
@@ -1750,7 +1814,7 @@ class Prompt(Page):
     close button make. focus: the choice that has the keyboard first (the safe one for anything that deletes or
     stops)."""
 
-    def __init__(self, app, title, message, choices, details=None, cancel=None, focus=None):
+    def __init__(self, app, title, message, choices, details=None, cancel=None, focus=None, collapse_details=False):
         super().__init__(app)
         self.title, self.message, self.details = title, message, details
         self.cancel = cancel if cancel is not None else choices[0][0]
@@ -1759,7 +1823,9 @@ class Prompt(Page):
         self.list = None
         if details is not None:
             area = tk.Frame(self.frame, bd=0)
-            self.list = tk.Text(area, wrap="none", height=8, width=60, takefocus=1, font=app.theme.mono_font,
+            self.details_area = area
+            self.list = tk.Text(area, wrap='word' if collapse_details else 'none', height=8, width=60,
+                                takefocus=1, font=app.theme.mono_font,
                                 bg="#000000", fg="#ffffff", insertbackground="#ffffff",
                                 highlightbackground="#ffffff", highlightcolor="#ffffff", highlightthickness=2, bd=0)
             down = ttk.Scrollbar(area, orient="vertical", command=self.list.yview)
@@ -1770,7 +1836,18 @@ class Prompt(Page):
             self.list.pack(side="left", fill="both", expand=True)
             self.list.insert("1.0", details)
             self.list.configure(state="disabled")
-            area.pack(fill="both", expand=True, pady=(0, 8))
+            if collapse_details:
+                def toggle_details():
+                    opened = bool(area.winfo_manager())
+                    if opened:
+                        area.pack_forget()
+                    else:
+                        area.pack(fill='both', expand=True, pady=(0, 8), after=self.details_toggle)
+                    self.details_toggle.config(text='Show all files' if opened else 'Hide file list')
+                self.details_toggle = button(self.frame, text='Show all files', command=toggle_details)
+                self.details_toggle.pack(anchor='w', pady=(0, 8))
+            else:
+                area.pack(fill="both", expand=True, pady=(0, 8))
         row = ttk.Frame(self.frame)
         row.pack(anchor="e", pady=(4, 0))
         self.choices, self.buttons = {}, {}
@@ -1843,6 +1920,11 @@ class WelcomePage(Page):
         if self.game.get() != self.st.game:
             self.app.reset(self.game.get())
 
+    def on_next(self):
+        if self.app.opts.autopilot is None:
+            self.app.check_updates()
+        return True
+
     def update_preference(self):
         preferences.save(self.app.opts.work, self.app.theme.boring, updates=self.check_updates.get())
         self.update_button.state(['!disabled'] if self.check_updates.get() else ['disabled'])
@@ -1903,7 +1985,9 @@ class FindPage(Page):
         self.manual = []
 
     def on_show(self):
-        self.intro.config(text="Select your %s install." % self.st.product.title)
+        self.intro.config(text=("Choose your UNDERTALE files: Windows Steam, macOS Steam or Windows GOG.\n"
+                                "On Linux, use the Windows files. For Mac GOG, use the Windows GOG files.")
+                          if self.st.product.key == 'undertale' else "Choose your DELTARUNE game folder.")
         if self.searched_for != self.st.game:
             if self.app.opts.folder:
                 self.searched_for = self.st.game
@@ -1916,6 +2000,7 @@ class FindPage(Page):
         if self.st.verdict is not None:
             self.st.verdict = None
             self.st.inputs += 1
+            self.st.invalidate_build()
 
     def search(self):
         self.forget_check()
@@ -1951,9 +2036,8 @@ class FindPage(Page):
             self.status.config(text="Found %d %s." % (len(copies), "copy" if len(copies) == 1 else "copies"))
         else:
             p = self.st.product
-            stores = "Steam or GOG" if p.game.gog_product else "Steam"
-            self.status.config(text="%s was not found.\nInstall it in %s and click Search again, or Choose folder..."
-                                    % (p.title, stores))
+            self.status.config(text="%s was not found. Choose folder..., or install the game and Search again."
+                                    % p.title)
         self.picked()
 
     def picked(self):
@@ -1964,6 +2048,7 @@ class FindPage(Page):
                 self.st.folder = new
                 self.st.verdict = None
                 self.st.inputs += 1
+                self.st.invalidate_build()
                 self.app.theme.load_from_game_dir(new)
         self.app.update_nav()
 
@@ -2014,7 +2099,6 @@ class VerifyPage(Page):
         self.running = False
 
     def on_show(self):
-        self.intro.config(text="Checking game files...")
         # A refusal asks the player to repair the game and try again, so coming back here checks it again.
         if (self.st.verdict is None or not self.st.verdict.accepted) and not self.running:
             self.start()
@@ -2023,6 +2107,7 @@ class VerifyPage(Page):
 
     def start(self):
         self.running = True
+        self.intro.config(text="Checking game files...")
         self.result.config(text="Checking game files...")
         self.details.config(text="")
         for w in self.links.winfo_children():
@@ -2036,6 +2121,7 @@ class VerifyPage(Page):
         self.bar.stop()
         self.st.verdict = verdict
         self.st.inputs += 1
+        self.st.invalidate_build()
         if verdict.accepted:
             self.st.folder = verdict.result.folder
             self.st.parts = [p for p in verdict.parts if p != "root"] or None
@@ -2043,9 +2129,13 @@ class VerifyPage(Page):
         self.app.update_nav()
 
     def render(self):
+        if self.running:
+            self.intro.config(text="Checking game files...")
+            return
         v = self.st.verdict
         if v is None:
             return
+        self.intro.config(text="Game files checked." if v.accepted else "Game files not accepted.")
         self.bar.config(mode="determinate", value=100)
         self.result.config(text=("OK: " if v.accepted else "Refused: ") + v.message)
         self.details.config(text="")  # Raw paths and OS errors stay on the result for support.
@@ -2075,13 +2165,14 @@ class StepBox:
     def __init__(self, page, parent, step, button_text="Install"):
         self.page, self.step = page, step
         dry = page.app.opts.toolchain_dry_run
-        self.box = ttk.LabelFrame(parent, text=step.title, padding=6)
+        optional = step.key in ('makerom', 'bannertool')
+        self.box = ttk.LabelFrame(parent, text=('Optional: ' if optional else '') + step.title, padding=6)
         self.box.pack(fill="x", pady=(0, 6))
         # Full consent remains in the confirmation and the adjacent Licences dialog.
         self.row = ttk.Frame(self.box)
         self.row.pack(fill="x")
         self.go = button(self.row, text="Technical details" if dry else button_text,
-                         command=lambda: page.run_step(self))
+                         command=lambda: page.run_step(self), primary=not optional)
         self.go.pack(side="left", padx=(0, 8))
         self.show_btn = button(self.row, text="Technical details", command=self.show_command)
         self.page_btn = (button(self.row, text="Open download page", command=lambda: webbrowser.open(step.page))
@@ -2153,7 +2244,7 @@ class ToolchainPage(Page):
         self.tree = ttk.Treeview(self.frame, columns=("ok", "item", "detail"), show="headings", height=3,
                                  selectmode="none")
         for c, w in (("ok", 110), ("item", 250), ("detail", 220)):
-            self.tree.heading(c, text={"ok": "", "item": "Item", "detail": "Found"}[c])
+            self.tree.heading(c, text={"ok": "", "item": "Item", "detail": "Notes"}[c])
             self.tree.column(c, width=w, minwidth=60, stretch=(c == "detail"))
         self.tree.pack(fill="x", pady=(0, 8))
         self.tree.bind('<<ThemeChanged>>', lambda _e: self.fit_status())
@@ -2241,14 +2332,27 @@ class ToolchainPage(Page):
         self.tree.delete(*self.tree.get_children())
         self.tree.configure(height=min(8, max(1, len(steps))))
         cleared_failure = False
-        for i, (step, needed, waiting) in enumerate(toolchain.setup_inventory(tc, steps)):
-            status = "Installed" if not needed else "Waiting for %s." % waiting if waiting else "Ready"
+        inventory = toolchain.setup_inventory(tc, steps)
+        next_step = next((step for step, needed, waiting in inventory
+                          if needed and not waiting and step.key not in ('makerom', 'bannertool')), None)
+        if tc.can_build:
+            guidance = ('Choose Next to continue. You can also choose Install beside "%s" for additional tools.'
+                        % next_step.title if next_step else
+                        'Required tools are installed. Choose Next to continue; HOME Menu tools are optional.')
+        else:
+            guidance = ('Choose Install beside "%s". Next stays grey until the required tools are installed.'
+                        % next_step.title if next_step else
+                        'Next stays grey until the required tools are installed. Check the steps below.')
+        self.compiler_status.config(text=guidance)
+        for i, (step, needed, waiting) in enumerate(inventory):
+            missing = 'Not installed' if step.key in ('devkitpro', 'makerom', 'bannertool') else 'Needs setup'
+            status = "Installed" if not needed else "Waiting for %s." % waiting if waiting else missing
             # Full titles and wrapping dependency explanations remain below the table. Keep its cells compact.
             item = {'devkitpro': 'devkitPro', 'packages': '3DS tools', 'host': 'Computer tools',
                     'clt': 'Apple build tools', 'cmake': 'CMake', 'makerom': 'CIA builder',
                     'bannertool': 'CIA banner tool'}.get(step.key, step.title)
             self.tree.insert("", "end", iid=str(i), values=("Waiting" if needed and waiting else status, item,
-                             "Optional: .cia only" if step.key in ('makerom', 'bannertool') else ""))
+                             "Optional" if step.key in ('makerom', 'bannertool') else ""))
             box = self.boxes[i]
             if needed and step.key in self.failures:
                 box.failed(self.failures[step.key])
@@ -2270,7 +2374,7 @@ class ToolchainPage(Page):
         # Theme/font changes can arrive before detection has populated the rows.
         font = tkfont.Font(self.tree, font=ttk.Style(self.tree).lookup('Treeview', 'font') or 'TkDefaultFont')
         rows = [self.tree.item(row, 'values') for row in self.tree.get_children()]
-        for index, (column, fallback) in enumerate((('ok', 'Installed'), ('item', 'Item'), ('detail', 'Found'))):
+        for index, (column, fallback) in enumerate((('ok', 'Installed'), ('item', 'Item'), ('detail', 'Notes'))):
             labels = [fallback] + [row[index] for row in rows]
             width = max(60, max(font.measure(text) for text in labels) + 28)
             self.tree.column(column, width=width, minwidth=width, stretch=(column == 'detail'))
@@ -2359,6 +2463,9 @@ class ToolchainPage(Page):
                 if not dry:
                     self.result.config(text=notices[-1] if notices else "Done: %s." % step.title)
             if not dry and not isinstance(result, Exception):
+                if step.key == 'update' and box is self.update_box:
+                    box.box.destroy()
+                    self.update_box = None
                 self.detect()
             self.update_buttons()
             self.app.update_nav()
@@ -2436,7 +2543,10 @@ class OptionsPage(Page):
         else:
             self.vcia.set(False)
             self.cia_box.state(["disabled"])
-            self.cia_note.config(text="To make a HOME Menu install file, go Back and install makerom and bannertool.")
+            self.cia_note.config(text=("Automatic HOME Menu tool downloads are not available for this computer. "
+                                      "Use the Homebrew Launcher build, or install the tools yourself and check again."
+                                      if tc and not toolchain.cia_download_supported(tc.platform) else
+                                      "To make a HOME Menu install file, go Back and install makerom and bannertool."))
         for w in self.extra.winfo_children():
             w.destroy()
         self.part_vars = {}
@@ -2462,6 +2572,7 @@ class OptionsPage(Page):
         self.changed()
 
     def changed(self):
+        previous = (tuple(self.st.targets), tuple(self.st.outputs), tuple(self.st.parts or ()), self.st.openh264)
         t = self.target.get()
         self.st.targets = ["n3ds", "o3ds"] if t == "both" else [t]
         self.st.outputs = [k for k, v in (("3dsx", self.v3dsx), ("cia", self.vcia)) if v.get()]
@@ -2483,7 +2594,9 @@ class OptionsPage(Page):
             import chapters
             self.estimate.config(text=self.estimate.cget('text') + '\nSelected chapters: ' +
                                  chapters.numbers(self.st.parts or []))
-        self.st.build_ok = False
+        selected = (tuple(self.st.targets), tuple(self.st.outputs), tuple(self.st.parts or ()), self.st.openh264)
+        if selected != previous:
+            self.st.invalidate_build()
         self.app.update_nav()
 
     def can_next(self):
@@ -2543,11 +2656,15 @@ class BuildPage(Page):
         self.failed = None
         self.log_path = None
         self.target_index = 0
+        self.input_key = None
         # A confirmed Cancel stops the whole run, including a model whose build has not started yet (AUD-14).
         self.stop = threading.Event()
 
     def on_show(self):
-        self.intro.config(text="Building...")
+        if self.st.build_ok and self.st.build_key is not None and self.st.build_key != self.st.build_input_key():
+            self.st.invalidate_build()
+        self.intro.config(text="Building..." if self.running else
+                         "Build complete." if self.st.build_ok else "Build stopped.")
         if not self.st.build_ok and not self.running:
             self.start()
         self.buttons()
@@ -2575,8 +2692,9 @@ class BuildPage(Page):
         self.stop.clear()
         self.log_path = None
         self.running = True
-        self.st.artifacts, self.st.records = [], []
+        self.st.invalidate_build()
         self.st.inputs += 1
+        self.input_key = self.st.build_input_key()
         self.log.delete("1.0", "end")
         self.intro.config(text="Building...")
         self.status.config(text="")
@@ -2653,8 +2771,12 @@ class BuildPage(Page):
         self.running = False
         self.packaging.stop()
         self.packaging.pack_forget()
+        if err is None and self.input_key is not None and self.input_key != self.st.build_input_key():
+            self.st.invalidate_build()
+            err = pipeline.BuildFailed('The game files or build tools changed. Choose Try again.', self.log_path)
         if err is None:
             self.st.build_ok = True
+            self.st.build_key = self.input_key or self.st.build_input_key()
             self.st.outputs = pipeline.available_outputs(self.st.artifacts)
             self.intro.config(text="Build complete.")
             self.bar.config(value=100)
@@ -2672,6 +2794,8 @@ class BuildPage(Page):
             self.details.show()
             self.intro.config(text="Build stopped.")
             self.log_path = err.log_path if err.log_path and os.path.isfile(err.log_path) else None
+            if getattr(err, 'details', ''):
+                self.line(err.details)
             self.status.config(text=str(err) + ('\nLog: ' + self.log_path if self.log_path else ''))
         self.buttons()
         self.app.update_nav()
@@ -2782,7 +2906,9 @@ class DeliverPage(Page):
         self.addr = ttk.Combobox(self.wifi, width=30)
         self.addr.pack(anchor="w", pady=(0, 6))
         self.addr.set(preferences.load(app.opts.work).get('console', ''))
-        label(self.wifi, "Open ftpd, the file-transfer app, on your 3DS and keep it open while sending.\nGet ftpd: https://github.com/mtheall/ftpd#latest-builds")
+        label(self.wifi, "Open ftpd, the file-transfer app, on your 3DS and keep it open while sending.")
+        button(self.wifi, text='Get ftpd', command=lambda: webbrowser.open(
+            'https://github.com/mtheall/ftpd#latest-builds')).pack(anchor='w', pady=(0, 6))
         row = ttk.Frame(self.wifi)
         row.pack(anchor="w", pady=6)
         self.find_button = button(row, text="Find my 3DS", command=self.find_console)
@@ -2811,6 +2937,7 @@ class DeliverPage(Page):
         self.cards = []
         self.manual = None
         self.saved_key = None
+        self.saved_textures = None
 
     def on_show(self):
         # A copy or send counts only on the visit it was made in: the card or console may be another one now (R175 F4).
@@ -2825,14 +2952,31 @@ class DeliverPage(Page):
             setattr(self, mode + '_visit', getattr(self, mode + '_visit') + 1)
         if how in (None, 'files'):
             self.saved_key = None  # mode() rebuilds the files receipt from this, so it goes too (R175c).
+            self.saved_textures = None
         if how is None or (self.st.delivered_key or (None,))[0] == how:
             self.st.delivered, self.st.delivered_key = False, None
+        if how is None or self.st.deliver_how == how:
+            self.st.new_delivery()
 
     def set_status(self, how, text):
         """One status text per panel; only the visible panel's text is on screen."""
         self.texts[how] = text
         if how == self.how.get():
             self._show_status()
+
+    def log_delivery(self, text):
+        try:
+            path = self.app.pages[5].log_path or os.path.join(self.app.opts.work, 'logs', 'delivery.log')
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+            with open(path, 'a', encoding='utf-8', errors='replace', newline='\n') as log:
+                log.write(text.rstrip() + '\n')
+        except OSError:
+            pass  # A full or unavailable log destination must never interrupt delivery.
+
+    def remember_textures(self, result):
+        self.st.texture_result = result
+        if result is not None:
+            self.log_delivery(result.message)
 
     def _show_status(self):
         how = self.how.get()
@@ -2875,6 +3019,7 @@ class DeliverPage(Page):
         how = self.how.get()
         if how != self.st.deliver_how or self.st.delivered_key != self.delivery_key():
             self.st.delivered = False  # Another mode, build, game, chapter set or destination: copy again.
+            self.st.new_delivery()
         self.st.deliver_how = how
         self.panels[how].pack(anchor="w", fill="x")
         if how == "files":
@@ -2885,6 +3030,7 @@ class DeliverPage(Page):
             self.st.sd_root = None
             self.st.delivered = ready
             self.st.delivered_key = self.delivery_key() if ready else None
+            self.st.texture_result = getattr(self, 'saved_textures', None) if ready else None
         self._show_status()
         self.app.update_nav()
 
@@ -2914,10 +3060,19 @@ class DeliverPage(Page):
     def save_files(self):
         if self.copying:
             return
+        output_parent = None
+        if self.app.opts.autopilot is None:
+            output_parent = filedialog.askdirectory(title='Choose where to save the card files',
+                initialdir=os.path.dirname(self.st.files_root) if self.st.files_root else os.path.expanduser('~/Desktop'),
+                parent=self.app.root)
+            if not output_parent:
+                return
+        self.st.new_delivery()
         key, visit = self.files_key(), self.files_visit
         self.copying = True
         self.st.delivered = False
         self.saved_key = None  # Until this save succeeds: a failed one may have changed the folder (R175c).
+        self.saved_textures = None
         self.save.state(["disabled"])
         self.open_files.state(["disabled"])
         self.set_status("files", "Saving files and preparing textures...")
@@ -2933,13 +3088,17 @@ class DeliverPage(Page):
             else:
                 if visit == self.files_visit:
                     self.saved_key = key
+                    self.saved_textures = res.textures
                 self.st.files_root = getattr(res, 'folder', None) or res.root
                 self.show_progress("files", 100)
                 self.set_status("files", "Saved %d files (%.1f MB).\n%s" %
                                 (res.files, res.bytes / 1e6, res.textures.message))
             self.mode()
+            if not isinstance(res, Exception) and visit == self.files_visit:
+                self.remember_textures(res.textures)
         self.app.work(lambda: deliver.save_files(self.st.product, self.st.artifacts, self.st.folder,
-                                                 self.app.opts.work, self.st.parts, prog), after, errors=True)
+                                                 self.app.opts.work, self.st.parts, prog,
+                                                 output_parent=output_parent, log=self.log_delivery), after, errors=True)
 
     def refresh(self):
         self.forget('sd')  # A card may have been swapped at the same drive or mount point (R175 F4).
@@ -2984,6 +3143,7 @@ class DeliverPage(Page):
         root = self.target_root()
         if not root:
             return
+        self.st.new_delivery()
         visit = self.sd_visit
         self.copying = True
         self.st.delivered = False  # Until this copy succeeds, even if an earlier one did.
@@ -3007,14 +3167,23 @@ class DeliverPage(Page):
                 self.go.state(['!disabled'])
                 self.set_status('sd', 'Copy cancelled. Nothing was copied.')
                 self.app.update_nav()
-            self.app.prompt('Files for this SD card', 'Check the files below, then choose Copy to card.',
+            changed = [item for item in items if not getattr(item, 'skip', False)]
+            summary = ('Game and build files to copy: %d (%.1f MB).\n'
+                       'Only missing or changed files will be copied. '
+                       'Saves, settings, other homebrew and other games are kept.' %
+                       (len(changed), sum(getattr(item, 'size', 0) for item in changed) / 1e6))
+            if getattr(text, 'texture_fallback', False):
+                summary += '\n\n' + deliver.TEXTURE_FALLBACK
+            self.app.prompt('Files for this SD card', summary,
                             [('Cancel', dismiss, False),
                              ('Copy to card', lambda: self._copy_approved(root, items, tool, visit), True)],
-                            details=str(root) + '\n\n' + text, cancel='Cancel', focus='Copy to card')
+                            details=str(root) + '\n\n' + text, cancel='Cancel', focus='Copy to card',
+                            collapse_details=True)
         self.app.work(lambda: deliver.sd_preview(root, self.st.product, self.st.artifacts,
-                      self.st.folder, self.app.opts.work, self.st.parts), prepared, errors=True)
+                      self.st.folder, self.app.opts.work, self.st.parts, log=self.log_delivery), prepared, errors=True)
 
     def _copy_approved(self, root, items, tool, visit=None):
+        self.st.new_delivery()
         self.set_status("sd", "Copying...")
         self.show_progress("sd", 0)
         self.app.update_nav()
@@ -3038,13 +3207,15 @@ class DeliverPage(Page):
                     msg += "\n\n" + STALE_COPY
                 self.set_status("sd", msg)
                 if visit == self.sd_visit:
+                    self.remember_textures(tex)
                     self.st.sd_root = root
                     self.st.deliver_how = "sd"
                     self.st.delivered = True
                     self.st.delivered_key = ('sd', os.path.normcase(os.path.normpath(root)), key)
             self.app.update_nav()
         self.app.work(lambda: deliver.copy_with_textures(root, items, self.st.product, self.st.folder,
-                                                         self.app.opts.work, self.st.parts, prog, tool=tool), after, errors=True)
+                                                         self.app.opts.work, self.st.parts, prog, tool=tool,
+                                                         log=self.log_delivery), after, errors=True)
 
     def send(self):
         if self.copying:
@@ -3055,6 +3226,7 @@ class DeliverPage(Page):
         except OSError as exc:
             self.set_status('wifi', str(exc))
             return
+        self.st.new_delivery()
         self.wifi_busy(True)
         self.st.delivered = False
         self._ftp_update, self._ftp_phase = 0, None
@@ -3065,14 +3237,17 @@ class DeliverPage(Page):
         def job():
             return ftp_delivery.send_product(addr, self.st.product, self.st.artifacts, self.st.folder,
                     self.app.opts.work, self.st.parts, cancelled=self.cancelled.is_set,
-                    log=lambda text: self.app.call(self.set_status, 'wifi', text), progress=self.ftp_progress)
+                    log=self.log_delivery, progress=self.ftp_progress)
 
         def after(res):
             self.wifi_busy(False)
             self.set_status("wifi", ftp_delivery.error_text(res) if isinstance(res, Exception) else "Sent and checked. You can close ftpd.")
             if not isinstance(res, Exception):
                 self.show_progress("wifi", 100)
+                if getattr(res, 'textures', None) is not None:
+                    self.set_status('wifi', 'Sent and checked. You can close ftpd.\n' + res.textures.message)
             if not isinstance(res, Exception) and visit == self.wifi_visit:
+                self.remember_textures(getattr(res, 'textures', None))
                 self.st.sd_root = None
                 self.st.ftp_console = addr
                 self.st.files_root = res.root
@@ -3219,7 +3394,9 @@ class SavesPage(Page):
         label(self.wifi, '3DS address (shown by the ftpd app):')
         self.addr = ttk.Combobox(self.wifi, width=30)
         self.addr.pack(anchor='w', pady=(0, 6))
-        label(self.wifi, 'Open ftpd, the file-transfer app, on your 3DS and keep it open while sending.\nGet ftpd: https://github.com/mtheall/ftpd#latest-builds')
+        label(self.wifi, 'Open ftpd, the file-transfer app, on your 3DS and keep it open while sending.')
+        button(self.wifi, text='Get ftpd', command=lambda: webbrowser.open(
+            'https://github.com/mtheall/ftpd#latest-builds')).pack(anchor='w', pady=(0, 6))
         self.check_button = button(self.wifi, text='Check saves', command=self.check_ftp)
         self.check_button.pack(anchor='w')
         self.addr.bind('<<ComboboxSelected>>', lambda _e: self.check_ftp())
@@ -3250,7 +3427,7 @@ class SavesPage(Page):
         self.addr.set(self.st.ftp_console or preferences.load(self.app.opts.work).get('console', ''))
         self.choice.set('wifi' if self.st.deliver_how == 'wifi' and self.st.ftp_console else
                         'copy' if self.st.deliver_how == 'sd' and self.st.sd_root else 'skip')
-        if self.st.save_result:
+        if self.st.current_save_result():
             self.choice.set('skip')
         self.refresh_cards(scan=False)
         self.last_method = self.choice.get()
@@ -3298,7 +3475,7 @@ class SavesPage(Page):
             self.ftp_cancel_button.pack_forget()
             self.sd.pack_forget()
             self.wifi.pack_forget()
-            self.status.config(text=('PC saves were already copied. Click Next to go on.' if self.st.save_result
+            self.status.config(text=('PC saves were already copied. Click Next to go on.' if self.st.current_save_result()
                                      else 'PC saves will not be copied.'))
             self.changed()
             return
@@ -3369,7 +3546,9 @@ class SavesPage(Page):
         valid = scan.valid_files
         corrupt = scan.corrupt_files
         notes = []
-        if not scan.exists or (not valid and not corrupt):
+        if scan.error:
+            notes.append(scan.error)
+        elif not scan.exists or (not valid and not corrupt):
             notes.append("No PC saves were found in %s." % scan.folder)
         elif corrupt:
             notes.append("Can't read %s.\n"
@@ -3397,7 +3576,7 @@ class SavesPage(Page):
         if not valid or corrupt or (existing and not keep_choice):
             self.choice.set("skip")
         self.status.config(text='PC saves were already copied. Click Next to go on.'
-                           if self.st.save_result and self.choice.get() == 'skip' else '')
+                           if self.st.current_save_result() and self.choice.get() == 'skip' else '')
         self.changed()
         if wifi and self.choice.get() != 'skip':
             self.check_ftp(default_skip=not keep_choice)
@@ -3434,7 +3613,9 @@ class SavesPage(Page):
                 self.status.config(text=('3DS saves found. Copying will back them up first.' if result.files else
                                          'No 3DS saves found.'))
             self.changed()
-        self.app.work(lambda: ftp_saves.inspect(console, self.st.product, cancelled=cancel.is_set), after, errors=True)
+        resume = self.ftp_resume
+        self.app.work(lambda: ftp_saves.inspect(console, self.st.product, cancelled=cancel.is_set, resume=resume),
+                      after, errors=True)
         self.changed()
 
     def changed(self):
@@ -3503,7 +3684,9 @@ class SavesPage(Page):
 
     def copy_key(self):
         how = self.choice.get()
-        return (how, self.addr.get() if how == 'wifi' else self.card_root(), self.st.save_scan)
+        destination = (self.addr.get() if how == 'wifi' else
+                       os.path.normcase(os.path.normpath(self.card_root())))
+        return how, destination, self.st.save_scan, self.st.delivery_context()
 
     def start_copy(self):
         job, cancel = self.new_ftp_job()
@@ -3543,8 +3726,14 @@ class SavesPage(Page):
             self.status.config(text=ftp_saves.error_text(result) if key[0] == 'wifi' else str(result))
         else:
             self.ftp_resume = None
+            if key[3] != self.st.delivery_context():
+                self.status.config(text='The delivery changed. Check this destination and copy the saves again.')
+                self.app.update_nav()
+                return
             self.st.save_result = result
             self.st.save_how = 'wifi' if key[0] == 'wifi' else 'sd'
+            self.st.save_destination = key[1]
+            self.st.save_receipt = key[3], self.st.save_how, key[1]
             self.st.saves_done = True
             self.completed_key = key
             self.bar.config(value=100)
@@ -3623,12 +3812,17 @@ class DonePage(Page):
             self.cleanup_checks[key] = (widget, title)
             value.trace_add('write', lambda *_: self.app.update_nav())
         label(self.cleanup_box, 'Removing build files makes the next build slower. Removed tools are installed again from the compiler page when needed.')
-        label(self.cleanup_box, 'Clean up and finish removes the ticked items, then shows a report before closing. Finish closes without cleanup. To return later, choose Clean up previous build files on the first screen.')
+        self.cleanup_help = label(self.cleanup_box, '')
         self.cleanup_notice = label(self.cleanup_box, '')
         self.cleanup_preview = button(self.cleanup_box, text='Show files to delete', command=self.preview_cleanup)
         self.cleanup_preview.pack(anchor='w')
 
     def on_show(self):
+        self.cleanup_help.config(text=(
+            'Choose Clean up to remove the ticked items, or Done to return to the first screen. '
+            'Cleanup shows a report before returning.' if self.cleanup_only else
+            'Clean up and finish removes the ticked items, then shows a report before closing. '
+            'Finish closes without cleanup. To return later, choose Clean up previous build files on the first screen.'))
         if self.cleanup_only:
             self.headline.config(text="Clean up previous build files")
             self.summary_label.config(text="No build is needed. Choose what to remove below. Your game, saves and finished builds are kept.")
@@ -3653,20 +3847,24 @@ class DonePage(Page):
             summary.append("Sent over Wi-Fi.")
         else:
             summary.append("Output folder: %s" % (self.st.files_root or os.path.join(self.app.opts.work, "out")))
-        res = self.st.save_result
+        res = self.st.current_save_result()
         if res and res.copied:
-            summary.append('PC saves: copied %s.' % ('to the 3DS over Wi-Fi' if self.st.save_how == 'wifi'
-                                                   else 'to the SD card'))
+            summary.append('PC saves: copied %s.' % (
+                'over Wi-Fi to %s' % self.st.save_destination if self.st.save_how == 'wifi'
+                else 'to the SD card at %s' % self.st.save_destination))
             # The count and folder are in the steps below (deliver.instructions).
             if res.backup_dir:
                 summary.append("Previous 3DS saves backed up to: %s" % res.backup_dir)
         else:
             summary.append("PC saves: not copied.")
+        if self.st.texture_result is not None:
+            summary.append(self.st.texture_result.message)
         if self.st.sd_root and deliver.dsp_missing(self.st.sd_root):
             summary.append(deliver.DSP_MESSAGE)
         self.summary_label.config(text="\n".join(summary))
         self.steps_label.config(text=deliver.instructions(p, self.st.targets, self.st.outputs, self.st.sd_root,
-                                                          saves_result=res, delivery=self.st.deliver_how))
+                                                          saves_result=res, delivery=self.st.deliver_how)
+                                .removeprefix('What to do now:\n'))
         for w in self.buttons_row.winfo_children():
             w.destroy()
         if self.st.sd_root:
@@ -3683,6 +3881,8 @@ class DonePage(Page):
         return [key for key, choice in self.cleanup_choices.items() if choice.get()]
 
     def finish_label(self):
+        if self.cleanup_only:
+            return 'Clean up' if self.selected_cleanup() else 'Done'
         return 'Clean up and finish' if self.selected_cleanup() else 'Finish'
 
     def can_finish(self):
@@ -3693,6 +3893,9 @@ class DonePage(Page):
             return False
         selected = self.selected_cleanup()
         if not selected:
+            if self.cleanup_only:
+                self.close_cleanup()
+                return False
             return True
         if self.cleanup_plan is None:
             return False  # Keep the counting/ownership error on screen.
@@ -3713,7 +3916,8 @@ class DonePage(Page):
                 self.cleanup_plan = result
                 for key, (widget, title) in self.cleanup_checks.items():
                     widget.config(text='%s (%.1f MB)' % (title, result.size(key)/1e6))
-                self.cleanup_notice.config(text='\n'.join(result.kept) or 'Your game and finished builds are kept.')
+                self.cleanup_notice.config(text='Your game, saves and finished builds are kept. '
+                                           'Use Show files to delete for a summary.')
                 self.cleanup_preview.state(['!disabled'])
             self.app.update_nav()
         self.app.work(lambda: cleanup.plan(self.app.opts.work, protected=(self.st.folder, self.st.sd_root,
@@ -3728,7 +3932,7 @@ class DonePage(Page):
             self.cleanup_notice.config(text='Tick what to remove first.')
             return
         self.app.prompt('Files to delete',
-                        'Only the files listed here will be deleted. Your game and finished builds are kept.',
+                        'Selected files will be deleted. Large groups are shown by folder and file count. Your game, saves and finished builds are kept.',
                         [('Cancel', None, False), ('Delete these files', lambda: self.run_cleanup(plan, selected), True)],
                         details=plan.preview(selected), cancel='Cancel', focus='Cancel')
 
@@ -3750,7 +3954,8 @@ class DonePage(Page):
                 self.cleanup_notice.config(text=str(result))
             else:
                 deleted, kept = result
-                self.cleanup_notice.config(text='Removed %d files.\n%s' % (len(deleted), '\n'.join(kept)))
+                self.cleanup_notice.config(text='Removed %d files. Your game, saves and finished builds are kept.'
+                                           % len(deleted))
                 for value in self.cleanup_choices.values():
                     value.set(False)
                 # Invalidate the consumed list; another deletion requires a new preview.
@@ -3768,7 +3973,14 @@ class DonePage(Page):
         if kept:
             report += ['', 'Kept files:'] + list(kept)
         self.app.prompt('Cleanup report', 'Removed %d files. Review the list, then click Close to finish.' % len(deleted),
-                        [('Close', self.app.root.destroy, True)], details='\n'.join(report), cancel='Close')
+                        [('Close', self.close_cleanup, True)], details='\n'.join(report), cancel='Close')
+
+    def close_cleanup(self):
+        if self.cleanup_only:
+            self.cleanup_only = False
+            self.app.show(0)
+        else:
+            self.app.root.destroy()
 
     def busy(self):
         return self.cleaning
@@ -3809,7 +4021,14 @@ class App:
                 copies = []  # Find still offers explicit discovery and a folder chooser.
             folder = copies[0].folder if copies else None
         self.theme.load_from_game_dir(folder)
-        root.title(("%s builder" % products.PRODUCTS[opts.game].app_name) if opts.game else "3DS builder")
+        root.title(self.state.product.title + ' 3DS Builder')
+        mask = self.theme.soul_mask
+        self._window_icon = tk.PhotoImage(master=root, width=len(mask[0]) * 2, height=len(mask) * 2)
+        for y, row in enumerate(mask):
+            for x, on in enumerate(row):
+                if on:
+                    self._window_icon.put('#ff0000', to=(x * 2, y * 2, x * 2 + 2, y * 2 + 2))
+        root.iconphoto(True, self._window_icon)
         # Sizes are for 96 DPI. Where Tk renders larger text (a DPI-aware Linux or macOS desktop), the window grows
         # with it, up to the screen.
         grow = max(1.0, float(root.tk.call("tk", "scaling")) / (96 / 72))
@@ -3919,6 +4138,7 @@ class App:
     def reset(self, game):
         self.pages[0].update_feedback.config(text='')
         self.state = State(game)
+        self.root.title(self.state.product.title + ' 3DS Builder')
         self.pages[1].searched_for = None
 
     def show(self, i):
@@ -3951,9 +4171,9 @@ class App:
         self.heading.config(text="* Clean up previous build files" if cleanup_only else "* " + self.page.title)
         self.stepno.config(text="" if cleanup_only else "Step %d of %d" % (self.index + 1, len(self.pages)))
 
-    def prompt(self, title, message, choices, details=None, cancel=None, focus=None):
+    def prompt(self, title, message, choices, details=None, cancel=None, focus=None, collapse_details=False):
         """Ask or tell something inside this window (Prompt). One shows at a time; later ones wait their turn."""
-        self._prompts.append((title, message, choices, details, cancel, focus))
+        self._prompts.append((title, message, choices, details, cancel, focus, collapse_details))
         if self.overlay is None:
             self._next_prompt()
 
@@ -3966,11 +4186,12 @@ class App:
         self.prompt(title, message, [("OK", None, True)], details=details, cancel="OK")
 
     def _next_prompt(self):
-        title, message, choices, details, cancel, focus = self._prompts.pop(0)
+        title, message, choices, details, cancel, focus, collapse_details = self._prompts.pop(0)
         if self.overlay is None and self._focus_before is None:
             self._focus_before = self.root.focus_lastfor()   # this window's keyboard, even while it is not active
         self.page.box.pack_forget()
-        self.overlay = Prompt(self, title, message, choices, details=details, cancel=cancel, focus=focus)
+        self.overlay = Prompt(self, title, message, choices, details=details, cancel=cancel, focus=focus,
+                              collapse_details=collapse_details)
         self.overlay.box.pack(fill="both", expand=True)
         self.theme.apply()
         self.show_heading()
@@ -4045,7 +4266,7 @@ class App:
         except Exception:
             source = ''
         if self.overlay is None:
-            self.inform("About", ABOUT.format(app=app, source=source))
+            self.inform("About", ABOUT.format(app=app, source=source, holder=port_holder() or ABOUT_NO_HOLDER))
 
     def check_updates(self, manual=False):
         if self.pages[0].check_updates.get():
@@ -4180,8 +4401,6 @@ def run(opts: Options):
     try:
         root = tk.Tk()
         app = App(root, opts)
-        if opts.autopilot is None:
-            root.after_idle(app.check_updates)
         root.mainloop()
         return app.exit_code
     finally:

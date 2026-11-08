@@ -3,7 +3,10 @@
 HOME Menu text (maintainer, 2026-11-04): the long description is the game's name, and the publisher line carries the rest:
 "3lit3hax - Unofficial port" for UNDERTALE releases; DELTARUNE releases keep
 "Unofficial port - v<version> - <model>". "Unofficial port - <label> <commit> - <model>"
-from a Git checkout (label: a stage/candidate tag, else "source build").
+from a Git checkout (label: a stage/candidate tag, else "source build"). Release text only when release packaging asks
+for it (CTRPORT_SMDH_RELEASE=1, a kit's builder); an archive built by hand says "source build".
+Homebrew Launcher text (the 3dsx only, maintainer, 2026-11-06): the description is "<build> (o3ds/o2ds)" or "<build> (n3ds/n2ds)",
+where <build> is the same "v<version>" or "<label> <commit>" the publisher line uses.
 """
 from pathlib import Path
 import json
@@ -34,7 +37,7 @@ class SmdhMetadata(unittest.TestCase):
                         GIT_TERMINAL_PROMPT='0')
         for key in ('GIT_DIR', 'GIT_WORK_TREE', 'GIT_COMMON_DIR', 'GIT_INDEX_FILE', 'GIT_OBJECT_DIRECTORY',
                     'GIT_ALTERNATE_OBJECT_DIRECTORIES', 'GIT_NAMESPACE', 'CTRPORT_SMDH_BUILD_TAG',
-                    'CTRPORT_SMDH_SOURCE'):
+                    'CTRPORT_SMDH_SOURCE', 'CTRPORT_SMDH_RELEASE'):
             self.env.pop(key, None)
 
     def command(self, args, cwd=None, check=True):
@@ -55,14 +58,105 @@ class SmdhMetadata(unittest.TestCase):
                  '-c', 'commit.gpgsign=false', 'commit', '-qm', 'Invented metadata fixture')
         return self.git('rev-parse', '--short=7', 'HEAD')
 
-    def query(self, game='undertale', model='o3ds', root=None, check=True):
+    GAMES_AND_CONSOLES = tuple((game, model, consoles) for game in ('undertale', 'deltarune')
+                               for model, consoles in (('o3ds', '(o3ds/o2ds)'), ('n3ds', '(n3ds/n2ds)')))
+
+    def assert_launcher_build(self, build, root=None):
+        """The 3dsx's description is "<build> <consoles>"; the CIA's stays the game's name."""
+        for game, model, consoles in self.GAMES_AND_CONSOLES:
+            with self.subTest(game=game, model=model, build=build):
+                self.assertEqual(self.query(game, model, root, mode='3dsx')[0], build + ' ' + consoles)
+                self.assertEqual(self.query(game, model, root, mode='cia')[0], game.upper())
+
+    def test_an_archive_built_by_hand_is_a_source_build(self):
+        # c26rev3 F3: a changed zip must not read as a release in a bug report. Only the exact opt-in counts.
+        version = (self.root / 'VERSION').read_text().strip()
+        for value in (None, '', '0', 'yes', 'ON', '11'):
+            if value is None:
+                self.env.pop('CTRPORT_SMDH_RELEASE', None)
+            else:
+                self.env['CTRPORT_SMDH_RELEASE'] = value
+            self.assert_launcher_build('source build')
+            for game, model, _ in self.GAMES_AND_CONSOLES:
+                for mode in ('3dsx', 'cia'):
+                    with self.subTest(value=value, game=game, model=model, mode=mode):
+                        description, publisher = self.query(game, model, mode=mode)
+                        label = 'Old 3DS' if model == 'o3ds' else 'New 3DS'
+                        self.assertEqual(publisher, 'Unofficial port - source build - ' + label)
+                        self.assertNotIn(version, description + publisher)
+
+    def test_the_release_opt_in_never_outranks_a_source_identity(self):
+        version = (self.root / 'VERSION').read_text().strip()
+        self.env['CTRPORT_SMDH_RELEASE'] = '1'
+        self.env['CTRPORT_SMDH_SOURCE'] = 'abcdef012345-dirty'
+        self.assert_launcher_build('source build abcdef012345-dirty')
+        del self.env['CTRPORT_SMDH_SOURCE']
+        commit = self.commit()
+        self.assert_launcher_build('source build ' + commit)
+        self.assertEqual(self.query()[1], 'Unofficial port - source build ' + commit + ' - Old 3DS')
+        (self.root / '.git').rename(Path(self.temp.name) / 'moved git')
+        (self.root / '.git').write_text('gitdir: gone\n')
+        self.assert_launcher_build('source build')
+        self.assertNotIn(version, self.query()[1])
+
+    def test_the_builder_asks_for_what_this_script_reads(self):
+        # The two ends of the opt-in, so renaming one can't quietly turn every player's row into "source build".
+        self.assertIn('env["CTRPORT_SMDH_RELEASE"] = "1"', (ROOT / 'tools/release/builder/pipeline.py').read_text(encoding='utf-8'))
+        self.assertIn('"$ENV{CTRPORT_SMDH_RELEASE}" STREQUAL "1"', SCRIPT.read_text(encoding='utf-8'))
+
+    def test_3dsx_description_shows_the_version_in_a_release_tree(self):
+        self.env['CTRPORT_SMDH_RELEASE'] = '1'
+        version = (self.root / 'VERSION').read_text().strip()
+        self.assert_launcher_build('v' + version)
+        self.assertEqual(self.query('undertale', 'o3ds', mode='3dsx')[0], 'v' + version + ' (o3ds/o2ds)')
+        self.assertEqual(self.query('undertale', 'n3ds', mode='3dsx')[0], 'v' + version + ' (n3ds/n2ds)')
+        # The publisher is the line maintainer sees bottom right, and the version moving up doesn't change it.
+        for game, model, _ in self.GAMES_AND_CONSOLES:
+            for mode in ('3dsx', 'cia'):
+                with self.subTest(game=game, model=model, mode=mode):
+                    self.assertEqual(self.query(game, model, mode=mode)[1], self.query(game, model)[1])
+
+    def test_3dsx_description_never_shows_the_version_in_a_source_build(self):
+        """R204, as for the publisher: only a release tree may claim the release version."""
+        version = (self.root / 'VERSION').read_text().strip()
+        self.env['CTRPORT_SMDH_SOURCE'] = 'abcdef012345-dirty'
+        self.assert_launcher_build('source build abcdef012345-dirty')
+        del self.env['CTRPORT_SMDH_SOURCE']
+        commit = self.commit()
+        self.assert_launcher_build('source build ' + commit)
+        self.env['CTRPORT_SMDH_BUILD_TAG'] = 'stage73'
+        self.assert_launcher_build('stage73 ' + commit)
+        del self.env['CTRPORT_SMDH_BUILD_TAG']
+        (self.root / 'VERSION').write_text(version + '\n\n')
+        self.assert_launcher_build('source build ' + commit + '-dirty')
+        (self.root / 'VERSION').write_text(version + '\n')
+        for game, model, _ in self.GAMES_AND_CONSOLES:
+            with self.subTest(game=game, model=model):
+                self.assertNotIn(version, self.query(game, model, mode='3dsx')[0])
+
+    def test_3dsx_description_in_a_checkout_git_cannot_read(self):
+        (self.root / '.git').write_text('gitdir: gone\n')
+        self.assert_launcher_build('source build')
+
+    def test_longest_build_the_publisher_allows_still_fits_the_description(self):
+        """The publisher's 63 characters fail a long build first, so the description's 127 can't be reached."""
+        label = 'stage' + '7' * 22
+        self.commit()
+        self.env['CTRPORT_SMDH_BUILD_TAG'] = label
+        description, publisher = self.query('undertale', 'n3ds', mode='3dsx')
+        self.assertEqual(len(publisher), 63)
+        self.assertLessEqual(len(description), 127)
+        self.env['CTRPORT_SMDH_BUILD_TAG'] = label + '7'
+        self.assertIn('publisher exceeds', self.query('undertale', 'n3ds', check=False, mode='3dsx').stderr)
+
+    def query(self, game='undertale', model='o3ds', root=None, check=True, mode=None):
         """(description, publisher), or the failed process."""
         output = Path(self.temp.name) / 'description.txt'
         publisher = Path(self.temp.name) / 'publisher.txt'
         result = self.command(['cmake', '-DROOT=' + str(root or self.root), '-DGAME=' + game,
                                '-DMODEL=' + model, '-DGIT_EXECUTABLE=' + shutil.which('git'),
                                '-DDESCRIPTION_OUT=' + str(output), '-DPUBLISHER_OUT=' + str(publisher),
-                               '-P', SCRIPT], check=check)
+                               *(['-DMODE=' + mode] if mode else []), '-P', SCRIPT], check=check)
         return (output.read_text(), publisher.read_text()) if result.returncode == 0 else result
 
     def test_all_player_models_use_contract_version_and_no_parent_identity(self):
@@ -71,6 +165,7 @@ class SmdhMetadata(unittest.TestCase):
         shutil.copytree(self.root / 'docs', archive / 'docs')
         shutil.copyfile(self.root / 'VERSION', archive / 'VERSION')
         self.env['CTRPORT_SMDH_BUILD_TAG'] = 'stage73'
+        self.env['CTRPORT_SMDH_RELEASE'] = '1'
         version = (archive / 'VERSION').read_text().strip()
         for game in ('undertale', 'deltarune'):
             for model, label in (('o3ds', 'Old 3DS'), ('n3ds', 'New 3DS')):
@@ -214,7 +309,7 @@ for game in ('undertale','deltarune'):
         publisher=work/(game+'-'+model+'-publisher.txt')
         subprocess.run([sys.argv[3],'-DROOT='+str(source),'-DGAME='+game,'-DMODEL='+model,
             '-DGIT_EXECUTABLE='+sys.argv[4],'-DDESCRIPTION_OUT='+str(output),'-DPUBLISHER_OUT='+str(publisher),'-P',
-            str(source/'platform/3ds/smdh.cmake')],check=True,stdin=subprocess.DEVNULL,timeout=20)
+            str(source/'platform/3ds/smdh.cmake')],check=True,stdin=subprocess.DEVNULL,timeout=20,env=job.environment())
         print(output.read_text())
         print(publisher.read_text())
 '''
@@ -375,7 +470,7 @@ for model in ('o3ds','n3ds'):
         def title(data, offset, length):
             return data[offset:offset+length].decode('utf-16le').split('\0')[0]
         self.assertEqual(title(raw, 8, 128), 'UNDERTALE')
-        self.assertEqual(title(raw, 136, 256), 'UNDERTALE')
+        self.assertEqual(title(raw, 136, 256), 'stage73 ' + commit + ' (o3ds/o2ds)')
         self.assertEqual(title(raw, 392, 128), 'Unofficial port - stage73 ' + commit + ' - Old 3DS')
         before = out.stat().st_mtime_ns
         self.command(args)
@@ -383,6 +478,7 @@ for model in ('o3ds','n3ds'):
         self.env['CTRPORT_SMDH_BUILD_TAG'] = 'cand27'
         self.command(args)
         changed = out.read_bytes()
+        self.assertEqual(title(changed, 136, 256), 'cand27 ' + commit + ' (o3ds/o2ds)')
         self.assertEqual(title(changed, 392, 128), 'Unofficial port - cand27 ' + commit + ' - Old 3DS')
         self.assertEqual(raw[0x2008:], changed[0x2008:])
         # Corrupt output must be repaired even if inputs still match the stamp.
@@ -393,6 +489,7 @@ for model in ('o3ds','n3ds'):
     @unittest.skipUnless(shutil.which('smdhtool') and shutil.which('bannertool'),
                          'Native tools for both SMDH formats')
     def test_real_release_smdh_english_publisher_in_both_formats(self):
+        self.env['CTRPORT_SMDH_RELEASE'] = '1'
         for game in ('undertale', 'deltarune'):
             for model, label in (('o3ds', 'Old 3DS'), ('n3ds', 'New 3DS')):
                 for mode, tool in (('3dsx', 'smdhtool'), ('cia', 'bannertool')):
@@ -410,7 +507,11 @@ for model in ('o3ds','n3ds'):
                                   for start, end in ((0, 128), (128, 384), (384, 512))]
                         publisher = ('3lit3hax - Unofficial port' if game == 'undertale' else
                             'Unofficial port - v' + (self.root/'VERSION').read_text().strip() + ' - ' + label)
-                        self.assertEqual(fields, [game.upper(), game.upper(), publisher])
+                        description = game.upper()
+                        if mode == '3dsx':
+                            description = ('v' + (self.root/'VERSION').read_text().strip() + ' ' +
+                                ('(o3ds/o2ds)' if model == 'o3ds' else '(n3ds/n2ds)'))
+                        self.assertEqual(fields, [game.upper(), description, publisher])
 
 
 if __name__ == '__main__':

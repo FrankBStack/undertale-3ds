@@ -181,14 +181,17 @@ def dry_run(o, out=print):
         out("  %-12s %s  (%s)%s" % (c.store, c.folder, c.version, "  " + c.note if c.note else ""))
     out("")
     scan = deliver.scan_saves(game, probes.pc_save_dir(game))
-    out("PC saves (%s): %d" % (scan.folder, len(scan.files)))
+    out(scan.error or "PC saves (%s): %d" % (scan.folder, len(scan.files)))
     for sf in scan.files:
-        out("  %-24s %s  %s%s" % (sf.name, sf.mtime_text, sf.summary, "" if sf.valid else " [skipped: corrupt]"))
+        out("  %-24s %s  %s%s" % (sf.name, sf.mtime_text, sf.summary, "" if sf.valid else " [skipped: unreadable]"))
     out("")
     tc = toolchain.detect(tools_dir, roots=[o["devkitpro"]] if o["devkitpro"] else None)
     out(toolchain.dry_run_report(tc, tools_dir, downloads, want_cia=True))
     out("")
     folder = o["folder"] or (copies[0].folder if copies else "<game folder>")
+    if game == 'undertale':
+        folder = os.path.join(work, 'data', products.UNDERTALE_AOT_FOLDER)
+        out('AOT input: %s (a private copy; your game folder is unchanged)' % folder)
     targets = ["n3ds", "o3ds"] if o["target"] == "both" else [o["target"]]
     if tc.bash or sys.platform != "win32":
         for t in targets:
@@ -210,7 +213,9 @@ def dry_run(o, out=print):
         out(line)
     if game == "undertale" and "o3ds" in targets:
         problem = pipeline.sfx_pack_problem()
-        out(pipeline.SFX_PACK_MISSING % problem if problem else "Sound pack for the Old 3DS: made on this PC")
+        out(pipeline.SFX_PACK_MISSING if problem else "Sound pack for the Old 3DS: made on this PC")
+        if problem:
+            out("Sound preparation: " + problem)
     return 0
 
 
@@ -222,6 +227,17 @@ MODEL = {"n3ds": "New 3DS", "o3ds": "Old 3DS"}
 
 # The window's messages name its buttons. The command line has none, so it says what to do there instead (B2).
 CLI_WORDING = (
+    ("Choose Try again, or Copy log for support.",
+     "Run the same command again, or report the error with the log named below."),
+    ("choose Send again", "run the same command again"),
+    ("choose Copy to card again", "run the same command again"),
+    ("choose Next again", "run the same command again"),
+    ("choose Try again", "run the same command again"),
+    ("Choose Try again", "Run the same command again"),
+    ("choose Check again", "run the same command again"),
+    ("or Skip.", "or skip save import."),
+    ("Click Check again on the compiler page", "Run the same command again"),
+    ("click Check again on the compiler page", "run the same command again"),
     ("Use Install beside the 3DS tools on the compiler page. "
      "Or click Try again and tick 3DS Development in the installer.",
      "Run the devkitPro installer again and select 3DS Development, then run the same command again."),
@@ -328,7 +344,8 @@ def _build_and_deliver(o, out, game, product, work, probes, folder, v, parts):
     if game == "undertale" and "o3ds" in targets:
         problem = pipeline.sfx_pack_problem()
         if problem:       # Said now, before the long build, and again from the record once the Old build ends.
-            out(pipeline.SFX_PACK_MISSING % problem)
+            out(pipeline.SFX_PACK_MISSING)
+            out("Sound preparation: " + problem)
     if source.get('kind') == 'source':
         shown.add(pipeline.source_build_text(source))
     arts = []
@@ -428,6 +445,17 @@ def _build_and_deliver(o, out, game, product, work, probes, folder, v, parts):
     return 0
 
 
+def bundled_mac_runtime():
+    """The app bootstrap runs this entry with the embedded Resources/runtime Python."""
+    from pathlib import Path
+    executable = Path(sys.executable).resolve()
+    for parent in Path(HERE).resolve().parents:
+        if (parent.name == 'Resources' and parent.parent.name == 'Contents'
+                and parent.parent.parent.suffix == '.app'):
+            return executable.is_relative_to(parent / 'runtime')
+    return False
+
+
 def main(argv):
     if sys.version_info < (3, 9):
         print('The builder needs Python 3.9 or newer.', file=sys.stderr)
@@ -448,7 +476,12 @@ def main(argv):
             help_text = "Unpack the whole builder archive again; its Python runtime must include matching Tcl/Tk."
         else:
             help_text = "Install the system Tk package: sudo apt-get install python3-tk. Then run the builder again."
-        print("The builder window needs Python's Tk library. " + help_text, file=sys.stderr)
+        if sys.platform == "darwin" and bundled_mac_runtime():
+            help_text = ("The builder's window files are missing. Download and unpack the complete Mac builder again, "
+                         "then open %s 3DS Builder.app." % products.PRODUCTS[o["game"] or "undertale"].title)
+        else:
+            help_text = "The builder window needs Python's Tk library. " + help_text
+        print(help_text, file=sys.stderr)
         return 2
     plan = None
     confirm_overwrite = None

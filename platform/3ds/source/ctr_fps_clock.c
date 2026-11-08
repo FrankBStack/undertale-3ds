@@ -13,12 +13,16 @@ static char fpsClockFormat[384] __attribute__((section(".data.late.pacer_vc"))) 
 // Exact aliases of argui's existing painter and its fps_size byte. No UI state
 // layout, function body or existing constant changes to expose those two seams.
 void CtrFps_drawText(int32_t x, int32_t y, const char* text, uint32_t colour);
-void CtrFpsbox_drawDigits(int32_t x, int32_t y, const char* text, uint32_t colour);
+void CtrFpsbox_drawPlaced(int32_t x, int32_t y, const char* text, uint32_t colour);
+#ifdef ENABLE_WAD16
+#define CtrFpsbox_drawPlaced CtrMenuborder_fps
+void CtrMenuborder_fps(int32_t x, int32_t y, const char* text, uint32_t colour);
+#endif
 #line 16
 extern const unsigned char CtrFps_counterSize;
 
 FPS_CODE void __wrap_arguiDrawText(int32_t x, int32_t y, const char* text, uint32_t colour) {
-    CtrFpsbox_drawDigits(x, y, text, colour);
+    CtrFpsbox_drawPlaced(x, y, text, colour); // where a menu on the counter's screen leaves room (ctr_optmenu.c)
     if (GetTime_virtualClockOn())
         CtrFps_drawText(x, y + 12 * ((int32_t) CtrFps_counterSize + 1), fpsClockLabel, colour);
 }

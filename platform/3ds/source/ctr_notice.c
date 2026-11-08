@@ -50,8 +50,10 @@ void CtrNotice_init(const char* settingsPath) {
     fclose(f);
 }
 
+// The 3DS link wraps this (--wrap=CtrNotice_missing): __wrap_CtrNotice_missing in z_noticewrap.c gives the advice players see.
+// This one is only linked, kept so that nothing after it moves; its text keeps the earlier text's slot.
 void CtrNotice_missing(const char* kind, const char* path) {
-    CtrNotice_report(kind, path, "Copy to the path above from your PC.\nDSP firmware: run DSP1 once.");
+    CtrNotice_report(kind, path, "Copy the missing file to the path above, or run the builder again.");
 }
 
 void CtrNotice_report(const char* kind, const char* path, const char* advice) {

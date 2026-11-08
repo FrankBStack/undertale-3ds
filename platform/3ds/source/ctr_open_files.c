@@ -171,7 +171,7 @@ static int shedOwn(void) {
 __attribute__((noinline)) static unsigned askToShed(bool own, ShedRequest* req) {
     // The function keeps its former 244 bytes, so that nothing after it
     // moves: subsection 1 follows the body and its literal pool, zero-filled.
-#if defined(__3DS__) && defined(NDEBUG) // the Release layout only
+#if defined(__3DS__) && defined(NDEBUG) && !defined(__OPTIMIZE_SIZE__) // the optimized Release layout only
     __asm__(".pushsection .text.askToShed, 1\n.org 244\n.popsection");
 #endif
     Thread self = threadGetCurrent();
@@ -260,7 +260,7 @@ static int openCount(void) {
 
 static int trackedOpen(struct _reent* r, void* fileStruct, const char* path, int flags, int mode) {
     // Keeps its former 560 bytes (as askToShed).
-#if defined(__3DS__) && defined(NDEBUG) // the Release layout only
+#if defined(__3DS__) && defined(NDEBUG) && !defined(__OPTIMIZE_SIZE__) // the optimized Release layout only
     __asm__(".pushsection .text.trackedOpen, 1\n.org 560\n.popsection");
 #endif
     int fd = attemptOpen(r, fileStruct, path, flags, mode);
@@ -289,7 +289,7 @@ static int trackedClose(struct _reent* r, void* fileStruct) {
 
 static DIR_ITER* trackedDirOpen(struct _reent* r, DIR_ITER* dirState, const char* path) {
     // Keeps its former 576 bytes (as askToShed).
-#if defined(__3DS__) && defined(NDEBUG) // the Release layout only
+#if defined(__3DS__) && defined(NDEBUG) && !defined(__OPTIMIZE_SIZE__) // the optimized Release layout only
     __asm__(".pushsection .text.trackedDirOpen, 1\n.org 576\n.popsection");
 #endif
     DIR_ITER* dir = attemptDirOpen(r, dirState, path);
@@ -350,7 +350,7 @@ bool CtrOpenFiles_mayKeep(void) {
 int CtrOpenFiles_addKeeper(void (*shed)(void* owner), void (*wake)(void* owner), void* owner) {
     // Keeps its former 156 bytes (as askToShed): written whole now, seq too,
     // which came out shorter.
-#if defined(__3DS__) && defined(NDEBUG) // the Release layout only
+#if defined(__3DS__) && defined(NDEBUG) && !defined(__OPTIMIZE_SIZE__) // the optimized Release layout only
     __asm__(".pushsection .text.CtrOpenFiles_addKeeper, 1\n.org 156\n.popsection");
 #endif
     if (real == nullptr) return -1;

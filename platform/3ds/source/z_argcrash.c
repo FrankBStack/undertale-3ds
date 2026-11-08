@@ -73,7 +73,7 @@ void __real_LightEvent_Init(LightEvent* event, ResetType reset_type);
 void __real_LightEvent_Signal(LightEvent* event);
 void __real_platformLog(const logType type, const char* format, va_list va);
 Result __real_svcOutputDebugString(const char* str, s32 length);
-bool __real_aptMainLoop(void);
+bool homeaudioEnter(void); bool __real_aptMainLoop(void);
 void __real_svcBreak(UserBreakType breakReason) __attribute__((noreturn));
 void __real_exit(int status) __attribute__((noreturn));
 
@@ -252,12 +252,15 @@ ARGCRASH_STR(strLogExitFmt, "Exit: %s\n");
 
 // Per-frame / high-frequency normal-log prefixes suppressed in default Release play.
 // Kept in Release logs for diagnosing player and developer reports:
-//   [perf], Slow frame, Files (room): / Files:, [rl], [code], [mem], "Textures:" and all bench/profile lines.
+//   [perf], [pace], Slow frame, Files (room): / Files:, [rl], [code], [mem], "Textures:" and all bench/profile lines.
+// [pace] (every 5 s, beside [perf]) is kept since ethanlog5: dropped with Other screen Off, a player's log lost its
+// held-frame counts from the mode change on. Its slot stays (8 B and a pointer, so nothing after it moves) with a
+// prefix no log format starts with.
 ARGCRASH_STR(strTagSkip, "[skip");
 ARGCRASH_STR(strTagRender, "[render]");
 ARGCRASH_STR(strTagSmartCount, "[smartcount");
 ARGCRASH_STR(strTagFill, "[fill]");
-ARGCRASH_STR(strTagPace, "[pace]");
+ARGCRASH_STR(strTagPace, "\x01pace");
 ARGCRASH_STR(strTagFlips, "[flips]");
 ARGCRASH_STR(strTagLevel, "[level]");
 ARGCRASH_STR(strLogGameDebug, "Game: %s\n");
@@ -337,7 +340,7 @@ static const ScreenLine screenLines[8] ARGCRASH_RODATA = {
     {   0, 132, 0xD8E0E8u, strVerLine },
     {   0, 146, 0xD8E0E8u, CTRPORT_COMMIT },
     {   0,  58, 0xFFFFFFu, nullptr },
-    { 176, 146, 0xFFA860u, nullptr },
+    {   0, 158, 0xFFA860u, nullptr },
     {   0, 182, 0xFFFF60u, nullptr },
 };
 
@@ -1072,7 +1075,7 @@ ARGCRASH_LATE bool __wrap_aptMainLoop(void) {
     }
     argcrashRunTestTrigger();
 #endif
-    return __real_aptMainLoop();
+    return R216_PICK(homeaudioEnter, __real_aptMainLoop)();
 }
 
 ARGCRASH_LATE void __wrap_svcBreak(UserBreakType breakReason) {
@@ -1561,4 +1564,32 @@ __asm__(".global CtrArgcrash_quiet\n"
         ".global CtrArgcrash_depart\n"
         ".type CtrArgcrash_depart, %function\n"
         ".set CtrArgcrash_depart, CtrArgcrash_departBody\n");
+#endif
+
+// HOME: the sound stops with the picture (change homeaudio, maintainer 11-06: "the music keeps playing [when] the games screen
+// is frozen"). The game thread stops making frames as it enters libctru's jump to the HOME Menu, but libctru puts the
+// DSP to sleep only after PrepareToJumpToHomeMenu, every suspend hook, the system VRAM save and the screen hand-over.
+// So the game's channels pause here first (ctr_audio_system.c's end has the why and the paths), and go on when the game
+// is back. aptShouldJumpToHome is the test aptMainLoop itself makes. Close from the HOME Menu returns false: no resume,
+// as the options menu's Quit. Not on a crash screen: it stops nothing, and a crash may have left an audio lock held.
+// UNDERTALE only for 1.0, as the crash net above (parked for the DELTARUNE round, until DR work
+// resume): DELTARUNE keeps its bytes. The two flags by their link names: naming the statics here would move them. The
+// wrap calls an alias: seeing this function as a callee, GCC puts the wrap after __wrap_svcBreak and __wrap_exit.
+#ifdef ENABLE_WAD16
+#define HOMEAUDIO_CODE __attribute__((noinline, noipa, section(".text_homeaudio")))
+void CtrAudio_homeFreeze(void); void mlHomeFreeze(void); // musicloop: cuts a stopped stream's fade, then CtrAudio_homeFreeze
+void CtrAudio_homeThaw(void);
+extern volatile bool homeaudioPending __asm__("pendingScreenActive");
+extern volatile bool homeaudioInCrash __asm__("argcrashInCrash");
+
+HOMEAUDIO_CODE bool homeaudioMainLoop(void) {
+    if (homeaudioPending || homeaudioInCrash || !aptShouldJumpToHome()) return __real_aptMainLoop();
+    mlHomeFreeze();
+    bool running = __real_aptMainLoop();
+    if (running) CtrAudio_homeThaw();
+    return running;
+}
+__asm__(".global homeaudioEnter\n"
+        ".type homeaudioEnter, %function\n"
+        ".set homeaudioEnter, homeaudioMainLoop\n");
 #endif

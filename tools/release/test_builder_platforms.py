@@ -69,15 +69,15 @@ class PlatformToolchainTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             dest = Path(tmp) / "installer"
             pin = platform_assets.DEBIAN_INSTALLER
-            for opener, message in ((lambda request, timeout: Response(body), "devkitPro blocked"),
-                                    (blocked, "devkitPro blocked")):
+            for opener, message in ((lambda request, timeout: Response(body), "server did not provide the setup file"),
+                                    (blocked, "server did not provide the setup file")):
                 with self.subTest(message=message), self.assertRaisesRegex(toolchain.Refused, message):
                     toolchain.download(pin["url"], str(dest), pin["sha256"], opener=opener, size=pin["size"])
                 self.assertFalse(dest.exists())
                 self.assertFalse(Path(str(dest) + ".part").exists())
             dest.write_bytes(b"previous verified file")
             Response.headers = {"Content-Type": "text/html"}
-            with self.assertRaisesRegex(toolchain.Refused, "devkitPro blocked"):
+            with self.assertRaisesRegex(toolchain.Refused, "server did not provide the setup file"):
                 toolchain.download(pin["url"], str(dest), pin["sha256"],
                                    opener=lambda request, timeout: Response(body), size=pin["size"])
             self.assertEqual(dest.read_bytes(), b"previous verified file")
@@ -603,6 +603,49 @@ class SdFilesystemTests(unittest.TestCase):
 
 
 class SupportPrivacyTests(unittest.TestCase):
+    def test_compiler_flag_glued_paths_are_removed_from_copied_logs(self):
+        mac = '/' + 'Users/fixture-private/project/include'
+        windows = 'Q:/' + 'Users/fixture-private/project/include'
+        for prefix in ('-I', '-L', '-F', '--sysroot=', "-I'", '-I"'):
+            for path in (mac, windows, '/opt/fixture-private/lib'):
+                with self.subTest(prefix=prefix, path=path):
+                    text = 'cc warning: directory ' + prefix + path + ' not found\n'
+                    filtered = pipeline.filter_log(text, home='/fixture-home')
+                    self.assertNotIn('fixture-private', filtered)
+                    self.assertNotIn(path, filtered)
+                    self.assertIn('<path>', filtered)
+                    self.assertEqual(pipeline.filter_log(filtered, home='/fixture-home'), filtered)
+                    scrub = pipeline.SupportLogFilter(home='/fixture-home')
+                    self.assertEqual(scrub(text), filtered)
+
+    def test_traceback_locations_keep_only_basename_line_and_function(self):
+        # Assemble synthetic profile paths so the test source can ship through the kit privacy scan.
+        win_home = 'C:/' + 'Users/Private Person'
+        mac_home = '/' + 'Users/Private Person'
+        linux_home = '/' + 'home/private-person'
+        for home, path in (
+                (win_home.replace('/', '\\'), (win_home + '/builder/gui.py').replace('/', '\\')),
+                (win_home, win_home + '/builder/gui.py'),
+                (mac_home, mac_home + '/builder/gui.py'),
+                (linux_home, linux_home + '/builder/gui.py'),
+                (win_home, 'E:/Private Work/builder/gui.py'),
+                (win_home, '\\' * 2 + r'private-server\Private Share\builder\gui.py')):
+            with self.subTest(path=path):
+                raw = ('Traceback (most recent call last):\n'
+                       '  File "%s", line 123, in worker\n'
+                       '    boom()\nRuntimeError: synthetic failure\n'
+                       'Output: %s\n' % (path, path))
+                filtered = pipeline.filter_log(raw, home=home)
+                self.assertIn('  File "gui.py", line 123, in worker\n', filtered)
+                self.assertIn('    boom()\nRuntimeError: synthetic failure\n', filtered)
+                self.assertNotIn(path, filtered)
+                self.assertNotIn('Private', filtered)
+                self.assertNotIn('private-', filtered)
+                self.assertEqual(filtered.count('gui.py'), 1)  # Ordinary paths still lose their basename.
+                scrub = pipeline.SupportLogFilter(home=home)
+                self.assertEqual(''.join(scrub(line) for line in raw.splitlines()), filtered)
+                self.assertEqual(pipeline.filter_log(filtered, home=home), filtered)
+
     def test_streaming_save_section_and_private_paths_are_removed(self):
         scrub = pipeline.SupportLogFilter(home=('/' + 'home/fixture-user'))
         chunks = ["PC saves (/some/private/folder): 2", "  file0 2026-10-20  Name Fixture, LV 8",
@@ -973,6 +1016,7 @@ class CompilerPreflightReviewTests(unittest.TestCase):
                 page.app.call = lambda fn, *args: fn(*args)
                 page.app.work = lambda job, done, **kw: done(job())
                 page.running_step, page.failures = False, {}
+                page.update_box = None  # This fixture exercises an isolated step, not the temporary Update row.
                 for name in ('result', 'update_buttons', 'write', 'detect'):
                     setattr(page, name, mock.Mock())
                 box = mock.Mock(step=toolchain.Step('update', 'fixture', 'fixture', [],
@@ -1168,7 +1212,9 @@ class PackageVersionLogTests(unittest.TestCase):
                 write(str(bdir / "generated/ctrport_build_id.h"),
                       '#define CTRPORT_COMMIT_TEXT "archive-0.1.0+aot12"\n')
                 write(str(bdir / "undertale-3ds-n3ds.3dsx"), b"fixture artifact")
-            build = pipeline.Build(fixtures.products.PRODUCTS["undertale"], detected, str(work), "n3ds", "/fixture",
+            game = Path(tmp) / 'game'
+            write(str(game / 'data.win'), fixtures.UT)
+            build = pipeline.Build(fixtures.products.PRODUCTS["undertale"], detected, str(work), "n3ds", str(game),
                                    source_root=src, popen=lambda *a, **kw: fixtures.FakeProc([], 0, on_start=output),
                                     art_generator=lambda *a, **k: {}, sfx_builder=lambda *a: None)
             with mock.patch.object(pipeline.library_pins, 'select', return_value={'packages': [], 'shims': None}), \

@@ -60,7 +60,9 @@
 #                              [inputperiod=<0|8|16>] [inputstall=<ms>] (input sampler diagnostics; separate build directory)
 #                              [spikerec] (spike recorder for playtests: every frame that misses its slot, written to
 #                              spikes.txt at room changes; source/z_spikerec.c; separate build directory, never a release)
-#                              [freewins] (main-loop segment timers and off switches, freewins; source/z_freewins.c;
+#                              [homeaudioprobe|homeaudioauto|homeaudiofake] (UNDERTALE, when the sound and the picture stop on HOME: real
+#                              presses, or the emulator's own timed jumps; diag/ctr_homeaudio_probe.c; never a release)
+#                              [freewins] (main-loop segment timers and off switches, change freewins; source/z_freewins.c;
 #                              separate build directory, never a release)
 #                              [bfprobe] (main-thread waits in a sweep, [bfprobe] log lines; ctr_benchmark.c's end;
 #                              separate build directory, never a release)
@@ -100,6 +102,9 @@
 # every build.
 # "rosaprobe" logs each pause and backlight switch of the Rosalina watcher (source/ctr_rosalina.c), for hardware
 # test kits, and builds into build/3ds-<game>-<target>-rosaprobe/.
+# "rosalow=arm" and "rosalow=script" (UNDERTALE Old, tests only; source/z_rosalow.c): the combo lowering's arm byte, which
+# tools/analysis/rosalow_arm.py sets in a copy of the .3dsx, and its Azahar script. They build into
+# build/3ds-<game>-<target>-rosalow<word>/.
 # "utfadeprobe" (UNDERTALE, tests only) writes the game screen's picture during each room change's load to the game
 # folder (source/z_utfade.c), and builds into build/3ds-<game>-<target>-utfadeprobe/; never a Release build.
 # "bubblecheck" (UNDERTALE, with smalltext) logs every Crisp line, any font, that comes closer to its bubble's or the
@@ -220,6 +225,7 @@ openh264_skip= # set when the openh264 build failed
 reachgate=OFF
 shots=OFF
 rosaprobe=OFF
+rosalow=
 utfadeprobe=OFF
 bubblecheck=OFF
 roomplan=ON
@@ -232,6 +238,7 @@ pacer_rule=OFF
 pacer_csv_diag=OFF
 record_fail_after= # empty: no allocation injection
 spikerec=OFF
+homeaudioprobe=OFF
 freewins=OFF
 uttc_mode=     # uttc (change uthunt T1, test words): empty, OFF (uttc=off) or FORCE (uttc-force)
 dprank_mode=   # dprank (change uthunt, test words): empty, OFF (dprank=off: always the scan) or DIAG (dprank-diag)
@@ -322,6 +329,7 @@ for arg in "$@"; do
         reachgate) reachgate=ON ;;
         shots) shots=ON ;;
         rosaprobe) rosaprobe=ON ;;
+        rosalow=*) rosalow=${arg#rosalow=} ;;
         utfadeprobe) utfadeprobe=ON ;;
         bubblecheck) bubblecheck=ON ;;
         pacer-observe) pacer_observe=ON ;;
@@ -335,6 +343,9 @@ for arg in "$@"; do
         inputperiod=*) input_period=${arg#inputperiod=} ;;
         inputstall=*) input_stall=${arg#inputstall=} ;;
         spikerec) spikerec=ON ;;
+        homeaudioprobe) homeaudioprobe=ON ;;
+        homeaudioauto) homeaudioprobe=AUTO ;;
+        homeaudiofake) homeaudioprobe=FAKE ;;
         freewins) freewins=ON ;;
         uttc=off) uttc_mode=OFF ;;
         uttc-force) uttc_mode=FORCE ;;
@@ -617,6 +628,9 @@ fi
 if [ "$rosaprobe" = ON ]; then
     build="$build-rosaprobe"
 fi
+if [ -n "$rosalow" ]; then
+    build="$build-rosalow$rosalow"
+fi
 if [ "$utfadeprobe" = ON ]; then
     build="$build-utfadeprobe"
 fi
@@ -631,6 +645,9 @@ if [ "$roomplan_rec" = ON ]; then
 fi
 if [ "$spikerec" = ON ]; then
     build="$build-spikerec"
+fi
+if [ "$homeaudioprobe" != OFF ]; then
+    build="$build-homeaudio$homeaudioprobe"
 fi
 if [ "$freewins" = ON ]; then
     build="$build-freewins"
@@ -925,7 +942,10 @@ if [ "$roomplan" = ON ] && [ -n "${python:-}" ]; then
         rm -f "$plan_out"/*.dtp
     fi
     if [ -n "$halfart_remap" ]; then plan_out="$repo/build/roomplan-$game/$game-halfart$halfart.dtp"; fi
+    # UNDERTALE New's plan has no boot rooms rule (build_plan.py BOOT_AHEAD_MODELS), so it gets a file of its own.
+    if [ "$game" = undertale ] && [ "$target" = n3ds ]; then plan_out="${plan_out%.dtp}-n3ds.dtp"; fi
     plan_args=(--game "$game" --out "$(native_path "$plan_out")")
+    if [ "$game" = undertale ]; then plan_args+=(--model "$target"); fi
     if [ -n "$data_dir" ]; then plan_args+=(--data "$(native_path "$data_dir")"); fi
     if [ -n "$halfart_remap" ]; then plan_args+=(--halfart "$(native_path "$halfart_remap")"); fi
     set +e
@@ -1090,10 +1110,14 @@ if [ "${CTRPORT_CCACHE:-1}" != 0 ]; then
         cache_dir=${CTRPORT_CCACHE_DIR:-}
         if [ -z "$cache_dir" ]; then
             # The main checkout is the parent of the repository's common .git, which every worktree shares.
+            # Without a .git of its own (a source zip, even one unpacked inside a checkout) this tree keeps its own
+            # cache; so does a checkout git can't read, or a machine with no git. Neither stops the build.
             main_checkout=$repo
-            common=$(git -C "$repo" rev-parse --path-format=absolute --git-common-dir 2> /dev/null | tr -d '
-')
-            if [ "${common##*/}" = .git ]; then main_checkout=${common%/.git}; fi
+            if [ -e "$repo/.git" ] || [ -L "$repo/.git" ]; then
+                common=$(git -C "$repo" rev-parse --path-format=absolute --git-common-dir 2> /dev/null | tr -d '
+') || common=
+                if [ "${common##*/}" = .git ]; then main_checkout=${common%/.git}; fi
+            fi
             cache_dir="$main_checkout/scratch/ccache"
         fi
         mkdir -p "$cache_dir"
@@ -1134,6 +1158,7 @@ if [ "$flowcode" = ON ]; then
 fi
 
 cmake -S "$here" -B "$build" -G "Unix Makefiles" \
+    -DCMAKE_INTERMEDIATE_DIR_STRATEGY=FULL \
     ${prefix_map[@]+"${prefix_map[@]}"} \
     ${release_source[@]+"${release_source[@]}"} \
     -DCTRPORT_PYTHON_EXECUTABLE="$python_executable" \
@@ -1182,12 +1207,12 @@ cmake -S "$here" -B "$build" -G "Unix Makefiles" \
     -DCTRPORT_AOT_STRESS="$aot_stress" \
     -DCTRPORT_VIDEO_OPENH264="$openh264" \
     -DCTRPORT_REACH_GATE="$reachgate" \
-    -DCTRPORT_PLAYER_SHOTS="$shots" -DCTRPORT_ROSALINA_PROBE="$rosaprobe" -DCTRPORT_UTFADE_PROBE="$utfadeprobe" -DCTRPORT_BUBBLE_CHECK="$bubblecheck" \
+    -DCTRPORT_PLAYER_SHOTS="$shots" -DCTRPORT_ROSALINA_PROBE="$rosaprobe" -DCTRPORT_ROSALOW_TEST="$rosalow" -DCTRPORT_UTFADE_PROBE="$utfadeprobe" -DCTRPORT_BUBBLE_CHECK="$bubblecheck" \
     -DCTRPORT_PACER_OBSERVE="$pacer_observe" -DCTRPORT_PACER_R2R3A="$pacer_rule" \
     -DCTRPORT_PACER_CSV_DIAG="$pacer_csv_diag" \
     -DCTRPORT_ROOMPLAN_FILE="$roomplan_file" -DCTRPORT_SFXPLAN_FILE="$sfxplan_file" -DCTRPORT_PHASEPLAN_FILE="$phaseplan_file" -DCTRPORT_ROOMPLAN_DIR="$roomplan_dir" -DCTRPORT_ROOMPLAN_RECORDER="$roomplan_rec" \
     -DCTRPORT_PHASE_LAYOUT="$phase_layout" \
-    -DCTRPORT_SPIKEREC="$spikerec" -DCTRPORT_TITANDIAG="$titandiag" -DCTRPORT_FREEWINS="$freewins" \
+    -DCTRPORT_HOMEAUDIO_PROBE="$homeaudioprobe" -DCTRPORT_SPIKEREC="$spikerec" -DCTRPORT_TITANDIAG="$titandiag" -DCTRPORT_FREEWINS="$freewins" \
     -DCTRPORT_UTTC_MODE="$uttc_mode" -DCTRPORT_DPRANK_MODE="$dprank_mode" -DCTRPORT_TEST_LATE_PAGE="$testpage" \
     -DCTRPORT_BENCHFIX_PROBE="$bfprobe" -DCTRPORT_PACER_ARENA_LOG="$arenalog" -DCTRPORT_FRAMETRACE="$frametrace" -DCTRPORT_ASG_PROBE="$asgprobe" -DCTRPORT_FLOWSTREAM_DIAG="$flowdiag" \
     -DCTRPORT_EXITTRAIL="$exittrail" -DCTRPORT_WRITERFRONT_MODE="$writerfront" \

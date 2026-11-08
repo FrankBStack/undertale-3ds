@@ -6,6 +6,7 @@ FTP includes the programs and game files. The netloader is never contacted.
 from __future__ import annotations
 
 import dataclasses
+import errno
 import ftplib
 import os
 import re
@@ -17,6 +18,7 @@ import sys
 import products
 import install_record
 import sd_transaction
+import texcache
 from processes import hidden_options
 from saves import (  # noqa: F401
     IGNORED_SAVE_NAMES,
@@ -370,6 +372,10 @@ def copy_with_textures(sd_root, items, product, folder, work, parts=None, progre
         transaction.release()
 
 
+COPY_RETRY = ('Reconnect the same SD card and choose Copy to card again. '
+              'Do not start the game until copying finishes.')
+
+
 def _copy_transaction(transaction, sd_root, items, product, folder, work, parts, progress, cancelled, log,
                       textures, tool, data_version):
     import texcache
@@ -425,15 +431,33 @@ def _copy_transaction(transaction, sd_root, items, product, folder, work, parts,
     except (OSError, ValueError, KeyError, TypeError, DeliverError) as error:
         try:
             transaction.recover()
-        except (OSError, ValueError, KeyError, TypeError):
+        except (OSError, ValueError, KeyError, TypeError) as recovery_error:
             # Keep the durable journal/backups for the next run when the card is available.
-            pass
+            if isinstance(error, (DeliverError, install_record.ModelInputMismatch)):
+                message = str(error).rstrip('.') + '. Do not start the game.'
+                if isinstance(error, DeliverError):
+                    error.args = (message,)
+                    raise error from recovery_error
+                raise DeliverError(message) from error
+            if (isinstance(recovery_error, OSError) and recovery_error.errno is not None
+                    and sd_transaction.UNRECOGNISED not in str(recovery_error)):
+                raise DeliverError(COPY_RETRY) from error
+            log('SD update recovery: %s: %s' % (type(recovery_error).__name__, recovery_error))
+            message = sd_transaction.UNRECOGNISED
+            if sd_transaction.UNRECOGNISED not in str(recovery_error):
+                message = ('The update folder on the card could not be read. '
+                           'Keep the update folder and choose another card')
+            raise DeliverError(message.rstrip('.') + '. Do not start the game.') from error
         if isinstance(error, DeliverError):
             raise
         if isinstance(error, install_record.ModelInputMismatch):
             raise DeliverError(str(error)) from error
         if isinstance(error, InterruptedError) or cancelled():
             raise DeliverError("Copy cancelled.\nClick Copy to card to try again.") from error
+        if isinstance(error, OSError) and (error.errno in (errno.EIO, errno.ENODEV, errno.ENXIO)
+                or getattr(error, 'winerror', None) in (21, 1117, 1167) or not os.path.isdir(sd_root)):
+            log('SD copy: %s: %s' % (type(error).__name__, error))
+            raise DeliverError(COPY_RETRY) from error
         raise write_error(sd_root, error) from error
 
 
@@ -452,10 +476,12 @@ class SavedFiles:
 
 FOLDER_README = '''READ THIS BEFORE COPYING
 
-Use the builder's Copy to SD card option. It merges individual files and keeps
-your saves, settings, other homebrew and other games.
+Copy everything inside SD-CARD-FILES to the root of your 3DS SD card: the 3ds
+folder and, if present, the cia folder. Merge folders; do not replace whole folders.
 
-SD-CARD-FILES contains the files for the card. Never replace saves.
+The saves already on the card are left alone. This export contains no PC saves.
+Keep existing saves, settings, other homebrew and other games. If asked about
+saves or settings, skip them. Replace only the build or game files you are updating.
 '''
 
 WINDOWS_FOLDER_ADVICE = '''
@@ -486,15 +512,26 @@ def folder_readme(platform=None):
     return FOLDER_README + advice + (MAC_FOLDER_ADVICE if platform == 'darwin' else '')
 
 
-def sd_preview(sd_root, product, artifacts, folder, work, parts=None):
+TEXTURE_FALLBACK = texcache.FIRST_START
+
+
+class PreviewText(str):
+    """The full file list, with a separate flag for warnings that must stay visible."""
+    def __new__(cls, text, texture_fallback=False):
+        result = super().__new__(cls, text)
+        result.texture_fallback = texture_fallback
+        return result
+
+
+def sd_preview(sd_root, product, artifacts, folder, work, parts=None, *, log=lambda text: None):
     """Read the card, prepare textures in work, and list each prospective card write."""
     import texcache
     items = plan_sd_copy(sd_root, product, artifacts, folder, parts)
-    tool = texcache.find_tool(work, log=lambda text: None)
+    tool = texcache.find_tool(work, log=log)
     changes = {item.dst: 'Keep' if item.skip else 'Replace' if os.path.exists(
         os.path.join(sd_root, *item.dst.split('/'))) else 'Add' for item in items}
     if tool.ok:
-        sets, problems = texcache.prepare(tool, product, folder, work, parts, log=lambda text: None)
+        sets, problems = texcache.prepare(tool, product, folder, work, parts, log=log)
         check_copy_space(sd_root, items, sets, product=product)
         for plan in texcache.plan(sd_root, sets):
             if plan.keep:
@@ -502,23 +539,28 @@ def sd_preview(sd_root, product, artifacts, folder, work, parts=None):
             for page in plan.write_pages:
                 rel = plan.cs.sd_dir + '/' + texcache.page_name(page)
                 changes[rel] = 'Replace' if os.path.exists(os.path.join(sd_root, *rel.split('/'))) else 'Add'
-            changes[plan.cs.sd_dir + '/complete'] = 'Replace'
+            marker = plan.cs.sd_dir + '/complete'
+            changes[marker] = 'Replace' if os.path.exists(os.path.join(sd_root, *marker.split('/'))) else 'Add'
             for name in plan.remove:
                 changes[plan.cs.sd_dir + '/' + name] = 'Remove stale texture page'
     else:
         problems = [tool.message]
+    for problem in problems:
+        log('texprep: ' + problem)
     for _src, rel in texcache.data_wins(product, folder, parts):
-        changes[texcache.sd_cache_dir(product, rel) + '/data-version.txt'] = 'Write after checking data.win'
-    changes[product.sd_data_dir + '/install.json'] = 'Write after checking files'
+        marker = texcache.sd_cache_dir(product, rel) + '/data-version.txt'
+        changes[marker] = 'Replace' if os.path.exists(os.path.join(sd_root, *marker.split('/'))) else 'Add'
+    record = product.sd_data_dir + '/install.json'
+    changes[record] = 'Replace' if os.path.exists(os.path.join(sd_root, *record.split('/'))) else 'Add'
     text = ('Only these files will be written or replaced. Saves, settings, other homebrew and other games are kept.\n\n' +
             '\n'.join('%s: %s' % (action, path) for path, action in sorted(changes.items())))
     if problems:
         text += '\n\nTextures: the 3DS will prepare any missing pages the first time.\n' + '\n'.join(problems)
-    return items, tool, text
+    return items, tool, PreviewText(text, texture_fallback=bool(problems))
 
 
 def save_files(product, artifacts, folder, work, parts=None, progress=None, cancelled=lambda: False,
-               log=lambda s: None, textures=True, tool=None, data_version=True):
+               log=lambda s: None, textures=True, tool=None, data_version=True, output_parent=None):
     """A fresh SD layout on the PC, including the same rounded cache and version markers as SD delivery.
 
     Never reuse a previous selection's directory: an unselected chapter must not remain playable. A failed
@@ -527,9 +569,11 @@ def save_files(product, artifacts, folder, work, parts=None, progress=None, canc
     import tempfile
     try:
         products.require_output_outside_game(folder, work)
+        if output_parent:
+            products.require_output_outside_game(folder, output_parent)
     except ValueError as exc:
         raise DeliverError(str(exc)) from exc
-    parent = os.path.join(work, "out", "files")
+    parent = output_parent or os.path.join(work, "out", "files")
     os.makedirs(parent, exist_ok=True)
     wrapper = tempfile.mkdtemp(prefix=product.key + "-3ds-install-", suffix=".part", dir=parent)
     staging = os.path.join(wrapper, 'SD-CARD-FILES')
@@ -578,6 +622,23 @@ def which_3dsx(product, targets):
     return ", or ".join(on)
 
 
+def launcher_has_model_descriptions(source_root=None):
+    """Enable S7's model wording only when the selected source actually builds those descriptions."""
+    root = source_root if source_root is not None else products.release_contract.ROOT
+    try:
+        with open(os.path.join(root, 'platform', '3ds', 'smdh.cmake'), encoding='utf-8') as source:
+            text = re.sub(r'#[^\n]*', '', source.read())
+    except (OSError, UnicodeError):
+        return False
+    block = '''if(MODE STREQUAL "3dsx")
+        set(description "${build} (o3ds/o2ds)")
+        if(MODEL STREQUAL "n3ds")
+            set(description "${build} (n3ds/n2ds)")
+        endif()
+    endif()'''
+    return ' '.join(block.split()) in ' '.join(text.split())
+
+
 def instructions(product: products.Product, targets, outputs, sd_root=None,
                  saves_result: SaveCopyResult | None = None, save_result: SaveCopyResult | None = None,
                  delivery=None):
@@ -587,9 +648,9 @@ def instructions(product: products.Product, targets, outputs, sd_root=None,
     if sd_root:
         steps.append("Eject the SD card and put it in your 3DS.")
     elif delivery == 'files':
-        steps.append('Read READ-ME-FIRST.txt in the saved folder. Use Copy to SD card; ' +
-                     ('Windows File Explorer merges folders. Never replace saves.' if sys.platform == 'win32'
-                      else 'never replace a whole folder.'))
+        steps.append('Copy everything inside SD-CARD-FILES to the root of your SD card. Merge folders; '
+                     'never replace whole folders. The saves already on the card are left alone. '
+                     'Read READ-ME-FIRST.txt for your computer\'s copying steps.')
         steps.append('Put the SD card in your 3DS.')
     elif delivery == 'wifi':
         steps.append('Files sent to the SD card. Close ftpd.')
@@ -598,7 +659,16 @@ def instructions(product: products.Product, targets, outputs, sd_root=None,
         steps.append('Put the SD card in your 3DS.')
     launch = []
     if "3dsx" in outputs:
-        launch.append("Homebrew Launcher: start %s." % which_3dsx(product, targets))
+        if product.key == 'undertale':
+            # Ships with menusound S7's matching model descriptions in the SMDH.
+            start = ('there are two UNDERTALE rows. Start the one marked '
+                     '(n3ds/n2ds) on a New console, or (o3ds/o2ds) on an Old console.'
+                     if len(set(targets)) > 1 and launcher_has_model_descriptions() else 'start UNDERTALE.')
+            launch.append('Homebrew Launcher: %s The game is inside the undertale-3ds folder.' % start)
+        else:
+            launch.append("Homebrew Launcher: open the %s-3ds folder, then choose %s. "
+                          "Use the entry for your 3DS model: %s." %
+                          (product.key, product.title, which_3dsx(product, targets)))
     if "cia" in outputs:
         names = ", ".join("%s.cia (%s)" % (products.package_stem(product, t),
                           "New 3DS models" if t == "n3ds" else "Old 3DS models") for t in targets)

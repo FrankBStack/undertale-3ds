@@ -38,7 +38,12 @@ class Cancelled(TransferError):
     pass
 
 
-def delivery_error(exc, *, connecting=False):
+INCOMPLETE_SEND = 'Sending stopped. Keep ftpd open and choose Send again before starting the game.'
+LOST_CONNECTION = ('The connection to the 3DS was lost. Reconnect it and choose Send again '
+                   'before starting the game.')
+
+
+def delivery_error(exc, *, connecting=False, message=None):
     """Keep actionable validation errors; translate only known transport failures."""
     if isinstance(exc, TransferError):
         return exc
@@ -54,7 +59,7 @@ def delivery_error(exc, *, connecting=False):
     if disconnected:
         if connecting:
             return TransferError("Can't reach a 3DS at this address. Check that ftpd is open and the 3DS is on the same network as this PC, then try again.")
-        return TransferError('Lost the connection to the 3DS. Check that ftpd is still open, then click Send to pick up where it left off.')
+        return TransferError(message or LOST_CONNECTION)
     return exc
 
 
@@ -98,9 +103,9 @@ class ConsoleFTP(ftplib.FTP):
         return host, port
 
 
-def check_cancel(cancelled):
+def check_cancel(cancelled, message=INCOMPLETE_SEND):
     if cancelled():
-        raise Cancelled('Stopped. Nothing is lost: a new send picks up where this one left off.')
+        raise Cancelled(message)
 
 
 def identify(ftp):
@@ -193,7 +198,7 @@ def find_consoles(networks, *, allowed, cancelled=lambda: False, progress=lambda
         complete = False
         try:
             connect(host + ':5000', factory=lambda: ftp, timeout=0.6)
-            check_cancel(cancelled)
+            check_cancel(cancelled, 'Search stopped. No files were sent.')
             complete = True
             return host + ':5000'
         except (OSError, EOFError, ftplib.Error):
@@ -206,7 +211,7 @@ def find_consoles(networks, *, allowed, cancelled=lambda: False, progress=lambda
     with ThreadPoolExecutor(max_workers=16) as workers:
         # Submit in small batches so cancellation never leaves a subnet queued.
         for offset in range(0, len(hosts), 16):
-            check_cancel(cancelled)
+            check_cancel(cancelled, 'Search stopped. No files were sent.')
             pending = {workers.submit(probe, host) for host in hosts[offset:offset+16]}
             while pending:
                 if cancelled():
@@ -215,14 +220,14 @@ def find_consoles(networks, *, allowed, cancelled=lambda: False, progress=lambda
                             ftp.close()
                     for future in pending:
                         future.cancel()
-                    check_cancel(cancelled)
+                    check_cancel(cancelled, 'Search stopped. No files were sent.')
                 done, pending = wait(pending, timeout=0.1, return_when=FIRST_COMPLETED)
                 for future in done:
                     hit = future.result()
                     if hit:
                         found.append(hit)
             progress(min(offset+16, len(hosts)), len(hosts))
-    check_cancel(cancelled)
+    check_cancel(cancelled, 'Search stopped. No files were sent.')
     return sorted(found)
 
 

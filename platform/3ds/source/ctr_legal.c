@@ -49,13 +49,19 @@ static const char values[][24] LATE_TEXT = {
     "Wide (800 px)", "Standard", "Bottom screen", "Top screen",
     "Default", "B confirms", "Custom", "On (slower)", "Off",
 };
-static const char summary[] LATE_TEXT =
-    "Copyright: Butterscotch contributors\n"
-    "and this port's contributors.\n\n"
-    "GNU Affero General Public License v3.\n"
-    "You may copy, modify and redistribute\n"
-    "this runtime under that licence.\n"
-    "NO WARRANTY. See the full licence.\n\n";
+// The port's copyright (approved 10-22), after Butterscotch's. CTR_RELEASE_PORT_HOLDER is the name under "3DS port" in
+// docs/release/credits-port.txt (CMakeLists.txt reads it), the one kit file the owner-name rule allows it in. Kept in
+// the 214 B slot it always had, so nothing after it moves: the Legal page keeps its 11 lines (the licence takes 3 of
+// the 4 it had; the page's Licence row opens the full text).
+#define LEGAL_SUMMARY                                         \
+    "Copyright: Butterscotch contributors\n\n"                 \
+    "Copyright (C) 2026 " CTR_RELEASE_PORT_HOLDER "\n"        \
+    "and contributors.\n\n"                                   \
+    "GNU Affero General Public License v3.\n"                 \
+    "You may copy, modify and redistribute\n"                 \
+    "this runtime under it. NO WARRANTY.\n"
+_Static_assert(sizeof(LEGAL_SUMMARY) <= 214, "The Legal page's summary must keep its 214 B slot");
+static const char summary[214] LATE_TEXT = LEGAL_SUMMARY;
 static const char sourceHeading[sizeof("Development source:")] LATE_TEXT = CTR_RELEASE_SOURCE_HEADING;
 static const char sourceUrl[] LATE_TEXT = CTR_RELEASE_SOURCE_URL;
 static const char buildHeading[] LATE_TEXT = "Build:";
@@ -339,7 +345,7 @@ _Static_assert(sizeof(CTR_RELEASE_SOURCE_HEADING) <= sizeof(sourceHeading), "Sou
 // - Credits: romfs:/credits.txt (tools/aot/credits.py: the game's own credits read from the player's data at build
 //   time, then this port's), centred, rolling up slowly; Up/Down scroll it by hand.
 // B goes back a page (from the Legal page and Credits, to the options page, where its cursor was); SELECT too.
-// The menu's sounds play from optKeys, before these keys reach here. Appended at the file's end, in sections named
+// The menu's sounds play from optKeysHeard, before a changed page's draw. Appended at the file's end, in sections named
 // outside .text.late.* (late_reserve.ld), so nothing above moves.
 #include <stdlib.h>
 #include <string.h>
@@ -353,6 +359,8 @@ _Static_assert(sizeof(CTR_RELEASE_SOURCE_HEADING) <= sizeof(sourceHeading), "Sou
 void CtrOptmenu_text(uint16_t* fb, int32_t x, int32_t y, const char* s, uint32_t col);
 void CtrLegalui_open(CtrMenu* menu, bool credits);
 void CtrLegalui_update(CtrMenu* menu, u32 down);
+static void luiDrawHeard(CtrMenu* menu); // the sound of a press that changed the page, then the draw or read: at the file's end
+static void luiLoadHeard(void);
 
 enum { LUI_HUB, LUI_DOC, LUI_CREDITS };
 // Lines 14 px apart: the menu font's ink is 12 px tall with its descenders, so 2 px stay clear between lines (as
@@ -385,7 +393,7 @@ static struct {
 // The Legal page's rows (the first two also the reader's titles) and their help lines, NUL-separated (luiNth).
 static const char luiRows[] LUI_RO = "Licence (GNU AGPL v3)\0Third-party notices\0Back";
 static const char luiHelp[] LUI_RO = "Read the licence.\0Read the notices of the code we use.\0Back to the options.";
-static const char luiDocHelp[] LUI_RO = "Up/Down scroll, Left/Right page, L/R ends";
+static const char luiDocHelp[42] LUI_RO = "Up/Down scroll, Left/Right page, B back"; // 42 bytes: its slot's size
 static const char luiCreditsPath[] LUI_RO = "romfs:/credits.txt";
 static const char luiHeart[] LUI_RO = "\x01";
 
@@ -592,8 +600,8 @@ LUI_CODE void CtrLegalui_open(CtrMenu* menu, bool credits) {
     lui.top = 0;
     lui.idle = 0;
     lui.held = 0;
-    if (credits) luiLoadCredits();
-    luiDraw(menu);
+    if (credits) luiLoadHeard();
+    luiDrawHeard(menu);
 }
 
 // Each frame while a page here is up (down is 0 on frames without a press): keys, held Up/Down, the credits' roll.
@@ -655,7 +663,7 @@ LUI_CODE void CtrLegalui_update(CtrMenu* menu, u32 down) {
         if (lui.top < 0) lui.top = 0;
         lui.dirty |= lui.top != before;
     }
-    if (lui.dirty) luiDraw(menu);
+    if (lui.dirty) luiDrawHeard(menu);
 }
 
 // luiDrawHub joins heading, ' ', URL, a blank line, "Build:", ' ' and the build ID in t[128]; luiCat stops at 126
@@ -702,4 +710,90 @@ _Static_assert(__builtin_offsetof(__typeof__(lui), credits) == 20 && sizeof(lui)
 _Static_assert(LUI_CREDITS == 2 && LUI_PITCH == 14, "z_credclip.c's Credits page number and line pitch");
 __asm__(".global CtrLegalui_state\n.type CtrLegalui_state,%object\n"
         ".set CtrLegalui_state,lui\n.size CtrLegalui_state,24\n");
+#endif
+
+// What a press can change on these pages, for optmenu's check that it changed something (optKeysHeard): all ones while
+// none is up; else the page, the Legal page's row and the position. The position counts only for a press with a
+// direction: the Credits roll and a held key's repeat move it by themselves, in the frame of any other press too.
+u32 CtrLegalui_mark(u32 folded);
+__attribute__((noinline, section(".text_menupress"))) u32 CtrLegalui_mark(u32 folded) {
+    if (!legal.active) return ~(u32) 0;
+    // A direction's or L/R's press: its position counts. L/R is passed over while a direction is held (its repeat or
+    // the roll's 3 px move the page, not this press), and any other key's frame moves only by the roll or a repeat.
+    bool moves = (folded & 0xF0u) != 0 || ((folded & (KEY_L | KEY_R)) != 0 && (hidKeysHeld() & LUI_MOVE) == 0);
+    return (u32) lui.view | (u32) lui.row << 2 | (moves ? (u32) lui.top << 4 : 0u);
+}
+
+// Held Up or Down on the Legal page moves its row, without a wrap (optHoldTick). The reader and the Credits repeat in
+// CtrLegalui_update.
+bool CtrLegalui_holdMoves(u32 key);
+__attribute__((noinline, section(".text_menuhold"))) bool CtrLegalui_holdMoves(u32 key) {
+    return lui.view == LUI_HUB && lui.row != (key == KEY_DUP ? 0u : 2u);
+}
+
+// Calls retargeted, so that neither function moves or changes size (RULES 3adf7ac34): the sound comes before the page's
+// draw and file reads, as it did before it depended on the change.
+void CtrOptmenu_pressLegal(void);
+static void luiDrawCreditsHint(CtrMenu* menu);
+__attribute__((noinline, section(".text_menupress"))) static void luiDrawHeard(CtrMenu* menu) {
+    CtrOptmenu_pressLegal();
+    luiDraw(menu);
+    if (lui.view == LUI_CREDITS) luiDrawCreditsHint(menu);
+}
+__attribute__((noinline, section(".text_menupress"))) static void luiLoadHeard(void) {
+    CtrOptmenu_pressLegal();
+    luiLoadCredits();
+}
+
+// The Credits page's hint (polish audit assistant 9, assistant: nothing on the page says how to leave it), in the bottom right
+// corner on a black patch of its own. Not a line across the page: the roll runs to the screen's edges (maintainer 11-06,
+// CREDCLIP-002: no band for the names to vanish into), and its centred lines reach this corner only when nearly 42
+// letters wide. Drawn last, with lui.view away from the Credits for the one call so that z_credclip.c's wrap of the
+// painter (UNDERTALE) takes it as any other page's text instead of as a line of the roll.
+#if defined(__3DS__) && defined(__GNUC__)
+#define LUI_HINT_RO __attribute__((section(".rodata.menupress_in_text")))
+#else
+#define LUI_HINT_RO
+#endif
+static const char luiCreditsHint[] LUI_HINT_RO = "B back";
+enum { LUI_HINT_X = 272, LUI_HINT_Y = 226, LUI_HINT_LEFT = LUI_HINT_X - 3, LUI_HINT_TOP = LUI_HINT_Y - 2 };
+__attribute__((noinline, section(".text_menupress"))) static void luiDrawCreditsHint(CtrMenu* menu) {
+    uint16_t* fb = (uint16_t*) menu->console->frameBuffer;
+    for (uint32_t x = LUI_HINT_LEFT; x < 320u; x++) { // column-major, each column bottom row first (row y at 239 - y)
+        for (uint32_t r = 0; r < 240u - LUI_HINT_TOP; r++) fb[x * 240u + r] = 0;
+    }
+    lui.view = LUI_HUB;
+    CtrOptmenu_text(fb, LUI_HINT_X, LUI_HINT_Y, luiCreditsHint, LUI_GREY);
+    lui.view = LUI_CREDITS;
+}
+
+// noticescroll: the reader's clear tested the frame predicate for all 76,800 pixels on every scroll redraw.
+// Clear in bulk, then paint the four edge columns and five edge/rule pixels per interior column. The rule is at
+// framebuffer row 25 (screen y 214): this buffer is column-major, bottom row first. No state or cached picture.
+// Original callers and luiClear's retained body are unchanged C; noticescroll_compile.py routes only their three
+// call operands. GCC's luiClear.isra.0 takes PrintConsole*, and preserves r1 even though AAPCS doesn't require it:
+// luiDrawHub uses that bare argument after the call. The bridge below preserves it across memset and this body.
+#if defined(ENABLE_WAD16) && !defined(ENABLE_WAD17)
+uint16_t* CtrNoticescroll_clearBody(PrintConsole* console, bool bare);
+__attribute__((noinline, noipa, optimize("O2"), section(".text.late.noticescroll")))
+uint16_t* CtrNoticescroll_clearBody(PrintConsole* console, bool bare) {
+    uint16_t* fb = (uint16_t*) console->frameBuffer;
+    memset(fb, 0, 320u * 240u * sizeof(*fb));
+    if (!bare) {
+        memset(fb, 0xFF, 2u * 240u * sizeof(*fb));
+        memset(fb + 318u * 240u, 0xFF, 2u * 240u * sizeof(*fb));
+        for (uint32_t x = 2u; x < 318u; x++) {
+            uint16_t* p = fb + x * 240u;
+            p[0] = p[1] = p[25] = p[238] = p[239] = 0xFFFFu;
+        }
+    }
+    return fb;
+}
+#ifdef __3DS__
+_Static_assert(__builtin_offsetof(PrintConsole, frameBuffer) == 8, "luiClear.isra.0's console ABI");
+__asm__(".pushsection .text.late.noticescroll,\"ax\",%progbits\n"
+        ".balign 4\n.global CtrNoticescroll_clear\n.type CtrNoticescroll_clear,%function\n"
+        "CtrNoticescroll_clear:\n push {r1,lr}\n bl CtrNoticescroll_clearBody\n pop {r1,pc}\n"
+        ".size CtrNoticescroll_clear,.-CtrNoticescroll_clear\n.popsection\n");
+#endif
 #endif

@@ -19,8 +19,10 @@ fallback groups (all groups unless the record fixes battle_frame_groups to an ea
 first-battle preload as coverage grows);
 its groups are scenes of their own (their code entries; the runtime picks the group at the room change). Each group's
 code also lists its objects' other events and the code SHARED_GROUPS groups ran (battle_code). UNDERTALE's scenes then
-list the code their objects can create in play (codeclose.py), and rooms without a record get a code-only scene when
-that adds any. A room-level record scene's `keep_open_tiles` (UNDERTALE) becomes one more scene of the room, sub
+list the code their objects can create in play (codeclose.py), and close any normal player walk tile over all four
+directions (closure.py); every room but PLACED_ART_SKIP_ROOMS also takes the placed art rule (placed_art), and every battle group the spare puffs (spare_art), BUBBLE_FONT_GROUPS the bubbles' font (bubble_font), and every battle group the sprites its own objects switch to (switch_art). The first of the rooms every UNDERTALE boot walks through (BOOT_ROOMS) also lists the tiles of the ones after it,
+on the Old models only (BOOT_AHEAD_MODELS, --model). Rooms without a record get a scene when either closure adds anything. A room-level
+record scene's `keep_open_tiles` (UNDERTALE) becomes one more scene of the room, sub
 KEEP_SUB, those tiles at LATER and no code: no loader takes it (each picks the room's scene or its battle group's, and
 global.battlegroup is never KEEP_SUB), but the Old models' texture-file close after a room load (ctr_textures.c,
 CtrTextures_roomLoadedOld) scans every scene of the room, so a cache file whose page has one of those tiles missing
@@ -62,6 +64,39 @@ LATER = 255                # the bucket of a tile first used after frame 254, or
 # only 16 of them ended in a kill, so the other 96 read the kill's code in play, in the frame the monster dies (o3ds:
 # two reads, 43 ms). At 10 groups: about 52 more entries a group, 18 KB of bytecode.
 SHARED_GROUPS = 10
+# The placed art rule (placed_art) is one general rule for every room. PLACED_ART_ROOMS limited it to rooms 41, 67, 120,
+# 141 and 263 until the other rooms could be toured; tilemiss
+# (lead GO 11-07, the playtest's in-play page reopens) removes that gate: None means every room. A frozenset names the only
+# rooms that take the rule (the tests use it).
+PLACED_ART_ROOMS = None
+# Rooms whose set would go over the Old 3DS's admission head (the texture budget less ROOMLOAD_SPRITE_HEADROOM_BYTES) with
+# the rule's tiles: they keep what they have. Priced at the real formats of both stores' tiles
+# (measured): only room 294, the Omega Flowey fight (Steam 140 entries, 25,984 KiB; with the rule's 8 tiles 27,008 KiB,
+# over the pool itself). Every other changed room stays at least 8,676 KiB under the head. The builder doesn't price real
+# formats, so the list is measured, not computed: the plans are only built for the two data files the records name.
+PLACED_ART_SKIP_ROOMS = frozenset((294,))
+# Battle groups whose speech bubbles' font (closure.bubble_font_items) no record saw: Asgore's, 100, whose last words
+# come after his music stops, where every recording ended (ethanlog4, 11-08: that font's one tile read on the game thread,
+# 62 ms, twice, 49 ms of it opening the file).
+BUBBLE_FONT_GROUPS = frozenset((100,))
+# The switch art rule (switch_art) for every battle group; a frozenset names the only groups that take it (the tests and
+# the audit use it). Past SWITCH_ART_MAX_TILES added tiles a group keeps what it has (the largest adds 10 on Steam).
+SWITCH_ART_GROUPS = None
+SWITCH_ART_MAX_TILES = 24
+# Past this many added tiles a room keeps what it has (room 67 adds 24 on Steam).
+PLACED_ART_MAX_TILES = 24
+# The portrait rule (codeclose face_art_sprites, in placed_art) has its own cap, so a room the placed art rule leaves out
+# still takes its portraits. Its largest room adds 20 tiles (room 239 on Steam; tilemiss.md).
+FACE_ART_MAX_TILES = 24
+# UNDERTALE boots through these rooms in this order, whatever the save holds: the story, the title, the menu. The
+# first one's whole set (its hidden room load, just after the loading bar) takes the others' tiles too, so pressing
+# through the title and menu doesn't wait for them. They'd all be resident by the first real room anyway, so that
+# room's texture pool is the same. Tiles only: code groups stay with their own rooms.
+BOOT_ROOMS = (1, 2, 3)
+# The models the rule is for (build.sh passes --model; a plan built without one keeps the rule). On New consoles it
+# bought nothing: the title's and menu's frames were under 33 ms with or without it, and the story's room-change frame
+# grew from 419/425 to 556/606 ms behind the bar. The Old models keep it.
+BOOT_AHEAD_MODELS = ('o3ds',)
 
 
 def fnv1a(data):
@@ -151,7 +186,130 @@ def whole_set(info, closure, room, scene, tiles):
             add(tpag)
         for tpag, x, y, w, h in closure.plan_parts[room]:
             add(tpag, (x, y, w, h))
+    if hasattr(closure, 'walk_tiles'):
+        extra.update(closure.walk_tiles(info, have | extra))
     return [(LATER, p, t) for p, t in sorted(extra - have)]
+
+
+def placed_art(info, closure, code_closure, room, have):
+    """The placed art rule: the tiles of every frame of the sprites the room's own objects can draw in play
+    (codeclose.CodeClosure.placed_art_sprites) that have isn't, as (LATER, page, tile) sorted by page and tile, after the
+    whole set; with them, any rest of the player's walk family they touch. [] with no closures, for a room the gate
+    (PLACED_ART_ROOMS) or PLACED_ART_SKIP_ROOMS leaves out; no placed art over PLACED_ART_MAX_TILES counting the walk family, which is never cut short. Mechanism: such a tile
+    first drawn in play is a read on the game thread in a dialogue's middle (lab quiz, tile 21:11: a 46 ms frame), and
+    its cache file may be closed by then (floor: a 120 ms open). In the whole set it is resident from the room load, and
+    evicted as any other room's. Then, under their own cap (FACE_ART_MAX_TILES), the tiles of the portraits any placed
+    object's dialogue can open with (codeclose face_art_sprites), even where the placed art is over its cap. This is a partial preload: a computed sprite, room creation code and a path only a
+    script reaches are not in the rule, and any such tile still loads on demand in play."""
+    if (closure is None or code_closure is None or (PLACED_ART_ROOMS is not None and room not in PLACED_ART_ROOMS) or
+            room in PLACED_ART_SKIP_ROOMS):
+        return []
+    have = set(have)
+    extra = set()
+    for s in code_closure.placed_art_sprites(room):
+        if 0 <= s < len(closure.sprite_items):
+            for tpag in closure.sprite_items[s]:
+                page, ts = info.item_tiles(tpag)
+                if page is not None:
+                    extra.update((page, t) for t in ts)
+    extra -= have
+    if hasattr(closure, 'walk_tiles'):
+        extra.update(closure.walk_tiles(info, have | extra) - have)
+    if len(extra) > PLACED_ART_MAX_TILES:
+        extra = set()
+    faces = set()
+    if hasattr(code_closure, 'face_art_sprites'):
+        for s in code_closure.face_art_sprites(room):
+            if 0 <= s < len(closure.sprite_items):
+                for tpag in closure.sprite_items[s]:
+                    page, ts = info.item_tiles(tpag)
+                    if page is not None:
+                        faces.update((page, t) for t in ts)
+        faces -= have | extra
+        if len(faces) > FACE_ART_MAX_TILES:
+            faces = set()
+    return [(LATER, p, t) for p, t in sorted(extra | faces)]
+
+
+def spare_art(info, closure, tiles):
+    """UNDERTALE: the spare puffs' tiles (closure.spare_items) that tiles hasn't, as (LATER, page, tile) sorted by page
+    and tile, for every battle group: any fight can end in a spare, and the puffs were drawn on the game thread at the
+    first one (ethanlog3, 11-07: one tile, 21 ms on the playtest card)."""
+    have = {(p, t) for _df, p, t in tiles}
+    extra = set()
+    for tpag in getattr(closure, 'spare_items', ()):
+        page, ts = info.item_tiles(tpag)
+        if page is not None:
+            extra.update((page, t) for t in ts)
+    return [(LATER, p, t) for p, t in sorted(extra - have)]
+
+
+def machinery_objects(code_closure, subs):
+    """The objects whose code at least SHARED_GROUPS of the recorded battle groups ran (code_closure.owner): the battle
+    machinery every fight runs, whose art belongs to no one group (switch_art leaves it out). An empty set without a
+    code closure."""
+    owner = getattr(code_closure, 'owner', None)
+    if not owner:
+        return set()
+    counts = {}
+    for s in subs:
+        for o in {owner[c] for _df, c in s['code'] if c in owner}:
+            counts[o] = counts.get(o, 0) + 1
+    return {o for o, k in counts.items() if k >= SHARED_GROUPS}
+
+
+def switch_art(info, closure, code_closure, sub, code, machinery, tiles):
+    """UNDERTALE: the tiles of the sprites a battle group's own objects can switch to that tiles hasn't, as (LATER, page,
+    tile) sorted by page and tile, for a group SWITCH_ART_GROUPS takes; [] without both closures, or past
+    SWITCH_ART_MAX_TILES. A group's own objects are the owners of its code list (battle_code) less the machinery
+    (machinery_objects); their sprites, every frame, are each constant their own events (no parent's) pass to a
+    draw_sprite function or store in a variable named *sprite* (codeclose: sprite_index in a Step, an Alarm or a User
+    event; the spared or hurt look). Whole sets take the sprite an object starts with and the ones a record saw; a switch
+    first drawn in play was a read on the game thread (lead, 11-08: Endogeny's body at the fourth pet, one page-23 tile
+    read 6 ms after the switch; on the player's card the open alone is about 51 ms). A computed sprite is not in the rule."""
+    if (closure is None or code_closure is None or not hasattr(code_closure, 'owner') or
+            (SWITCH_ART_GROUPS is not None and sub not in SWITCH_ART_GROUPS)):
+        return []
+    owner = code_closure.owner
+    have = {(p, t) for _df, p, t in tiles}
+    sprites = set()
+    for o in sorted({owner[c] for _df, c in code if c in owner} - set(machinery)):
+        for c in code_closure.object_codes(o, parents=False):
+            if not 0 <= c < len(code_closure.draws):
+                continue
+            sprites.update(code_closure.draws[c])
+            for name, values in code_closure.any_stores[c].items():
+                if 'sprite' in name:
+                    sprites.update(values)
+    extra = set()
+    for s in sprites:
+        if 0 <= s < len(closure.sprite_items):
+            for tpag in closure.sprite_items[s]:
+                page, ts = info.item_tiles(tpag)
+                if page is not None:
+                    extra.update((page, t) for t in ts)
+    extra -= have
+    if len(extra) > SWITCH_ART_MAX_TILES:
+        return []
+    return [(LATER, p, t) for p, t in sorted(extra)]
+
+
+def boot_ahead(info, closure, by_room, room, tiles, model=None):
+    """UNDERTALE: the tiles of the BOOT_ROOMS after room, as (LATER, page, tile) after tiles, each once, in the order
+    those rooms list them; [] for any other room or without a closure (DELTARUNE)."""
+    if closure is None or room != BOOT_ROOMS[0] or (model is not None and model not in BOOT_AHEAD_MODELS):
+        return []
+    have = {(p, t) for _df, p, t in tiles}
+    out = []
+    for later in BOOT_ROOMS[1:]:
+        for s in by_room.get(later, ()):
+            if s['sub'] < 0:
+                first = scene_tiles(info, s)
+                for _df, p, t in first + whole_set(info, closure, later, s, first):
+                    if (p, t) not in have:
+                        have.add((p, t))
+                        out.append((LATER, p, t))
+    return out
 
 
 def capped(info, tiles, cap=CAP_BYTES):
@@ -229,23 +387,46 @@ def in_play(code_closure, room, plan_code, record_code, battle=False):
     return [(LATER, c) for c in added]
 
 
-def build(info, record, closure=None, code_closure=None):
+def bubble_font(info, closure, sub, tiles):
+    """UNDERTALE: the speech bubbles' font tiles (closure.bubble_font_items) that tiles hasn't, as (LATER, page, tile)
+    sorted by page and tile, for a battle group in BUBBLE_FONT_GROUPS; else none."""
+    if sub not in BUBBLE_FONT_GROUPS:
+        return []
+    have = {(p, t) for _df, p, t in tiles}
+    extra = set()
+    for tpag in getattr(closure, 'bubble_font_items', ()):
+        page, ts = info.item_tiles(tpag)
+        if page is not None:
+            extra.update((page, t) for t in ts)
+    return [(LATER, p, t) for p, t in sorted(extra - have)]
+
+
+def build(info, record, closure=None, code_closure=None, model=None):
     """closure: a closure.Closure for UNDERTALE's whole sets, or None (DELTARUNE: the record's tiles only).
-    code_closure: a codeclose.CodeClosure for UNDERTALE's in-play code (each scene's code gains what its objects can
-    create in play; a room with no record scene gets a code-only scene when that adds any), or None."""
+    code_closure: a codeclose.CodeClosure for UNDERTALE's in-play code, or None.
+    model: the target ('o3ds' or 'n3ds'), for the rules that are a model's own (BOOT_AHEAD_MODELS); None keeps them.
+    A room with no record gets only those walk tiles and in-play code, when either adds anything."""
     scenes = []
     cap = WHOLE_CAP_BYTES if closure is not None else CAP_BYTES
     by_room = {}
     for s in record['scenes']:
         by_room.setdefault(s['room'], []).append(s)
     rooms = set(by_room)
+    walks = {}
+    if closure is not None and hasattr(closure, 'walk_frames'):
+        walks = {room: closure.walk_frames(room) for room in range(info.room_count)}
+        rooms.update(room for room, items in walks.items() if items)
     if code_closure is not None:
         rooms.update(range(min(info.room_count, len(code_closure.insts_by_room))))
     for room in sorted(rooms):
         if room not in by_room:
             extra = in_play(code_closure, room, [], [])
-            if extra:
-                scenes.append(encode_scene(info, room, NO_SUB, [], extra))
+            # A room with no recorder visit still needs its placed player's walk closure.
+            tiles = sorted({(LATER, p, t) for item in walks.get(room, ())
+                            for p, ts in [info.item_tiles(item)] if p is not None for t in ts})
+            tiles += placed_art(info, closure, code_closure, room, {(p, t) for _df, p, t in tiles})
+            if extra or tiles:
+                scenes.append(encode_scene(info, room, NO_SUB, tiles, extra, cap))
             continue
         group = by_room[room]
         whole = [s for s in group if s['sub'] < 0]
@@ -255,7 +436,10 @@ def build(info, record, closure=None, code_closure=None):
             tiles = scene_tiles(info, s)
             # The whole set reads the record's code (code_create_sprite): the in-play extras go to the code list only.
             code = s['code'] + ([] if subs else in_play(code_closure, room, s['code'], s['code']))
-            scenes.append(encode_scene(info, room, NO_SUB, tiles + whole_set(info, closure, room, s, tiles), code, cap))
+            tiles = tiles + whole_set(info, closure, room, s, tiles)
+            tiles += placed_art(info, closure, code_closure, room, {(p, t) for _df, p, t in tiles})
+            scenes.append(encode_scene(info, room, NO_SUB,
+                tiles + boot_ahead(info, closure, by_room, room, tiles, model), code, cap))
             keep = keep_tiles(info, s)
             if keep:
                 scenes.append(encode_scene(info, room, KEEP_SUB, keep, []))
@@ -275,12 +459,16 @@ def build(info, record, closure=None, code_closure=None):
             tiles = sorted((max(m[k] for m in per), k[0], k[1]) for k in common)
             scenes.append(encode_scene(info, room, NO_SUB, tiles, []))
         codes = battle_code(info, subs)
+        machinery = machinery_objects(code_closure, subs)
         for s in subs:
             if 0 <= s['sub'] < NO_SUB:
                 tiles = scene_tiles(info, s)
                 # Rule A reads the group's whole code list (battle_code): the battle's shared objects' sprites too.
                 whole = whole_set(info, closure, room, dict(s, code=codes[s['sub']]), tiles)
                 code = codes[s['sub']] + in_play(code_closure, room, codes[s['sub']], s['code'], battle=True)
+                whole += bubble_font(info, closure, s['sub'], tiles + whole)
+                whole += spare_art(info, closure, tiles + whole)
+                whole += switch_art(info, closure, code_closure, s['sub'], codes[s['sub']], machinery, tiles + whole)
                 scenes.append(encode_scene(info, room, s['sub'], tiles + whole, code, cap))
     body = b''.join(scenes)
     head = struct.pack('<II32sIIQIIIIII16s', MAGIC, VERSION, bytes.fromhex(info.sha256), info.size & 0xFFFFFFFF,
@@ -313,6 +501,8 @@ def main(argv=None):
     ap.add_argument('--records', default=os.path.join(HERE, 'records'))
     ap.add_argument('--out', required=True)
     ap.add_argument('--halfart', help='prototype (build.sh halfart=): the remap tools/analysis/halfart_pack.py wrote')
+    ap.add_argument('--model', choices=['o3ds', 'n3ds'],
+                    help='the target (build.sh): the boot rooms rule is for BOOT_AHEAD_MODELS only; without it, kept')
     a = ap.parse_args(argv)
     if a.data_win is not None:
         found = [('root', a.data_win, 0)]
@@ -326,7 +516,7 @@ def main(argv=None):
         print('Room plan: no %s data.win found' % a.game)
         return 3
     if a.game == 'undertale':
-        return write_plan(found[0][1], a.records, a.out, whole=True, halfart=a.halfart)
+        return write_plan(found[0][1], a.records, a.out, whole=True, halfart=a.halfart, model=a.model)
     written = 0
     for part, path, _chapter in found:
         rc = write_plan(path, a.records, os.path.join(a.out, part + '.dtp'))
@@ -336,7 +526,7 @@ def main(argv=None):
     return 0 if written else 3
 
 
-def write_plan(path, records, out, whole=False, halfart=None):
+def write_plan(path, records, out, whole=False, halfart=None, model=None):
     """0 written, 3 no record for this data.win, 2 a record that doesn't fit. whole: add each scene's whole set (UNDERTALE)."""
     info = dwinfo.DataWinInfo(path)
     record = find_record(records, info.sha256)
@@ -369,7 +559,9 @@ def write_plan(path, records, out, whole=False, halfart=None):
         if not code_closure.ok:
             print('Room plan: no in-play code closure (not a GameMaker 1.x data.win this builder can read)')
             code_closure = None
-    data = build(info, record, closure, code_closure)
+        elif code_closure.face_note:
+            print('Room plan: placed art takes no portraits: %s' % code_closure.face_note)
+    data = build(info, record, closure, code_closure, model)
     os.makedirs(os.path.dirname(os.path.abspath(out)), exist_ok=True)
     tmp = out + '.tmp'
     with open(tmp, 'wb') as f:

@@ -105,6 +105,7 @@ def read_identifier_policy(path):
             raise ValueError('not an approved roomplan record: ' + member)
         if kind == 'roomplan-tool' and member not in (
                 'tools/roomplan/records.py', 'tools/roomplan/build_plan.py', 'tools/roomplan/dwinfo.py',
+                'tools/roomplan/closure.py',
                 'tools/roomplan/build_phases.py', 'tools/roomplan/build_tracks.py', 'tools/roomplan/build_flowcode.py',
                 'tools/roomplan/codeclose.py', SFX_TOOL):
             raise ValueError('not a roomplan build tool: ' + member)
@@ -530,7 +531,7 @@ def main(argv=None):
             raise ValueError('release input closure is incomplete: ' + '; '.join(
                 '%s (%s)' % (row['path'], row['required_by']) for row in closure['missing']))
         notices = generate_notices.generate(ROOT, manifest, ROOT / 'tools/release/notices.json')
-        if (ROOT / 'THIRD_PARTY_NOTICES').read_text(encoding='utf-8') != notices:
+        if safe_local(sources.get('THIRD_PARTY_NOTICES', 'THIRD_PARTY_NOTICES')).read_text(encoding='utf-8') != notices:
             raise ValueError('THIRD_PARTY_NOTICES is stale for this export manifest.')
         files = {name: safe_local(sources.get(name, name)).read_bytes() for name in names}
         import export_scrub

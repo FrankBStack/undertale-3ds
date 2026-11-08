@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 import tempfile
 import unittest
+from unittest import mock
 
 spec = importlib.util.spec_from_file_location('notices', Path(__file__).with_name('generate_notices.py'))
 notices = importlib.util.module_from_spec(spec)
@@ -64,9 +65,60 @@ class NoticeTests(unittest.TestCase):
                 manifest = notices.ROOT / ('tools/release/manifest-' + game + '.txt')
                 if not manifest.is_file():
                     self.skipTest('This source export does not include the ' + game + ' manifest')
-                self.assertEqual((notices.ROOT / 'THIRD_PARTY_NOTICES').read_text(encoding='utf-8'),
+                self.assertEqual(notices.bundle_path(notices.ROOT, manifest).read_text(encoding='utf-8'),
                                  notices.generate(notices.ROOT, manifest,
                                                   notices.ROOT / 'tools/release/notices.json'))
+
+    def test_notice_map_is_unique_and_stays_inside_tree(self):
+        self.manifest.write_text('#map THIRD_PARTY_NOTICES <- engine/vendor/example/LICENSE\n')
+        self.assertEqual(notices.bundle_path(self.root, self.manifest), self.license)
+        for mapping in ('../outside', 'engine/vendor/example/LICENSE\n#map THIRD_PARTY_NOTICES <- LICENSE'):
+            self.manifest.write_text('#map THIRD_PARTY_NOTICES <- ' + mapping + '\n')
+            with self.assertRaises(ValueError):
+                notices.bundle_path(self.root, self.manifest)
+
+    def test_each_game_uses_the_same_notice_bytes_in_mirror_payload_and_legal_pages(self):
+        import sys
+        sys.path.insert(0, str(notices.ROOT / 'tools/release/builder'))
+        import pipeline
+        import prepare_legal
+        for game, short in (('undertale', 'ut'), ('deltarune', 'dr')):
+            manifest = notices.ROOT / ('tools/release/manifest-' + short + '.txt')
+            if not manifest.is_file():
+                continue
+            expected = notices.generate(notices.ROOT, manifest, notices.ROOT / 'tools/release/notices.json').encode()
+            with mock.patch.object(pipeline, 'SOURCE_DIRS', ()), \
+                 mock.patch.object(pipeline, 'SOURCE_FILES', ('THIRD_PARTY_NOTICES',)):
+                destination = self.root / game
+                pipeline.mirror_source(notices.ROOT, destination, game)
+                self.assertEqual((destination / 'THIRD_PARTY_NOTICES').read_bytes(), expected)
+                self.assertEqual(pipeline.source_payload(notices.ROOT, game)['THIRD_PARTY_NOTICES'], expected)
+                self.assertEqual(pipeline.source_input(destination, 'THIRD_PARTY_NOTICES', game).read_bytes(), expected)
+            legal = self.root / (game + '-legal')
+            prepare_legal.prepare(notices.ROOT, legal, pipeline.source_input(notices.ROOT, 'THIRD_PARTY_NOTICES', game))
+            self.assertEqual((legal / 'THIRD_PARTY_NOTICES').read_bytes(), expected)
+            self.assertEqual(b'PacketVideo' in expected, game == 'deltarune')
+
+    def test_release_rejects_stale_mapped_notices_even_when_root_is_current(self):
+        import contextlib
+        import io
+        import sys
+        import check_release as gate
+        (self.root / 'THIRD_PARTY_NOTICES').write_text('current')
+        (self.root / 'scoped.txt').write_text('stale')
+        manifest = self.root / 'manifest-ut.txt'
+        manifest.write_text('#map THIRD_PARTY_NOTICES <- scoped.txt\nTHIRD_PARTY_NOTICES\n')
+        stderr = io.StringIO()
+        with mock.patch.object(gate, 'ROOT', self.root), \
+             mock.patch.object(sys, 'argv', ['check_release.py', '--manifest', 'manifest-ut.txt']), \
+             mock.patch.object(gate, 'read_manifest', return_value=(['THIRD_PARTY_NOTICES'], {}, {'THIRD_PARTY_NOTICES': 'scoped.txt'})), \
+             mock.patch.object(gate.import_closure, 'Repository'), \
+             mock.patch.object(gate.import_closure, 'check', return_value={'missing': []}), \
+             mock.patch.object(gate.generate_notices, 'generate', return_value='current'), \
+             contextlib.redirect_stderr(stderr):
+            self.assertEqual(gate.main(), 2)
+        self.assertIn('THIRD_PARTY_NOTICES is stale', stderr.getvalue())
+        self.assertEqual(list((self.root / 'scratch').iterdir()), [])
 
     def test_builder_ca_bundle_is_named_in_both_export_notices(self):
         for game in ('ut','dr'):

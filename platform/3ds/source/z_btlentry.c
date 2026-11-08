@@ -165,7 +165,9 @@ static BT_BSS struct {
     int32_t objects[2];           // obj_battler, obj_battleblcon (or -1)
     CtrTileRead* volatile performing; // a read of ours, on the reader between its header and its allocation
     const DataWin* codeOf;        // the data.win whose bytecode moved to the file at codePath
-    char codePath[96];            // the path is 43 characters; a longer one turns code reads off
+    char codePath[84];            // the path is 43 characters; a longer one turns code reads off (84: bt stays 512 B)
+    const DataWin* namesOf;       // the data.win the round 6 indices are for (btNames)
+    int16_t flier, story, early, storyRoom; // the flying soul, the story battle's starters (object, or -1); its room
     // From here on, a room visit's (cleared at a room change):
     const CtrTextureCache* cache; // the cache and its room visit
     uint32_t roomStart;
@@ -602,6 +604,73 @@ static BT_TEXT bool btReadable(CtrTextureCache* cache, uint32_t entry, CtrPage**
            (!page->packInfo || btFits(cache, page, tile));
 }
 
+// Round 6 (11-08), appended late code outside the 7,428 B slot (late_reserve.ld); its 12 B of state come out
+// of the code path's buffer, so bt keeps its 512 B and the bss slot its pad.
+// 1. The soul does not reach its spot before the battle loads, so it jumps: its flight to its battle spot
+//    (obj_transheart, moving until it lands) is the only motion of an encounter, so nothing is installed and no code
+//    placed while it flies (btMoving); both run in the blink before it and the still frames after it.
+// 2. A New Home story battle (ethanlog4 item 2): its room (room_storybattle) loads its own whole set, not a battle
+//    group's, so while one starts (obj_battlerstory there, or the alert with an early story battle's object) the
+//    reads are of that room's own scene (btTarget), and its room change finds them resident.
+#define BT_R6 __attribute__((noinline, section(".text.btmoving_late")))
+#define BT_R6_CONST __attribute__((aligned(4), section(".rodata.btmoving_in_text")))
+static const char btFlier[] BT_R6_CONST = "obj_transheart";
+static const char btStory[] BT_R6_CONST = "obj_battlerstory";
+static const char btEarly[] BT_R6_CONST = "obj_earlystorybattle";
+static const char btStoryRoom[] BT_R6_CONST = "room_storybattle";
+
+static BT_R6 void btNames(const DataWin* dw) {
+    if (bt.namesOf == dw) return;
+    bt.namesOf = dw;
+    bt.flier = bt.story = bt.early = bt.storyRoom = -1;
+    for (uint32_t i = 0; dw->objt.count > i; i++) {
+        const char* name = dw->objt.objects[i].name;
+        if (name == nullptr) continue;
+        if (strcmp(name, btFlier) == 0) bt.flier = (int16_t) i;
+        if (strcmp(name, btStory) == 0) bt.story = (int16_t) i;
+        if (strcmp(name, btEarly) == 0) bt.early = (int16_t) i;
+    }
+    for (uint32_t i = 0; dw->room.count > i; i++) {
+        const char* name = dw->room.rooms[i].name;
+        if (name != nullptr && strcmp(name, btStoryRoom) == 0) bt.storyRoom = (int16_t) i;
+    }
+}
+
+static BT_R6 Instance** btList(const Runner* runner, int32_t o) {
+    return 0 <= o && runner->instancesByExactObject != nullptr ? runner->instancesByExactObject[o] : nullptr;
+}
+
+static BT_R6 bool btMoving(const Runner* runner) {
+    btNames(runner->dataWin);
+    Instance** list = btList(runner, bt.flier);
+    for (ptrdiff_t i = 0; arrlen(list) > i; i++) {
+        if (list[i]->speed != 0.0f) return true;
+    }
+    return false;
+}
+
+// The scene to read ahead, or null: a story battle's room's own scene (group -1), else btlentry's battle group scene.
+static BT_R6 const uint8_t* btTarget(Runner* runner, const uint8_t* plan, int32_t* group) {
+    bool battle = btStarting(runner); // looks up the alert (bt.objects[1])
+    btNames(runner->dataWin);
+    if (arrlen(btList(runner, bt.story)) > 0 || (battle && arrlen(btList(runner, bt.early)) > 0 && arrlen(btList(runner, bt.objects[1])) > 0)) {
+        *group = -1;
+        RoomPlanHeader h;
+        memcpy(&h, plan, sizeof(h));
+        size_t at = sizeof(h);
+        for (uint32_t k = 0; h.sceneCount > k; k++) {
+            RoomPlanScene scene;
+            memcpy(&scene, plan + at, sizeof(scene));
+            if (scene.sub == ROOMPLAN_NO_SUB && 0 <= bt.storyRoom && scene.room == (uint32_t) bt.storyRoom) return plan + at;
+            at += RoomPlan_sceneSize(&scene);
+        }
+        return nullptr;
+    }
+    if (!battle) return nullptr;
+    *group = RoomPlan_utstallGroup(runner);
+    return 0 <= *group ? btScene(plan, *group) : nullptr;
+}
+
 BT_TEXT void __wrap_CtrFlowstream_collect(CtrTextureCache* cache, bool drop) {
     __real_CtrFlowstream_collect(cache, drop);
     Runner* runner = cache != nullptr ? cache->runner : nullptr;
@@ -629,6 +698,7 @@ BT_TEXT void __wrap_CtrFlowstream_collect(CtrTextureCache* cache, bool drop) {
     btReloads(cache, UINT32_MAX);
     // The reads in: their tiles installed while there is room and time, else dropped; a read is released once all its
     // tiles are, and one cut short by the time keeps the page until the next frame.
+    if (btMoving(runner)) goto look; // round 6: not while the soul flies (the reads stay in flight or wait)
     uint64_t start = svcGetSystemTick();
     uint64_t budget = (uint64_t) BT_INSTALL_MS * (SYSCLOCK_ARM11 / 1000u);
     uint32_t done = 0;
@@ -711,10 +781,10 @@ BT_TEXT void __wrap_CtrFlowstream_collect(CtrTextureCache* cache, bool drop) {
         bt.installTicks += ticks;
         if (ticks > bt.maxTicks) bt.maxTicks = ticks;
     }
+look:;
     const uint8_t* plan = RoomPlan_utstallPlan(cache);
-    if (plan == nullptr || !btStarting(runner)) return;
-    int32_t group = RoomPlan_utstallGroup(runner);
-    const uint8_t* scene = 0 <= group ? btScene(plan, group) : nullptr;
+    int32_t group = -1;
+    const uint8_t* scene = plan != nullptr ? btTarget(runner, plan, &group) : nullptr; // round 6
     if (scene == nullptr) return;
     RoomPlanScene s;
     memcpy(&s, scene, sizeof(s));

@@ -444,7 +444,8 @@ class ReleaseGateTests(unittest.TestCase):
         if not manifest.is_file():
             self.skipTest('This source export does not include the UT manifest')
         self.assertEqual(gate.read_manifest_sources(manifest),
-                         {'README.md': 'tools/release/templates/README-undertale.md'})
+                         {'README.md': 'tools/release/templates/README-undertale.md',
+                          'THIRD_PARTY_NOTICES': 'tools/release/templates/THIRD_PARTY_NOTICES-undertale.txt'})
         names = manifest.read_text(encoding='utf-8').splitlines()
         self.assertIn('README.md', names)
         self.assertNotIn('tools/release/templates/README-undertale.md', names)

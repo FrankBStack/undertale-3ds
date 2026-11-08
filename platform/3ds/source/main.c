@@ -307,6 +307,18 @@ static void flushBottomScreen(void) {
 // dialogue goes, the consoles move to the buffer on screen, which stays
 // single; it gets what the menu or the test already printed (keepText), or
 // is cleared of the last line (the stats repaint within a second).
+#if defined(ENABLE_WAD16)
+void* CtrBlank_copyShown(void* to, const void* from, size_t bytes); // ctr_gpu_queue.c, dlgblank
+bool CtrBlank_dialogueShown(void* renderer);
+void CtrBlank_yieldBottom(void* renderer, bool yield);
+#define BLANK_COPY CtrBlank_copyShown
+#define BLANK_SHOWN CtrBlank_dialogueShown
+#define BLANK_YIELD CtrBlank_yieldBottom
+#else
+#define BLANK_COPY memcpy
+#define BLANK_SHOWN CtrRenderer_dialogueShown
+#define BLANK_YIELD CtrRenderer_yieldBottomScreen
+#endif
 static void reclaimBottomForConsoles(bool keepText) {
     CtrLog_beginConsole();
     u16 w = 0, h = 0;
@@ -315,13 +327,22 @@ static void reclaimBottomForConsoles(bool keepText) {
     if (shown != nullptr && gfxGetScreenFormat(GFX_BOTTOM) == GSP_RGB565_OES) {
         size_t bytes = (size_t) w * h * 2u;
         if (!keepText) memset(shown, 0, bytes);
-        else if (statsConsole.frameBuffer != shown) memcpy(shown, statsConsole.frameBuffer, bytes);
+        else if (statsConsole.frameBuffer != shown) BLANK_COPY(shown, statsConsole.frameBuffer, bytes);
         statsConsole.frameBuffer = logConsole.frameBuffer = menuConsole.frameBuffer = shown;
         GSPGPU_FlushDataCache(shown, (u32) bytes);
     }
     CtrLog_endConsole();
 }
 
+#if defined(ENABLE_WAD16) // scanout (UNDERTALE): the notice page composed off the LCD, copied at its vblank (z_scanout.c)
+void CtrScanout_noticeClear(void); void CtrScanout_noticeScan(void);
+#define NOTICE_CLEAR CtrScanout_noticeClear
+#define NOTICE_SCAN CtrScanout_noticeScan
+#else
+#define NOTICE_CLEAR consoleClear
+#define NOTICE_SCAN hidScanInput
+#endif
+#line 337 // scanout: the numbering before it (the __LINE__ trap)
 // Only entered for a newly reported problem. The renderer keeps the top
 // screen's last frame; no game frame or playback input advances here.
 static void setupNotices(Renderer* renderer) {
@@ -346,7 +367,7 @@ static void setupNotices(Renderer* renderer) {
             // Paint after the renderer applies its screen configuration, and
             // repaint after HOME/sleep or an outstanding earlier transfer.
             consoleSelect(&menuConsole);
-            consoleClear();
+            NOTICE_CLEAR();
             printf("\x1b[1;1HSetup needs attention\n\n");
             const char* text = CtrNotice_first();
             for (size_t i = 0; text[i] != '\0'; i++) {
@@ -355,7 +376,7 @@ static void setupNotices(Renderer* renderer) {
             }
             printf("\n\n%s\n\nPress A to continue.\n", CtrNotice_advice());
             fflush(stdout);
-            hidScanInput();
+            NOTICE_SCAN();
             u32 down = hidKeysDown();
             if (renderer != nullptr) CtrRenderer_endFrame(renderer);
             flushBottomScreen();
@@ -1417,8 +1438,8 @@ startGame:
             CtrRenderer_setSliderOverride(renderer, up ? 1.0f : 0.0f);
         } FW_MARK(17);
         CtrRenderer_setDisplay(renderer, &display);
-        CtrRenderer_yieldBottomScreen(renderer, bottomBorrowed);
-        bool dialogueShown = CtrRenderer_dialogueShown(renderer);
+        BLANK_YIELD(renderer, bottomBorrowed);
+        bool dialogueShown = BLANK_SHOWN(renderer);
         bool consoleShown = bottomBorrowed || (display.bottomMode == BOTTOM_MODE_CONSOLE && !dialogueShown);
         bool statsShown = consoleShown && !bottomBorrowed; // the stats and log consoles
         if (dialogueWasShown && !dialogueShown && consoleShown) reclaimBottomForConsoles(bottomBorrowed);

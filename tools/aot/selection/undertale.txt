@@ -394,3 +394,7 @@ root gml_Object_obj_creditbullet_Alarm_0
 # reference arrays are padrefs (undertale-o3ds-padrefs.txt).
 root gml_Object_obj_mhd_Draw_0
 root gml_Script_scr_saveprocess
+# utload first update: compile the measured snow-floor Create loop on Old too.
+# Append only; original entry indexes and native wrappers keep their bindings.
+# The padded-AOT layout gate must prove every non-AOT symbol stays fixed.
+root gml_Object_obj_snowfloor_Create_0

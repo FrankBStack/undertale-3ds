@@ -179,7 +179,7 @@ UTSFX_TEXT const uint8_t* UtSfx_scene(const uint8_t* data, uint32_t room, int32_
 #define UTSFX_WORK_FLOOR_BYTES (3u * 1024u * 1024u)
 
 int CtrAudioSystem_preloadSfx(int32_t soundIndex, uint32_t bytes, uint32_t floorBytes);
-int CtrAudioSystem_queueSfx(int32_t soundIndex, uint32_t kib, uint32_t floorBytes);
+int CtrAudioSystem_queueSfx(int32_t soundIndex, uint32_t kib, uint32_t floorBytes); int CtrAudioSystem_queuePlanned(int32_t soundIndex, uint32_t kib, uint32_t floorBytes);
 void CtrAudioSystem_beginSfxPlan(void);
 void CtrAudioSystem_sfxPlanStats(uint32_t out[4], double* ms);
 
@@ -304,7 +304,7 @@ UTSFX_TEXT static void usPreload(Runner* runner) {
         memcpy(&size, entries + (size_t) i * 4 + 2, 2);
         int got = i >= first || svcGetSystemTick() - start >= limit ? -2 : CtrAudioSystem_preloadSfx(sound, (uint32_t) size * 1024u, UTSFX_FLOOR_BYTES);
         if (got == -2) {
-            got = CtrAudioSystem_queueSfx(sound, size, UTSFX_WORK_FLOOR_BYTES);
+            got = CtrAudioSystem_queuePlanned(sound, size, UTSFX_WORK_FLOOR_BYTES);
             if (got > 0) {
                 queued++;
                 continue;
@@ -378,6 +378,26 @@ void __wrap_CtrRenderer_skipPresent(Renderer* renderer);
 UTSFX_TEXT void __wrap_CtrRenderer_skipPresent(Renderer* renderer) {
     __real_CtrRenderer_skipPresent(renderer);
     if (renderer->runner != NULL) UTSFX_PRELOAD(renderer->runner);
+}
+
+// papvoice (UNDERTALE): the dialogue writer stops and plays its voice at every letter, so a voice still on its way from
+// the audio loader lost its line's first blips (each letter's stop dropped the waiting voice: Papyrus's "HUMAN." in
+// the fog room). The plan's voice scene (room 0, sub UTSFX_VOICE_SUB: build_sfxplan.py's VOICE_SUB, which no scene
+// lookup asks for, so older runtimes never see it) lists the text voices whose WAV is 32 KB at most. At every room
+// change, before flowhitch's link (ctr_wrap_chain.h), they are marked to be read on this thread at their play
+// (CtrAudioSystem_voiceDirect), as the original game reads every sound, so a line's first letter starts its voice.
+// The census put each room's own voices in its scene for the worker; this covers a voice it missed or that the
+// worker hadn't copied yet. Named outside .text.late.* so no catch-all takes it; appended, so no earlier code moves.
+#define UTSFX_VOICE_SUB 0xFFFDu
+void CtrAudioSystem_voiceDirect(const uint8_t* entries, uint32_t count);
+__attribute__((noinline, optimize("Os"), section(".text_papvoice"))) void UtSfx_chainPlanVoices(void) {
+    if (us.plan != NULL) {
+        uint32_t count, first; // UtSfx_scene sets both, and sub, on every path
+        int32_t sub;
+        const uint8_t* entries = UtSfx_scene(us.plan, 0, (int32_t) UTSFX_VOICE_SUB, &count, &sub, &first);
+        if (sub == (int32_t) UTSFX_VOICE_SUB) CtrAudioSystem_voiceDirect(entries, count);
+    }
+    CtrAudioSystem_chainPlanFlowhitch();
 }
 
 #endif // UTSFX_HOST_TEST

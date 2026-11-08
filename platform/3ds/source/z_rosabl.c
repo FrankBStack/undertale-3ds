@@ -45,7 +45,9 @@
 
 #define ROSABL_CODE __attribute__((noinline, section(".text_rosabl")))
 #define ROSABL_BSS __attribute__((section(".bss.rosabl_late")))
+#ifndef ROSABL_GRACE_POLLS // UNDERTALE Old sets 36 (CMakeLists.txt): its watcher passes at HID's 234 a second
 #define ROSABL_GRACE_POLLS 30 // 150 ms or more: a poll is a 5 ms sleep, and a pause (Rosalina's) stops the count
+#endif
 #define ROSABL_DEFAULT_COMBO (KEY_L | KEY_DDOWN | KEY_SELECT) // ctr_rosalina.c's ROSA_DEFAULT_COMBO
 
 // The watcher's view of the HID shared memory: the newest entry's index (always 0) and that entry's held buttons, at

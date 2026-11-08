@@ -50,7 +50,7 @@ static void UTPART_LATE partEmit(CtrRenderer* r, CtrPage* page, float sx0, float
     // Without an existing clipped-tile cache, keep the stock split-page loop.
     // Fast partial-sprite setup still applies, and no extra clip kernel is linked.
     if (page->tilesX != 1 || page->tilesY != 1) {
-        emitPageTiles(r, page, sx0, sy0, sx1, sy1, px, py, cs);
+        REGION_TILES(r, page, sx0, sy0, sx1, sy1, px, py, cs);
         return;
     }
 #endif
@@ -63,7 +63,7 @@ static void UTPART_LATE partEmit(CtrRenderer* r, CtrPage* page, float sx0, float
     }
 #if defined(UTPART_CLIPPED_CACHE)
     if (0 > partTile.tile) {
-        if (partTile.tile == -2) emitPageTiles(r, page, sx0, sy0, sx1, sy1, px, py, cs);
+        if (partTile.tile == -2) REGION_TILES(r, page, sx0, sy0, sx1, sy1, px, py, cs);
         return;
     }
     CtrTile* tile = &page->tiles[partTile.tile];

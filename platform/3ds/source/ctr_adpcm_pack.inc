@@ -435,12 +435,13 @@ MM_CODE static void mmCleanup(void) {
     mm.fd = -1;
 }
 
+static int packopenOpen(CtrAudioSystem* ca);
 MM_CODE static void mmInit(AudioSystem* audio, DataWin* dw, FileSystem* fs) {
     mm.inner->init(audio, dw, fs);
     CtrAudioSystem* ca = (CtrAudioSystem*)audio;
     if (!ca->ndspReady) return;
     u64 started = svcGetSystemTick();
-    mm.status = apOpen(ca);
+    mm.status = packopenOpen(ca);
     if (mm.status && mm.fd >= 0) { close(mm.fd); mm.fd = -1; }
     CtrAdpcm_musicLegacy.post(ca, apOpened, mm.status, (unsigned long)mm.count, TICKS_TO_MS(svcGetSystemTick() - started));
 }

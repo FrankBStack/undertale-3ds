@@ -3228,7 +3228,7 @@ DataWin* DataWin_parse(const char* filePath, DataWinParserOptions options) {
     }
 
     if (!codeExists && options.parseCode) {
-        logError("CODE chunk does not exist or is empty! This usually means you're loading a YYC game.\n");
+        logError("FATAL: failed to read the CODE chunk: cut-off data.win, or a YYC game.              \n");
         fclose(file);
         exit(1);
     }
@@ -3315,7 +3315,7 @@ DataWin* DataWin_parse(const char* filePath, DataWinParserOptions options) {
             if (chunkBuffer) {
                 size_t read = fread(chunkBuffer, 1, bulkLength, reader.file);
                 if (read != bulkLength) {
-                    logError("DataWin: short read on chunk %.4s (expected %zu, got %zu)\n", chunkName, bulkLength, read);
+                    logError("FATAL: failed to read chunk %.4s (wanted %zu, got %zu)   \n", chunkName, bulkLength, read);
                     exit(1);
                 }
                 BinaryReader_setBuffer(&reader, chunkBuffer, chunkDataStart, bulkLength);

@@ -320,6 +320,19 @@ static u32 shownWritesKept;
 // Each screen's last transfer destination (physical): top left, top right, bottom.
 static u32 lastTo[3];
 
+// dlgblank (change crispgap, UNDERTALE; the file's end): a bottom transfer into the buffer on screen waits for the
+// bottom's blank. Only these two calls change here, and to the compiler they stay outside calls (assembler names), so
+// it orders and compiles the functions above the late code as before.
+#if defined(ENABLE_WAD16)
+bool blankBottomReady(gfxScreen_t screen) __asm__("CtrBlank_bottomReady");
+void blankVblank1Lock(LightLock* lock) __asm__("CtrBlank_vblank1Lock");
+#define BLANK_BOTTOM_READY blankBottomReady
+#define BLANK_VBLANK1_LOCK blankVblank1Lock
+#else
+#define BLANK_BOTTOM_READY CtrPacer_screenReady
+#define BLANK_VBLANK1_LOCK LightLock_Lock
+#endif
+
 // With gateLock held: moves the held-back transfers of every screen ready for
 // them in front of the rest and lets the GPU have them, restarting the queue
 // if it ran out.
@@ -327,7 +340,7 @@ static void releaseReady(bool atFrameEnd) {
     if (heldCount == 0) return;
     gxCmdQueue_s* queue = runQueueNow;
     gateStep = "asking the pacer which screens are ready";
-    bool ready[2] = { gateOff || CtrPacer_screenReady(GFX_TOP), gateOff || CtrPacer_screenReady(GFX_BOTTOM) };
+    bool ready[2] = { gateOff || CtrPacer_screenReady(GFX_TOP), gateOff || BLANK_BOTTOM_READY(GFX_BOTTOM) };
     gateStep = "none";
     // Only a held transfer's own screen counts: the GPU is restarted below
     // only when something was let through, and with nothing let through, a
@@ -770,7 +783,7 @@ static void onVBlank1(void* unused) {
     vblankCallbacks[1]++;
     if (framerateLimit(1)) frameCounter[1]++;
     gspAt = "VBlank1: taking the gate lock";
-    LightLock_Lock(&gateLock);
+    BLANK_VBLANK1_LOCK(&gateLock);
     gspAt = "VBlank1: letting transfers through";
     releaseReady(false);
     LightLock_Unlock(&gateLock);
@@ -1642,6 +1655,176 @@ uint32_t CtrGpu_drawCompletions(void) {
     uint32_t n = completions + (frameBusy && drawsDone ? 1u : 0u);
     LightLock_Unlock(&gateLock);
     return n;
+}
+#endif
+
+#if defined(ENABLE_WAD16)
+// ===[ dlgblank: a bottom transfer into the buffer on screen starts in the bottom's blank ]===
+//
+// With the game on top the bottom screen is single buffered, so bottom dialogue's transfer writes the buffer the LCD
+// is scanning, wherever the scan is when the frame's draws finish. maintainer, 10-20 and 11-06: a line down the box, one
+// side changing before the other. The bottom's scan leaves 93 of its 413 lines blank, 3.7 ms, where the top leaves 13
+// (PDC timing tables, docs/3ds-hardware.md), so the bottom can afford this and the top could not.
+//
+// CtrBlank_bottomReady stands in for the pacer's answer in releaseReady. A transfer that would land on the shown
+// buffer goes only once the frame's draws are done, VBlank1 was just now and the LCD's line counter agrees; anything else takes the
+// pacer's answer, the game on the bottom and every frame without a bottom transfer at no cost. finishFrame flips only
+// after all transfers, so the frame's top flip goes here when just this transfer is left: it must not wait with it.
+#define BLANK_TEXT __attribute__((noinline, noipa, section(".text_dlgblank")))
+#define BLANK_BSS __attribute__((section(".bss.dlgblank_late")))
+// How long after VBlank1 a transfer or clear may start. A write goes the way the scan does and faster, so it stays
+// ahead of the scan if it starts before the picture does. The bottom's picture is lines 82 to 402 of 413 (Luma3DS and
+// GodMode9 PDC tables), about 3.3 ms after line 0. VBlank1's callback can be late, so its time alone proves nothing: the
+// LCD's own line counter decides (o2ds rows: 0x400554 follows the clock at 40.4 us a line). Writes measured on the
+// o2ds: transfer at most 1.6 ms, clear at most 1.5 ms, with the reads around them.
+#define BLANK_TRANSFER_TICKS ((uint64_t) SYSCLOCK_ARM11 / 400) // 2.5 ms
+#define BLANK_CLEAR_TICKS ((uint64_t) SYSCLOCK_ARM11 / 667)    // 1.5 ms
+#define BLANK_TRANSFER_LINE 50u
+#define BLANK_CLEAR_LINE 40u
+#define BLANK_PICTURE_END 403u
+#define BLANK_HOLD_TICKS ((uint64_t) SYSCLOCK_ARM11 / 62) // 16.1 ms: the gate's longest hold, by the clock
+#define BLANK_CLOSE_WAITS 8u // frames a close may wait for the blank before it clears anyway
+#define BLANK_FORCED_LIMIT 30u // forced goes in a row, a second of box frames, before the hold stops for the session
+
+static uint64_t blankTick BLANK_BSS;
+static uint64_t blankHoldStart BLANK_BSS;
+static bool blankBoxWasShown BLANK_BSS;
+static bool blankYielded BLANK_BSS;
+static bool blankHolding BLANK_BSS;
+static uint8_t blankCloseWaits BLANK_BSS;
+static uint8_t blankForcedRun BLANK_BSS;
+static bool blankGaveUp BLANK_BSS;
+
+BLANK_TEXT static bool blankLineBefore(u32 line) {
+    u32 now = 0;
+    if (R_FAILED(GSPGPU_ReadHWRegs(0x400554, &now, sizeof(now)))) return true;
+    return line > now || now >= BLANK_PICTURE_END;
+}
+
+BLANK_TEXT bool CtrBlank_bottomReady(gfxScreen_t screen) {
+    extern uint8_t CtrScreens_pacerGame;
+    extern __typeof__(held) blankHeld __asm__("held");
+    extern __typeof__(heldCount) blankHeldCount __asm__("heldCount");
+    extern __typeof__(drawsDone) blankDrawsDone __asm__("drawsDone");
+    extern __typeof__(needSwapTop) blankNeedSwapTop __asm__("needSwapTop");
+    extern __typeof__(isTopStereo) blankTopStereo __asm__("isTopStereo");
+    extern __typeof__(inSafeTransfer) blankInSafeTransfer __asm__("inSafeTransfer");
+    if (!CtrPacer_screenReady(screen)) return false;
+    if (CtrScreens_pacerGame != GFX_TOP) return true;
+    if (blankGaveUp) return true;
+    bool bottom = false, top = false;
+    for (u32 i = 0; blankHeldCount > i; i++) {
+        if (blankHeld[i].screen == GFX_TOP) top = true;
+        else bottom = true;
+    }
+    if (!bottom) return true;
+    u32 regs[5]; // the bottom's 0x68: buffer A, 0x6C: buffer B, 0x78: which one shows (bit 0)
+    u32 to = osConvertVirtToPhys(CtrPacer_backFramebuffer(GFX_BOTTOM, GFX_LEFT));
+    if (R_FAILED(GSPGPU_ReadHWRegs(0x400568, regs, sizeof(regs))) || to != ((regs[4] & 1) != 0 ? regs[1] : regs[0])) return true;
+    if (!blankDrawsDone) return false;
+    if (!top && blankNeedSwapTop && !blankInSafeTransfer) {
+        blankNeedSwapTop = false;
+        gfxScreenSwapBuffers(GFX_TOP, blankTopStereo);
+    }
+    uint64_t now = svcGetSystemTick();
+    if (BLANK_TRANSFER_TICKS > now - blankTick && blankLineBefore(BLANK_TRANSFER_LINE)) {
+        blankHolding = false;
+        blankForcedRun = 0;
+        return true;
+    }
+    // Not in the blank. On time, the next VBlank1 comes within 15 ms of this and is in it. Callbacks are no count of
+    // refreshes: late ones queue up. So the clock ends the hold: the first decision past it goes wherever the scan is, a
+    // tear where a longer hold would cost a frame. Nothing wakes the queue for that, so it comes when a decision does:
+    // about 33 ms at worst with one each refresh, later if they stop, down to the 250 ms escape. A run of these with no
+    // window between means no window here: a counter that reads wrong or callbacks always late. Holding then costs
+    // time and still tears, so the hold stops for the session. Page settling and the close's wait for a transfer stay.
+    if (!blankHolding) {
+        blankHolding = true;
+        blankHoldStart = now;
+        return false;
+    }
+    if (BLANK_HOLD_TICKS > now - blankHoldStart) return false;
+    blankHolding = false;
+    if (BLANK_FORCED_LIMIT <= ++blankForcedRun) blankGaveUp = true;
+    return true;
+}
+
+// onVBlank1 takes the gate lock through here, its one call retargeted: its time, and a hold whose transfer went another
+// way (dropped by the 250 ms escape) ends.
+BLANK_TEXT void CtrBlank_vblank1Lock(LightLock* lock) {
+    extern __typeof__(heldCount) blankHeldCount __asm__("heldCount");
+    blankTick = svcGetSystemTick();
+    LightLock_Lock(lock);
+    if (blankHeldCount == 0) blankHolding = false;
+}
+
+// main.c's call each frame, just before its question below: a borrowed screen (the menu, a test's page) keeps its text.
+BLANK_TEXT void CtrBlank_yieldBottom(void* renderer, bool yield) {
+    extern void blankRealYield(void*, bool) __asm__("CtrRenderer_yieldBottomScreen");
+    blankYielded = yield;
+    blankRealYield(renderer, yield);
+}
+
+// Off on the original 2DS: its backlight stays on, the screen blanked instead. The renderer is told consoles there and so
+// sends no black transfer, and main is told Off and so does not clear: the last box stayed on screen until the next one
+// (o2ds rows, S6 too). Cleared here, when main would have.
+BLANK_TEXT static void blankClearShown(void) {
+    extern void CtrLog_beginConsole(void);
+    extern void CtrLog_endConsole(void);
+    u16 w = 0, h = 0;
+    CtrLog_beginConsole();
+    u8* shown = CtrPacer_shownFramebuffer(GFX_BOTTOM, GFX_LEFT, &w, &h);
+    gfxSetDoubleBuffering(GFX_BOTTOM, false); // it turned them on; the single buffer stays, or the next box goes unseen
+    if (shown != nullptr) {
+        u32 bytes = (u32) w * h * gspGetBytesPerPixel(gfxGetScreenFormat(GFX_BOTTOM));
+        memset(shown, 0, bytes);
+        GSPGPU_FlushDataCache(shown, bytes);
+    }
+    CtrLog_endConsole();
+}
+
+// main.c's question each frame. When a box goes and the consoles take the screen, main clears the shown buffer at once
+// and turns the consoles on. The answer stays "shown" until that clear can start in the blank with no transfer on its
+// way, so no writer and no page can come before it and nothing clears later: the consoles stay off until then. With
+// Other screen Off the answer changes nothing in main, which neither clears nor prints; on the original 2DS this clears.
+BLANK_TEXT bool CtrBlank_dialogueShown(void* renderer) {
+    extern bool blankRealShown(void*) __asm__("CtrRenderer_dialogueShown");
+    extern __typeof__(needSwapBot) blankNeedSwapBot __asm__("needSwapBot");
+    extern bool CtrScreens_otherOff, CtrScreens_sharedBacklight;
+    if (blankRealShown(renderer)) {
+        blankBoxWasShown = true;
+        blankCloseWaits = 0;
+        return true;
+    }
+    if (!blankBoxWasShown) return false;
+    if (BLANK_CLOSE_WAITS > blankCloseWaits && !blankYielded
+        && (blankNeedSwapBot || (!blankGaveUp && (BLANK_CLEAR_TICKS <= svcGetSystemTick() - blankTick || !blankLineBefore(BLANK_CLEAR_LINE))))) {
+        blankCloseWaits++;
+        return true;
+    }
+    blankBoxWasShown = false;
+    if (CtrScreens_otherOff && CtrScreens_sharedBacklight && !blankYielded) blankClearShown();
+    return false;
+}
+
+// A page the CPU is about to put on the shown buffer for good (the menu's, main.c's kept text) waits for the frame's
+// transfer, which would land over it, up to the next VBlank1. The menu stops the game anyway.
+BLANK_TEXT static void blankSettle(void) {
+    extern __typeof__(needSwapBot) blankNeedSwapBot __asm__("needSwapBot");
+    extern __typeof__(CtrGpu_waitIdle) blankWaitIdle __asm__("CtrGpu_waitIdle");
+    if (blankNeedSwapBot) blankWaitIdle();
+}
+
+// CtrPacer_shownFramebuffer for the menu's optPlace.
+BLANK_TEXT u8* CtrBlank_settledShown(gfxScreen_t screen, gfx3dSide_t side, u16* width, u16* height) {
+    if (screen == GFX_BOTTOM) blankSettle();
+    return CtrPacer_shownFramebuffer(screen, side, width, height);
+}
+
+// memcpy for reclaimBottomForConsoles' kept text.
+BLANK_TEXT void* CtrBlank_copyShown(void* to, const void* from, size_t bytes) {
+    blankSettle();
+    return memcpy(to, from, bytes);
 }
 #endif
 

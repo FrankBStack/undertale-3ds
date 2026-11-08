@@ -1,14 +1,17 @@
 # Packaging metadata only: never include this file in a compiler command.
 # HOME Menu text (maintainer, 2026-11-04: "trim the name down"): the long description is the game's name; the publisher
 # line says "3lit3hax - Unofficial port" for UNDERTALE releases, or "Unofficial port - v<version> - <model>" for
-# DELTARUNE releases, only from a release tree (no .git, and no source
-# identity from the builder), else "Unofficial port - <label> <commit> - <model>", which says which source it was
-# built from. An unofficial source build never shows the release version (R204):
+# DELTARUNE releases, only when release packaging asks for it (CTRPORT_SMDH_RELEASE=1, set by a kit's builder, in a
+# tree with no .git and no source identity from the builder), else "Unofficial port - <label> <commit> - <model>",
+# which says which source it was built from. An unofficial source build never shows the release version (R204):
 # - a Git checkout: git's own commit and status. Lab builds may set CTRPORT_SMDH_BUILD_TAG=stage73 (or cand27); an
 #   exact candidate/stage tag is used automatically; other checkouts say "source build". A checkout git can't read
 #   (no git, a .git git refuses, or a .git link whose target is gone) says "source build" with no commit.
 # - the builder run from a checkout: its mirror has no .git, so the builder passes the commit it read (and
 #   "-dirty") as CTRPORT_SMDH_SOURCE. In a Git checkout git wins over that variable.
+# - an archive built by hand: nothing says which source it is, and it may be changed, so it says "source build" with
+#   no commit. A bug report's build can then be told from a release (c26rev3 F3).
+# Homebrew Launcher text (the 3dsx only): the description is "<build> (o3ds/o2ds)" or "<build> (n3ds/n2ds)".
 # Always query Git at build time, so an incremental build follows HEAD too.
 get_filename_component(ROOT "${ROOT}" ABSOLUTE)
 include("${CMAKE_CURRENT_LIST_DIR}/release_contract.cmake")
@@ -21,8 +24,8 @@ set(model_name "Old 3DS")
 if(MODEL STREQUAL "n3ds")
     set(model_name "New 3DS")
 endif()
-set(description "${game_name}")
-set(build "v${RELEASE_VERSION}")
+set(build "source build")
+set(release_build FALSE)
 # EXISTS is false for a .git junction or symlink whose target is gone; that is still a checkout marker.
 set(checkout_marker FALSE)
 if(EXISTS "${ROOT}/.git" OR IS_SYMLINK "${ROOT}/.git")
@@ -40,9 +43,9 @@ if(NOT checkout_marker AND DEFINED ENV{CTRPORT_SMDH_SOURCE})
         message(FATAL_ERROR "SMDH source must be a commit (7 to 12 lowercase hex, optional -dirty)")
     endif()
     set(build "source build ${source}")
-elseif(checkout_marker)
-    # A checkout is a source build even when git can't say which commit it is.
-    set(build "source build")
+elseif(NOT checkout_marker AND "$ENV{CTRPORT_SMDH_RELEASE}" STREQUAL "1")
+    set(build "v${RELEASE_VERSION}")
+    set(release_build TRUE)
 endif()
 if(GIT_EXECUTABLE AND EXISTS "${ROOT}/.git")
     # Only this source tree's directory/worktree marker permits a lab stamp.
@@ -95,9 +98,20 @@ if(GIT_EXECUTABLE AND EXISTS "${ROOT}/.git")
         set(build "${label} ${commit}")
     endif()
 endif()
+set(description "${game_name}")
+# The Homebrew Launcher's rows (maintainer, 2026-11-06: "v1.0.0-beta.1 (o3ds/o2ds)", "dont add word soup"): the 3dsx's
+# description is "<build> <consoles>", so players see the version they have installed and which row is theirs.
+# <build> is the publisher's, so R204 holds here too: a source build shows its commit, never the version.
+# The CIA's stays the game's name (HOME Menu, above).
+if(MODE STREQUAL "3dsx")
+    set(description "${build} (o3ds/o2ds)")
+    if(MODEL STREQUAL "n3ds")
+        set(description "${build} (n3ds/n2ds)")
+    endif()
+endif()
 set(publisher "Unofficial port - ${build} - ${model_name}")
 set(UNDERTALE_RELEASE_PUBLISHER "3lit3hax - Unofficial port")
-if(GAME STREQUAL "undertale" AND NOT checkout_marker AND NOT DEFINED ENV{CTRPORT_SMDH_SOURCE})
+if(GAME STREQUAL "undertale" AND release_build)
     set(publisher "${UNDERTALE_RELEASE_PUBLISHER}")
 endif()
 # All components are ASCII. SMDH has 128 UTF-16 code units for the description and 64 for the publisher, NULs included.

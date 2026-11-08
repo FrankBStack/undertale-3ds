@@ -18,6 +18,7 @@ if RELEASE not in sys.path:
     sys.path.insert(0, RELEASE)
 import verify_game  # noqa: E402
 import release_contract  # noqa: E402
+from path_hygiene import is_junk  # noqa: E402
 
 TARGETS = {
     "n3ds": "New 3DS / New 3DS XL / New 2DS XL",
@@ -168,7 +169,7 @@ def load_music_manifest(version, *, store='steam', platform='windows'):
     names = set()
     for entry in entries:
         name = entry['name']
-        if (not re.fullmatch(r'[A-Za-z0-9_. -]+\.ogg', name) or name.casefold() in names
+        if (stray_name(name) or not re.fullmatch(r'[A-Za-z0-9_. -]+\.ogg', name) or name.casefold() in names
                 or not isinstance(entry['size'], int) or entry['size'] <= 0
                 or not re.fullmatch(r'[0-9a-f]{64}', entry['sha256'])):
             raise ValueError('Invalid music file record')
@@ -284,10 +285,9 @@ def log_ignored_music(product, folder, log):
 
 
 def stray_name(name):
-    """Known host metadata and incomplete copy names; not a replacement for game validation."""
-    low = name.casefold()
-    return (name.startswith('.') or low in ('__macosx', 'thumbs.db', 'desktop.ini', '$recycle.bin',
-                                           'system volume information') or low.endswith(('.tmp', '.part')))
+    """Game entries have no dot names; source files use only the shared metadata rules."""
+    return is_junk(name) or any(part.startswith('.')
+                                for part in os.fspath(name).replace('\\', '/').split('/'))
 
 
 def _same_bytes(a: str, b: str) -> bool:
@@ -301,22 +301,35 @@ def _same_bytes(a: str, b: str) -> bool:
                 return True
 
 
+UNDERTALE_AOT_FOLDER = 'Undertale'
+
+
+class MissingGameData(ValueError):
+    """The selected install no longer has the input needed for staging."""
+
+
 def aot_data_dir(product: Product, folder: str, staging: str):
-    """The folder build.sh's data= gets. A Windows copy is used where it is. A macOS copy's game.ios is staged as
-    <staging>/macos/data.win, a hard link (a copy where links don't work), since the AOT generator reads data.win."""
-    layout = verify_game.layout_for(product.game, folder)
-    if layout is None or layout is verify_game.WINDOWS:
+    """Stage UNDERTALE as <staging>/Undertale/data.win for a stable AOT label on every host and depot.
+
+    The generated AOT table embeds the parent folder name. Keep the tested spelling independent of the player's
+    chosen path. Copy into writable private files; delivery still reads the selected install.
+    """
+    if product.key != 'undertale':
         return folder
+    layout = verify_game.layout_for(product.game, folder)
+    if layout is None:
+        raise MissingGameData("Could not find UNDERTALE's data file. Go back and choose the game folder again.")
+    import cleanup
+    require_output_outside_game(folder, staging)
+    cleanup.require_plain_tree(staging)
     src = layout.data_path(folder)
-    out = os.path.join(staging, layout.key)
+    out = os.path.join(staging, UNDERTALE_AOT_FOLDER)
     dst = os.path.join(out, "data.win")
     os.makedirs(out, exist_ok=True)
     try:
-        if os.path.samefile(src, dst):
-            return out
-        # A copy (where links don't work) is kept only if its bytes still match: a replaced game.ios can keep the
-        # same size and date.
-        if os.stat(src).st_size == os.stat(dst).st_size and _same_bytes(src, dst):
+        # Retire links left by an earlier builder. A copy is reusable only while
+        # its bytes still match: a replaced data.win/game.ios can keep size/date.
+        if not os.path.samefile(src, dst) and os.stat(src).st_size == os.stat(dst).st_size and _same_bytes(src, dst):
             return out
     except OSError:
         pass
@@ -325,10 +338,15 @@ def aot_data_dir(product: Product, folder: str, staging: str):
         if os.path.lexists(p):
             os.remove(p)
     try:
-        os.link(src, tmp)
-    except OSError:
-        shutil.copy2(src, tmp)
-    os.replace(tmp, dst)
+        shutil.copyfile(src, tmp)
+        stamp = os.stat(src)
+        os.utime(tmp, ns=(stamp.st_atime_ns, stamp.st_mtime_ns))
+        os.replace(tmp, dst)
+    finally:
+        try:
+            os.remove(tmp)
+        except OSError:
+            pass  # Preserve the staging error if the work folder also refuses removal.
     return out
 
 

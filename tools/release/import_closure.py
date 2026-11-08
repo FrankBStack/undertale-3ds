@@ -34,6 +34,8 @@ GAME_ONLY = {'tools/aot/pixgrid.py': 'undertale', 'tools/aot/btnprompt_build.py'
              'tools/aot/check_dspe_gate.py': 'deltarune',
              # offkill's early-destroy entries (build.sh runs it for UNDERTALE only; pipeline.py's source_wanted agrees).
              'tools/aot/offkill.py': 'undertale',
+             # Smart smoothing's whole-rows list (fontverdict.py imports it for UNDERTALE only).
+             'tools/aot/thinrule.py': 'undertale',
              # the dialogue script's case table (build.sh runs it for UNDERTALE Old only; pipeline.py's source_wanted agrees).
              'tools/aot/textcase.py': 'undertale'}
 GAME_ONLY.update({

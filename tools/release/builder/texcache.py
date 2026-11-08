@@ -66,11 +66,12 @@ PAD_START, PAD_END = 52, 56
 # docs/release/builder-status.md, "Texture preparation on the PC".
 # Rebuild and re-pin whenever any file in `texprep --sources` changes (a release step, builder-status.md).
 PINNED = {
-    # Qualified 639196764 distribution sources (2026-11-06).
-    # MSYS2 UCRT64 GCC 16.1.0, static, zero PE timestamp; two source directories.
-    # texprep-src-1:81af0c3b4657fbd8fe58a778044a75dddd3726a528582900c4e00fe602a71277
+    # Release pin (S8, 2026-11-07): built by labplan from the upd1 trial cee254c2f's export_scrub distribution copy;
+    # its sources equal S8's (test_texprep_pin), so it is the binary the release builder ships.
+    # MSYS2 UCRT64 GCC 16.1.0, static, zero PE timestamp; two source directories, 0 warnings.
+    # texprep-src-1:ad1a4f2c1dc91a024a40dc18f69370f96974e4a2f6d9e258aa1995889ba3982d
     ("win32", "x86_64"): ("texprep-windows-x64.exe", 365682,
-                          "36e7940695d2f79434af2458c2657add3a8424fb7c30bfdc94eb679537d2d226"),
+                          "97e82a674212e4311187453716d896c98af80c05f88272b8f84650faee2a3bf2"),
     # Linux builds locally with the system compiler. The former static glibc 2.39 binary is
     # retired: it lacked a corresponding-source/relink kit and did not fit older Debian hosts.
     # macOS (arm64 and x86_64): texprep-macos-universal, built on an M1 Mac (steps in builder-status.md).
@@ -182,7 +183,15 @@ def build_tool(work, source_root=SOURCE_ROOT, platform=sys.platform, run=None, w
                                                    encoding='utf-8', errors='replace',
                                                    env=env, timeout=900, **hidden_options()))
     log("building texprep from source with %s" % cc)
-    r = run([bash, script, out], env)
+    try:
+        r = run([bash, script, out], env)
+    except (OSError, subprocess.SubprocessError) as exc:
+        message = 'texprep build failed: %s' % exc
+        log(message)
+        return None, message
+    for output in (r.stdout, r.stderr):
+        if output and output.strip():
+            log(output.strip())
     if r.returncode != 0 or not os.path.isfile(out):
         tail = ((r.stdout or "") + (r.stderr or "")).strip().splitlines()[-3:]
         return None, "texprep build failed (exit %s): %s" % (r.returncode, " / ".join(tail))
@@ -272,6 +281,8 @@ def _run_texprep(tool, data_win, local, name, run, log, source=None):
     out = (r.stdout or "").strip()
     if out:
         log(out.replace(source or data_win, name))
+    if r.stderr and r.stderr.strip():
+        log(r.stderr.strip().replace(source or data_win, name))
     if r.returncode != 0 or not os.path.isfile(os.path.join(local, MARKER)):
         return "%s: texprep exit %d" % (name, r.returncode)
     missing = [i for i in range(pages) if not os.path.isfile(os.path.join(local, page_name(i)))]
@@ -282,6 +293,18 @@ def _run_texprep(tool, data_win, local, name, run, log, source=None):
 
 
 def prepare(tool, product, folder, work, parts=None, run=None, log=print, halfart=None):
+    """Prepare graphics and record only files created or already owned by this builder."""
+    import cleanup
+    import products
+    products.require_output_outside_game(folder, work)
+    snapshot = cleanup.begin_build(work, [os.path.join(work, 'texcache')])
+    try:
+        return _prepare(tool, product, folder, work, parts, run, log, halfart)
+    finally:
+        cleanup.finish_build(work, snapshot)
+
+
+def _prepare(tool, product, folder, work, parts=None, run=None, log=print, halfart=None):
     """Runs texprep for every delivered data.win into <work>/texcache/<game>/... Returns (sets, problems): only
     complete folders are in sets; a data.win whose folder didn't complete is left to the console. halfart: None
     follows products.HALFART; on, UNDERTALE's half-resolution art folder is prepared too (halfart_set)."""
@@ -583,15 +606,18 @@ class Result:
     files: tuple = ()      # only the explicit cache/receipt paths delivered by this operation
 
 
-FIRST_START = "Textures: the 3DS will prepare them the first time the game starts, so that start takes longer."
+FIRST_START = ("The 3DS will prepare missing graphics on first start. "
+               "This needs free SD card space and takes longer.")
 
 
 def no_tool_text(message, platform=sys.platform):
     """What a player reads when this PC can't prepare the textures. The technical reason goes to the log."""
-    if "no C compiler" in message:
-        return FIRST_START + " To prepare them on this PC, install a C compiler (gcc or clang) and copy again."
     if platform == "win32" or "shipped texprep missing" in message or "pinned SHA-256" in message:
-        return FIRST_START + " The release builder prepares them on the PC."
+        if 'no C compiler' not in message:
+            return ("Graphics were not prepared on this computer. Download and unpack the complete builder again, "
+                    "or start on the 3DS. " + FIRST_START)
+    if "no C compiler" in message:
+        return FIRST_START + " To prepare them on this computer, install a C compiler (gcc or clang) and copy again."
     return FIRST_START
 
 
@@ -613,14 +639,16 @@ def deliver_textures(sd_root, product, folder, work, parts=None, tool=None, fs=N
     need = sum(p.bytes for p in plans)
     free = shutil.disk_usage(sd_root).free
     if need > free:
-        return Result(False, "Textures: not enough space on the card (%d MB needed); the 3DS will prepare them."
+        return Result(False, "Graphics were not copied: at least %d MB of free space is needed on the SD card. "
+                      "Free some space, then copy again. The 3DS also needs free space to prepare graphics itself."
                       % (-(-need // 10**6)))
     for line in describe(plans):
         log(line.strip())
     written, kept, nbytes = write_plans(sd_root, plans, fs, progress, cancelled)
-    msg = "Textures prepared: %d folder(s) written, %d already up to date." % (written, kept)
+    log("Textures prepared: %d folder(s) written, %d already up to date." % (written, kept))
+    msg = 'Graphics ready.'
     if problems:
-        msg += " The 3DS prepares the rest."
+        msg = FIRST_START
     files = tuple(cs.sd_dir + '/' + name for cs in sets
                   for name in [page_name(i) for i in _local_pages(cs)] + [MARKER])
     return Result(True, msg, written, kept, nbytes, files)
@@ -898,7 +926,8 @@ def deliver_data_versions(sd_root, product, folder, work, parts=None, fs=None, l
                       "is not the copied one).")
     os.makedirs(os.path.join(work, "texcache"), exist_ok=True)
     written, kept = write_data_versions(sd_root, plans, fs, os.path.join(work, "texcache"))
-    msg = "Version check prepared: %d file(s) written, %d already up to date." % (written, kept)
+    log("Version check prepared: %d file(s) written, %d already up to date." % (written, kept))
+    msg = 'Game check ready.'
     if any(p.skip for p in plans):
         msg += " The 3DS checks the rest."
     return Result(True, msg, written, kept, sum(len(p.data) for p in plans if not p.keep),

@@ -490,6 +490,18 @@ class ToolchainTest(unittest.TestCase):
         toolchain.run_step(steps["devkitpro"], lambda s: None, False, acts)
         self.assertEqual(len(elevated), 1)
 
+    def test_update_failure_names_the_update_on_every_platform(self):
+        for platform in ('win32', 'darwin', 'linux'):
+            with self.subTest(platform=platform):
+                step = toolchain.update_step('fixture-devkitpro', platform=platform)
+                run = mock.Mock(return_value=1)
+                actions = toolchain.Actions(run=run, download=Boom(), elevated=Boom())
+                with self.assertRaises(toolchain.Refused) as caught:
+                    toolchain.run_step(step, lambda line: None, False, actions)
+                self.assertEqual(str(caught.exception), 'The devkitPro update did not finish. '
+                    'Check the error details, then try this step again.')
+                run.assert_called_once()
+
 
 # ---------------------------------------------------------------------------------------------------------------------
 
@@ -840,6 +852,8 @@ class BuildTest(unittest.TestCase):
         self.tmp = tempfile.mkdtemp()
         self.src = fake_source(self.tmp)
         self.work = os.path.join(self.tmp, "work")
+        self.game = os.path.join(self.tmp, 'game', 'Undertale')
+        write(os.path.join(self.game, 'data.win'), UT)
         self.tc = toolchain.Toolchain("C:/devkitPro", "C:/devkitPro/msys2/usr/bin/bash.exe", [], [], [], None, None,
                                       None, "win32")
         selected = mock.patch.object(pipeline.library_pins, 'select', return_value={'packages': [], 'shims': None})
@@ -866,7 +880,7 @@ class BuildTest(unittest.TestCase):
         def popen(argv, **kw):
             seen["argv"], seen["env"] = argv, CapturedEnv(kw["env"])
             return FakeProc(lines, rc, on_start=lambda: rc == 0 and self.outputs(aot, kinds))
-        b = pipeline.Build(products.PRODUCTS["undertale"], self.tc, self.work, "n3ds", "D:\\Games\\Undertale",
+        b = pipeline.Build(products.PRODUCTS["undertale"], self.tc, self.work, "n3ds", self.game,
                            outputs=outputs, popen=popen, source_root=self.src, art_generator=lambda *a, **k: {})
         return b, seen
 
@@ -878,7 +892,8 @@ class BuildTest(unittest.TestCase):
         self.assertEqual([a.kind for a in arts], ["3dsx"])
         self.assertEqual(arts[0].sha256, hashlib.sha256(b"3DSX" * 100).hexdigest())
         self.assertEqual((rec["version"], rec["build_id"]), ("0.1.0", "archive-0.1.0+aot12"))
-        self.assertIn("data=D:/Games/Undertale", seen["argv"])
+        self.assertIn('data=' + str(Path(self.work) / 'data/Undertale').replace('\\', '/'), seen['argv'])
+        self.assertEqual((Path(self.work) / 'data/Undertale/data.win').read_bytes(), UT)
         self.assertIn("openh264=off", seen["argv"])
         self.assertEqual(seen["env"]["CTRPORT_CCACHE_DIR"], os.path.join(self.work, "ccache"))
         with open(os.path.join(self.work, "src", "VERSION"), "rb") as f:      # copied as is, never written
@@ -1697,12 +1712,12 @@ class SaveImportTest(unittest.TestCase):
         cases = [
             ("file0", b"", "empty save file"),
             ("file1", "Frisk\n", "truncated save slot"),
-            ("file2", "Frisk\nnot_a_number\n0\n0\n", "name and LV could not be read"),
-            ("file3", "Frisk\n0\n0\n0\n", "name and LV could not be read"),
-            ("file4", "Frisk\n999\n0\n0\n", "name and LV could not be read"),
+            ("file2", "Frisk\nnot_a_number\n0\n0\n", "Save format not recognized"),
+            ("file3", "Frisk\n0\n0\n0\n", "Save format not recognized"),
+            ("file4", "Frisk\n999\n0\n0\n", "Save format not recognized"),
             ("file5", "Frisk\n1\nnot_a_number\n", "invalid save data"),
-            ("file6", b"Frisk\x00\n1\n0\n", "name and LV could not be read"),
-            ("file7", b"\xff\xfe\xfd\x00", "name and LV could not be read"),
+            ("file6", b"Frisk\x00\n1\n0\n", "Save format not recognized"),
+            ("file7", b"\xff\xfe\xfd\x00", "Save format not recognized"),
             ("undertale.ini", "not_an_ini_section_without_equals\n", "invalid INI format"),
         ]
         corrupt_dir = os.path.join(self.tmp, "corrupt-cases")
@@ -1794,7 +1809,7 @@ class SaveImportTest(unittest.TestCase):
             deliver.check_sd_writable(self.sd, platform="win32")
             with self.assertRaises(deliver.DeliverError) as e_posix:
                 deliver.check_sd_writable(self.sd, platform="linux")
-            self.assertIn("read-only", str(e_posix.exception))
+            self.assertIn("could not write", str(e_posix.exception))
             self.assertIn("Lock switch", str(e_posix.exception))
         finally:
             os.chmod(self.sd, stat.S_IWRITE | stat.S_IREAD | stat.S_IEXEC)
@@ -1807,7 +1822,7 @@ class SaveImportTest(unittest.TestCase):
         try:
             with self.assertRaises(deliver.DeliverError) as e_file:
                 deliver.copy_pc_saves(self.sd, self.ut, scan, overwrite=True)
-            self.assertIn("read-only", str(e_file.exception))
+            self.assertIn("could not write", str(e_file.exception))
             self.assertIn("Lock switch", str(e_file.exception))
         finally:
             os.chmod(sd_file0, stat.S_IWRITE | stat.S_IREAD)
@@ -1818,7 +1833,7 @@ class SaveImportTest(unittest.TestCase):
         with mock.patch.object(deliver.shutil, "copy2", side_effect=PermissionError("Write protected")):
             with self.assertRaises(deliver.DeliverError) as e3:
                 deliver.copy_items(self.sd, items)
-            self.assertIn("read-only", str(e3.exception))
+            self.assertIn("could not write", str(e3.exception))
             self.assertIn("Lock switch", str(e3.exception))
 
 
@@ -1851,7 +1866,7 @@ class SaveImportTest(unittest.TestCase):
         with mock.patch.object(saves.os, "remove", side_effect=PermissionError(13, "denied")):
             with self.assertRaises(deliver.DeliverError) as e:
                 deliver.copy_pc_saves(self.sd, self.ut, scan, overwrite=True)
-        self.assertIn("previous 3DS saves are in", str(e.exception))
+        self.assertIn("previous 3DS saves are backed up in", str(e.exception))
         self.assertIn("backup-", str(e.exception))
 
     def test_read_only_pc_save_is_copied_writable(self):
@@ -2159,6 +2174,8 @@ class GuiTest(unittest.TestCase):
                 self.assertTrue(page.copy_btn.instate(['!disabled']))
                 diagnostic = Path(page.log_path).read_text(encoding='utf-8')
                 self.assertIn('Traceback (most recent call last):', diagnostic)
+                self.assertRegex(diagnostic, r'File "gui\.py", line \d+, in worker')
+                self.assertNotIn(str(Path(self.gui.__file__).parent), diagnostic)
                 self.assertIn('RuntimeError: synthetic build failure', diagnostic)
                 self.assertIn('RuntimeError: synthetic build failure', page.log.get('1.0', 'end'))
                 if stage == 'run':
@@ -2290,7 +2307,7 @@ class GuiTest(unittest.TestCase):
             wiz.next()
             wait_for_saves()
         self.assertEqual(wiz.index, 7)
-        self.assertIn("read-only", wiz.page.status.cget("text"))
+        self.assertIn("could not write", wiz.page.status.cget("text"))
         self.assertIn("Lock switch", wiz.page.status.cget("text"))
 
         # User confirms the overwrite prompt on writable SD card -> backs up 3DS save, copies PC save, and advances to
@@ -2390,7 +2407,8 @@ class GuiTest(unittest.TestCase):
         # A worker remains blocked until after the switch, then its queued callback still runs.
         page = wiz.pages[5]
         page.running = True
-        page.build = object()
+        page.build = mock.Mock(progress=mock.Mock(activity='Building'))
+        page.build.progress.completion.return_value = 43 * len(wiz.state.targets)
         page.log.insert("end", "Build log\n")
         page.bar.config(value=43)
         wiz.show(5)
@@ -2604,6 +2622,67 @@ class BuilderUiTest(unittest.TestCase):
         wiz.call = lambda fn, *a: fn(*a)
         return wiz
 
+    def test_check_headline_finishes_with_the_verdict_in_both_looks(self):
+        from types import SimpleNamespace
+        wiz = self.wizard()
+        folder = os.path.join(self.tmp, 'empty-game')
+        os.mkdir(folder)
+        wiz.state.folder = folder
+        page = wiz.pages[2]
+        for native in (False, True):
+            with self.subTest(native=native):
+                wiz.theme.runtime_loaded = True
+                wiz.theme.boring = native
+                wiz.theme.apply()
+                wiz.state.verdict = None
+                callbacks = []
+                with mock.patch.object(wiz, 'work', side_effect=lambda job, done: callbacks.append(done)):
+                    wiz.show(2)
+                    self.assertTrue(page.running)
+                    self.assertEqual(page.intro.cget('text'), 'Checking game files...')
+                    page.on_show()
+                    self.assertEqual(page.intro.cget('text'), 'Checking game files...')
+                    verdict = SimpleNamespace(accepted=True, result=SimpleNamespace(folder=folder),
+                                              parts=[], message='Ready to build.', store_links=[])
+                    callbacks.pop()(verdict)
+                    self.assertFalse(page.running)
+                    self.assertEqual(page.intro.cget('text'), 'Game files checked.')
+                    page.on_show()
+                    self.assertEqual(page.intro.cget('text'), 'Game files checked.')
+                    self.assertFalse(callbacks, 'A completed accepted check must not restart.')
+                # An ordinary missing-file refusal goes through the real verifier and completion callback.
+                wiz.state.verdict = None
+                wiz.show(2)
+                self.assertFalse(wiz.state.verdict.accepted)
+                self.assertFalse(page.running)
+                self.assertEqual(page.intro.cget('text'), 'Game files not accepted.')
+
+    def test_completed_build_revisit_keeps_its_finished_headline_in_both_looks(self):
+        wiz = self.wizard()
+        page = wiz.pages[5]
+        wiz.state.records = [dict(target='o3ds', seconds=1)]
+        for native in (False, True):
+            with self.subTest(native=native):
+                wiz.theme.runtime_loaded = True
+                wiz.theme.boring = native
+                wiz.theme.apply()
+                page.finished(None)
+                self.assertEqual(page.intro.cget('text'), 'Build complete.')
+                with mock.patch.object(page, 'start') as start:
+                    wiz.show(5)
+                    self.assertEqual(page.intro.cget('text'), 'Build complete.')
+                    self.assertEqual(float(page.bar.cget('value')), 100)
+                    self.assertTrue(page.cancel_btn.instate(['disabled']))
+                    self.assertTrue(page.can_next())
+                    start.assert_not_called()
+                wiz.state.build_ok = False
+                page.running = True
+                page.on_show()
+                self.assertEqual(page.intro.cget('text'), 'Building...')
+                for message in ('Fixture build failure.', self.gui.CANCELLED):
+                    page.finished(pipeline.BuildFailed(message, None))
+                    self.assertEqual(page.intro.cget('text'), 'Build stopped.')
+
     def toolchain_fixture(self):
         tmp = os.path.join(self.tmp, "dkp")
         root = fake_devkitpro(tmp, cia=False)
@@ -2698,7 +2777,7 @@ class BuilderUiTest(unittest.TestCase):
         self.fake_network({})                          # any download would fail the test
         box = self.box(page, "makerom")
         self.assertFalse(page.run_step(box))           # declined: nothing runs
-        self.assertEqual(box.status.cget("text"), "Ready")
+        self.assertEqual(box.status.cget("text"), "Not installed")
         self.assertEqual(page.failures, {})
         page.update()                                  # Update devkitPro, declined: no box is left behind
         self.assertIsNone(page.update_box)
@@ -2740,7 +2819,9 @@ class BuilderUiTest(unittest.TestCase):
                     self.assertEqual(ran[0][0], "/usr/bin/osascript")
                     self.assertIn("with administrator privileges", ran[0][2])
                     self.assertTrue(ran[0][-1].endswith(" -Syu --noconfirm"))
-                self.assertEqual(page.update_box.status.cget("text"), "Done.")
+                self.assertIsNone(page.update_box)
+                self.assertEqual(page.extra.winfo_children(), [])
+                self.assertIn('Done:', page.result.cget('text'))
 
     def test_licence_line_and_links_on_the_page(self):
         wiz = self.wizard()
@@ -3099,4 +3180,6 @@ class GameFileGateTests(unittest.TestCase):
 
 
 if __name__ == "__main__":
-    unittest.main()
+    from gui_test_support import isolated_builder_host
+    with tempfile.TemporaryDirectory() as isolated, isolated_builder_host(isolated):
+        unittest.main()

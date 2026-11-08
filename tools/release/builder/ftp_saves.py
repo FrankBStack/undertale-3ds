@@ -10,10 +10,41 @@ import uuid
 import ftp_delivery as network
 import saves
 
+SAVE_STOPPED = 'Save import stopped. No saves were changed. Keep ftpd open and choose Next again to retry.'
+SAVE_CONNECTION_LOST = ('The connection to the 3DS was lost. No saves were changed. '
+                        'Reconnect it and choose Next again to retry.')
+
+
+def retry_message(text, *, resume=False):
+    if resume:
+        return text.replace('No saves were changed.', 'The earlier save import is still unfinished.')
+    return text
+
+
+def delivery_error(exc, *, connecting=False, resume=False):
+    """Only pre-publication failures use the unchanged-saves retry instruction."""
+    if isinstance(exc, SavesChanged) and resume:
+        return SavesChanged(resume=True)
+    if isinstance(exc, ftplib.Error) and str(exc)[:3] in ('452', '552'):
+        result = network.TransferError('The 3DS SD card is full. No saves were changed. '
+                                       'Free some space and choose Next again to retry.')
+    else:
+        result = network.delivery_error(exc, connecting=connecting, message=SAVE_CONNECTION_LOST)
+    if isinstance(result, network.TransferError) and not isinstance(result, IncompleteImport):
+        text = str(result)
+        if 'Send again' in text:
+            text = text.split('Send again', 1)[0].rstrip() + ' Keep ftpd open and choose Next again to retry.'
+        text = retry_message(text, resume=resume)
+        if text != str(result):
+            return network.Cancelled(text) if isinstance(result, network.Cancelled) else network.TransferError(text)
+    return result
+
 
 class SavesChanged(network.TransferError):
-    def __init__(self):
-        super().__init__('The 3DS saves changed after they were checked. Nothing was replaced. Check the saves again, then retry.')
+    def __init__(self, *, resume=False):
+        message = ('The saves changed. The earlier save import is still unfinished.' if resume else
+                   'The 3DS saves changed after they were checked. Nothing was replaced.')
+        super().__init__(message + ' Check the saves again, then retry.')
 
 
 BACKUP_MISMATCH_MESSAGE = ("The 3DS didn't store a correct backup of its saves, so nothing was replaced and the 3DS "
@@ -80,10 +111,10 @@ class IncompleteImport(network.TransferError):
 def error_text(exc, *, connecting=False):
     """The wizard has Back/Next; the CLI keeps the approved retry instruction."""
     if isinstance(exc, SavesChanged):
-        return 'The 3DS saves changed after they were checked. Nothing was replaced. Click Back, then Next, to check them again.'
+        return str(exc).replace('Check the saves again, then retry.', 'Click Back, then Next, to check them again.')
     if isinstance(exc, IncompleteImport):
         return exc.describe(wizard=True)
-    return network.error_text(exc, connecting=connecting)
+    return str(delivery_error(exc, connecting=connecting))
 
 
 @dataclass
@@ -117,7 +148,7 @@ def read_folder(ftp, folder, *, cancelled=lambda: False):
             raise network.TransferError('A file in the 3DS saves folder is too large to back up over Wi-Fi. Nothing was replaced. Copy the saves by SD card instead.')
         buffer = bytearray()
         def take(block):
-            network.check_cancel(cancelled)
+            network.check_cancel(cancelled, message=SAVE_STOPPED)
             buffer.extend(block)
             if len(buffer) > saves.MAX_SAVE_BYTES:
                 raise SavesChanged()
@@ -139,11 +170,15 @@ def snapshot(ftp, product, *, cancelled=lambda: False):
     return Snapshot(files, summary, proven=True)
 
 
-def inspect(value, product, *, factory=network.ConsoleFTP, cancelled=lambda: False):
+def inspect(value, product, *, factory=network.ConsoleFTP, cancelled=lambda: False, resume=None):
     ftp = network.connect(value, factory=factory)
     try:
-        with network.friendly_errors():
-            return snapshot(ftp, product, cancelled=cancelled)
+        return snapshot(ftp, product, cancelled=cancelled)
+    except (OSError, EOFError, ftplib.Error) as exc:
+        translated = delivery_error(exc, resume=resume is not None)
+        if translated is exc:
+            raise
+        raise translated from exc
     finally:
         ftp.close()
 
@@ -171,7 +206,7 @@ def check_backup(ftp, backup, original, *, cancelled=lambda: False):
     except network.Cancelled:
         raise
     except (OSError, EOFError, ftplib.Error) as exc:
-        lost = network.delivery_error(exc)
+        lost = delivery_error(exc)
         if lost is not exc:
             # The connection dropped (or the card is full): that is what the player is told, not a failing card.
             # Nothing live changed, and a later import makes and checks a new backup.
@@ -203,7 +238,7 @@ def well_formed(entry, facts):
 
 def folder_is_absent(ftp, folder, *, cancelled=lambda: False):
     def names(parent):
-        network.check_cancel(cancelled)
+        network.check_cancel(cancelled, message=SAVE_STOPPED)
         try:
             rows = list(ftp.mlsd(parent, facts=['type']))
         except ftplib.error_perm as exc:
@@ -212,7 +247,7 @@ def folder_is_absent(ftp, folder, *, cancelled=lambda: False):
             raise SaveListingError(SAVE_LIST_ERROR) from exc
         result = []
         for entry, facts in rows:
-            network.check_cancel(cancelled)
+            network.check_cancel(cancelled, message=SAVE_STOPPED)
             if not well_formed(entry, facts):
                 raise SaveListingError(SAVE_LIST_ERROR)
             result.append(entry)
@@ -282,6 +317,8 @@ def clean_cancelled_copy(value, factory, paths, backup):
 
 def copy(value, product, scan, expected, *, overwrite=False, factory=network.ConsoleFTP,
          cancelled=lambda: False, progress=lambda event: None, resume=None):
+    if scan.error:
+        raise network.TransferError(scan.error)
     if scan.has_corrupt or not scan.valid_files:
         raise network.TransferError('No readable PC saves to copy, so nothing was copied. Choose another folder or skip.')
     clash = saves.case_clashes(scan.valid_files)
@@ -347,7 +384,7 @@ def copy(value, product, scan, expected, *, overwrite=False, factory=network.Con
                 part = folder+'/'+source.name+'.save-part'
                 cleanup_paths.update((part, part+'.builder-part'))
             for source, data in payloads:
-                network.check_cancel(cancelled)
+                network.check_cancel(cancelled, message=SAVE_STOPPED)
                 path = folder+'/'+source.name
                 part = path+'.save-part'
                 local = outgoing/source.name
@@ -358,7 +395,7 @@ def copy(value, product, scan, expected, *, overwrite=False, factory=network.Con
             # Ensure the save we confirmed is still the save being replaced.
             if snapshot(ftp, product, cancelled=cancelled).files != baseline:
                 raise SavesChanged()
-            network.check_cancel(cancelled)
+            network.check_cancel(cancelled, message=SAVE_STOPPED)
             # From here on live files change. Track each one, so any failure says exactly what the card holds.
             live = {name.casefold(): name for name in baseline}
             incoming = {s.name.casefold() for s, _ in payloads}
@@ -396,18 +433,18 @@ def copy(value, product, scan, expected, *, overwrite=False, factory=network.Con
             except (OSError, EOFError, ftplib.Error) as exc:
                 if isinstance(exc, ftplib.Error) and str(exc)[:3] in ('452', '552'):
                     cause = 'the 3DS SD card is full'
-                elif network.delivery_error(exc) is not exc:
+                elif delivery_error(exc) is not exc:
                     cause = 'the connection to the 3DS was lost'
                 else:
                     cause = str(exc) or type(exc).__name__
                 raise IncompleteImport(cause, folder, backup, original, payloads, states) from exc
             return saves.SaveCopyResult(len(staged), sum(len(data) for _, data in payloads), backup,
                                         [s.name for s in scan.valid_files], len(original.files))
-    except network.Cancelled:
+    except network.Cancelled as stopped:
         # Publication deliberately ignores Cancel. Reaching this handler means this attempt has not changed
         # live saves; keep any backup inherited from a previous, partially published attempt.
         if not cleanup_paths and not created_backup:
-            raise
+            raise network.Cancelled(retry_message(SAVE_STOPPED, resume=resume is not None)) from stopped
         try:
             # The data socket is closed, but ftpd may still be finishing STOR. Wait for its command stream
             # before cleanup so the interrupted upload cannot recreate a deleted temporary file.
@@ -425,17 +462,17 @@ def copy(value, product, scan, expected, *, overwrite=False, factory=network.Con
                 raise network.TransferError('The save transfer did not stop cleanly.')
         except (OSError, EOFError, ftplib.Error) as exc:
             raise network.Cancelled('Copy cancelled. The connection was lost before temporary save files '
-                                    'could be removed. Keep ftpd open and try again.') from exc
+                                    'could be removed. Keep ftpd open and choose Next again to retry.') from exc
         finally:
             ftp.close()
         try:
             clean_cancelled_copy(value, factory, cleanup_paths, created_backup)
         except (OSError, EOFError, ftplib.Error) as exc:
             raise network.Cancelled('Copy cancelled. Some temporary save files could not be removed. '
-                                    'Keep ftpd open and try again.') from exc
-        raise
+                                    'Keep ftpd open and choose Next again to retry.') from exc
+        raise network.Cancelled(retry_message(SAVE_STOPPED, resume=resume is not None)) from stopped
     except (OSError, EOFError, ftplib.Error) as exc:
-        translated = network.delivery_error(exc)
+        translated = delivery_error(exc, resume=resume is not None)
         if translated is exc:
             raise
         raise translated from exc

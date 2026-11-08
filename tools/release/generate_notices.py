@@ -116,16 +116,28 @@ def generate(root, manifest, catalogue):
     return '\n'.join(sections)
 
 
+def bundle_path(root, manifest):
+    """The checked-in bundle that the manifest exports under its standard name."""
+    mapped = [line.strip().removeprefix('#map THIRD_PARTY_NOTICES <- ')
+              for line in manifest.read_text(encoding='utf-8').splitlines()
+              if line.strip().startswith('#map THIRD_PARTY_NOTICES <- ')]
+    if len(mapped) > 1:
+        raise ValueError('duplicate notice bundle map')
+    if mapped and not local(root, mapped[0]).is_file():
+        mapped = []
+    return local(root, mapped[0] if mapped else 'THIRD_PARTY_NOTICES')
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--manifest', default='tools/release/manifest-ut.txt')
     parser.add_argument('--catalogue', default='tools/release/notices.json')
-    parser.add_argument('--output', default='THIRD_PARTY_NOTICES')
+    parser.add_argument('--output', help='defaults to the manifest\'s notice bundle source')
     parser.add_argument('--check', action='store_true')
     args = parser.parse_args()
     try:
         result = generate(ROOT, local(ROOT, args.manifest), local(ROOT, args.catalogue))
-        output = local(ROOT, args.output)
+        output = local(ROOT, args.output) if args.output else bundle_path(ROOT, local(ROOT, args.manifest))
         if args.check:
             if not output.exists() or output.read_text(encoding='utf-8') != result:
                 raise ValueError('notices are stale; rerun generate_notices.py')

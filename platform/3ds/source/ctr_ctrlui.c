@@ -6,8 +6,9 @@
 // - Buttons: Nothing, Confirm, Cancel, Menu, Up, Down, Left, Right. The D-pad, Circle Pad and C-stick: Move or
 //   Nothing. Confirm is Z (Enter on START, as by default), Cancel X, Menu C; a saved Shift or Ctrl shows as Cancel
 //   or Menu, which is what they do. ZL, ZR and the C-stick are grey on an Old 3DS (the cursor passes over them).
-// - Layout: left, right or A switch Default and B confirms (from Custom: Default). The main page's Controls row does
-//   the same on left or right (it did nothing before), and A there opens this page.
+// - Layout: right or A step Default, B confirms, Custom, and left steps back; Custom is in the cycle once a custom map
+//   has been seen, and comes back unchanged (ctlLayoutCycle). The main page's Controls row does the same on left or
+//   right (it did nothing before), and A there opens this page.
 // - B or Back: the options page, its cursor on Controls. SELECT: back to the game, as from the menu's other pages.
 // - A change that would take the last Confirm, Cancel, Menu or Move (a pad on Move, or all four directions on
 //   buttons) off the buttons this model has is refused, the help line saying why (review R117 F1): no layout can
@@ -16,8 +17,8 @@
 // Hooked with two call changes in ctr_optmenu.c (optActivate's Controls row calls CtrCtrlui_main, and optKeys hands
 // the keys of a page other than its own to CtrCtrlui_update instead of the screens' menu), both functions keeping
 // their slots. While the page is up, menu->page is MENU_PAGE_CONTROLS, so optmenu's flush copies the menu screen's
-// spare buffer (where this page is drawn, as the legal pages are) to the shown one each frame; optKeys has already
-// played the menu's sound for the press and marked the options page to be drawn again when it comes back.
+// spare buffer (where this page is drawn, as the legal pages are) to the shown one each frame; a press that changed
+// something has the menu's sound (optKeysHeard), and optKeys marks the options page to be drawn again when it comes back.
 // Drawn as optmenu's optCompose draws a page: the same frame, rows 14 px apart, label at x 24, value at x 148, the
 // heart at x 11, the help line at y 221, yellow for the cursor's row and grey for one that can't change. Glyphs come
 // from optmenu's table (CtrOptmenu_text). All code and constants in .text.ctrlui_late / .rodata.ctrlui_in_text and the
@@ -44,6 +45,8 @@
 void CtrOptmenu_text(uint16_t* fb, int32_t x, int32_t y, const char* s, uint32_t col);
 CtrMenuAction CtrCtrlui_main(CtrMenu* menu, int32_t dir);
 CtrMenuAction CtrCtrlui_update(CtrMenu* menu, u32 down);
+static void ctlDrawHeard(const CtrMenu* menu); // the sound, then ctlDraw: at the file's end
+static void ctlLayoutCycle(CtrInputMap* map); // Layout's step, Custom kept: at the file's end
 
 enum { CTL_LAYOUT = MAP_ROW_COUNT, CTL_BACK, CTL_ROWS };
 #define CTL_WHITE 0xFFFFu
@@ -56,7 +59,7 @@ static const char ctlLabels[] CTL_RO = "A\0B\0X\0Y\0L\0R\0ZL\0ZR\0START\0D-pad\0
 static const char ctlJobs[] CTL_RO =
     "< Nothing >\0< Confirm >\0< Cancel >\0< Menu >\0< Up >\0< Down >\0< Left >\0< Right >\0< Move >";
 static const char ctlLayouts[] CTL_RO = "< Default >\0< B confirms >\0< Custom >";
-static const char ctlHelp[] CTL_RO = "Left or right: what this button does.\0Left or right: Default or B confirms.\0"
+static const char ctlHelp[] CTL_RO = "Left or right: what this button does.\0Left or right: change the layout.    \0"
                                      "Back to the options.\0New 3DS only.\0Keep a Confirm, Cancel, Menu and Move.";
 static const char ctlHeart[] CTL_RO = "\x01";
 #ifdef CTRPORT_PLAYER_SHOTS
@@ -126,7 +129,7 @@ CTL_CODE static uint32_t ctlLayout(const CtrInputMap* map) {
     return k[0] == GAME_KEY_X && k[1] == GAME_KEY_Z ? 1u : 2u;
 }
 
-// Default to B confirms, anything else to Default.
+// Default to B confirms, anything else to Default. (ctlLayoutCycle's two moves.)
 CTL_CODE static void ctlLayoutStep(CtrInputMap* map) {
     bool swap = ctlLayout(map) == 0;
     const uint8_t* from = ctlDefault;
@@ -198,7 +201,7 @@ CTL_CODE static void ctlDraw(const CtrMenu* menu) {
 // The main page's Controls row (optActivate): A (dir 0) opens the page, left or right switch the layout.
 CTL_CODE CtrMenuAction CtrCtrlui_main(CtrMenu* menu, int32_t dir) {
     if (dir != 0) {
-        ctlLayoutStep(&menu->settings.controls);
+        ctlLayoutCycle(&menu->settings.controls);
         menu->edited = true;
         return MENU_ACTION_CHANGED;
     }
@@ -206,7 +209,7 @@ CTL_CODE CtrMenuAction CtrCtrlui_main(CtrMenu* menu, int32_t dir) {
     ctl.row = 0;
     ctl.refused = false;
     menu->page = MENU_PAGE_CONTROLS;
-    ctlDraw(menu);
+    ctlDrawHeard(menu);
     return MENU_ACTION_NONE;
 }
 
@@ -227,7 +230,7 @@ CTL_CODE CtrMenuAction CtrCtrlui_update(CtrMenu* menu, u32 down) {
             else i = i + 1u == CTL_ROWS ? 0u : i + 1u;
         } while (MAP_ROW_COUNT > i && ctlGrey(i));
         ctl.row = (uint8_t) i;
-        ctlDraw(menu);
+        ctlDrawHeard(menu);
         return MENU_ACTION_NONE;
     }
     int32_t dir = (folded & KEY_DRIGHT) ? 1 : ((folded & KEY_DLEFT) ? -1 : 0);
@@ -238,19 +241,19 @@ CTL_CODE CtrMenuAction CtrCtrlui_update(CtrMenu* menu, u32 down) {
     }
     if (MAP_ROW_COUNT > i && ctlGrey(i)) return MENU_ACTION_NONE;
     uint8_t* keys = menu->settings.controls.keys;
-    if (i == CTL_LAYOUT) ctlLayoutStep(&menu->settings.controls);
+    if (i == CTL_LAYOUT) ctlLayoutCycle(&menu->settings.controls);
     else {
         uint32_t was = ctlMissing(keys), old = keys[i];
         ctlStep(&menu->settings.controls, i, dir);
         if (ctlMissing(keys) & ~was) {
-            keys[i] = (uint8_t) old; // refused, as optmenu refuses a grey row's change: its sound, no change
+            keys[i] = (uint8_t) old; // refused, as optmenu refuses a grey row's change: no sound, no change
             ctl.refused = true;
-            ctlDraw(menu);
+            ctlDrawHeard(menu);
             return MENU_ACTION_NONE;
         }
     }
     menu->edited = true;
-    ctlDraw(menu);
+    ctlDrawHeard(menu);
     return MENU_ACTION_CHANGED;
 }
 
@@ -266,4 +269,47 @@ __attribute__((noinline, section(".text.ctrlui_open"))) void CtrCtrlui_openPage(
     CtrLog_beginConsole();
     consoleSelect(menu->console);
     CtrLog_endConsole();
+}
+
+// Calls retargeted, so that their functions keep their sizes: every draw here but a refusal's follows a change (a new
+// row, value, layout or the page itself), and the sound comes before it.
+void CtrOptmenu_pressSound(void);
+__attribute__((noinline, section(".text_menupress"))) static void ctlDrawHeard(const CtrMenu* menu) {
+    if (!ctl.refused) CtrOptmenu_pressSound();
+    ctlDraw(menu);
+}
+
+// Held Up or Down has a row to go to (optHoldTick): the list's end stops a hold, without a wrap.
+bool CtrCtrlui_holdMoves(u32 key);
+__attribute__((noinline, section(".text_menuhold"))) bool CtrCtrlui_holdMoves(u32 key) {
+    return ctl.row != (key == KEY_DUP ? 0u : CTL_ROWS - 1u);
+}
+
+// Layout's step (polish audit, as Smoothing does): left or right on Custom used to make it
+// Default, and the custom map was gone. Custom now stays in the cycle Default, B confirms, Custom and comes back byte
+// for byte. The map is kept here from the moment Layout leaves it, for as long as the game runs: settings.ini holds
+// only the map in use, so one left behind on Default or B confirms doesn't outlive a restart. Without a custom map the
+// cycle is the two presets, as before. Reached by two retargeted calls, so that neither caller moves (RULES 3adf7ac34).
+#if defined(__3DS__) && defined(__GNUC__)
+#define CTL_CUSTOM __attribute__((section(".bss.menupress_late")))
+#else
+#define CTL_CUSTOM
+#endif
+bool CtrOptmenu_pressLeft(void);
+static struct { uint8_t keys[MAP_ROW_COUNT]; bool have; } ctlCustom CTL_CUSTOM;
+__attribute__((noinline, section(".text_menupress"))) static void ctlLayoutCycle(CtrInputMap* map) {
+    uint32_t now = ctlLayout(map);
+    if (now == 2u) {
+        memcpy(ctlCustom.keys, map->keys, MAP_ROW_COUNT);
+        ctlCustom.have = true;
+    }
+    uint32_t count = ctlCustom.have ? 3u : 2u;
+    uint32_t next = now + (CtrOptmenu_pressLeft() ? count - 1u : 1u);
+    if (next >= count) next -= count;
+    if (next == 2u) {
+        memcpy(map->keys, ctlCustom.keys, MAP_ROW_COUNT);
+        return;
+    }
+    if (next == 1u && now != 0u) ctlLayoutStep(map); // Custom to B confirms goes by way of Default
+    ctlLayoutStep(map);
 }

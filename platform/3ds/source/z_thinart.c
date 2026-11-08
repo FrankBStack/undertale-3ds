@@ -70,6 +70,7 @@ static struct {
     int32_t item;
     char digest[65];
     bool known;
+    bool wait; // logsweep: every Smart copy was in use at entry; in the struct's padding, so .bss doesn't grow
 } ta __attribute__((section(".bss.late.thinart")));
 
 TA_TEXT CtrDataVersionResult Thinart_check(CTR_DATAVERSION_CHAIN_PARAMS) {
@@ -210,5 +211,86 @@ TA_TEXT void Thinart_endFrame(Renderer* r) {
         ta.room = r->runner->currentRoom;
         taRoomUpdate(r);
     }
+}
+
+// ===[ logsweep (S8b): the bubble after any number of Smart copies, and on GOG ]===
+//
+// The functions above are unchanged; these links wrap them (ctr_wrap_chain.h) and are appended after every other
+// late input (late_reserve.ld), so no earlier late code moves.
+#define TA_LINK __attribute__((noinline, section(".text_thinslot")))
+// The room's name again, after this code in late text: a use of taRoom here would reorder thinart's constants above.
+static const char taSlotRoom[] __attribute__((aligned(4), section(".rodata.thinslot_in_text"))) = "room_battle";
+
+// GOG's link (z_gogut.c) marks its file known only after Thinart_check returns, so it saw UNKNOWN and kept stock art.
+// An UNKNOWN answer still carries the file's full digest: taLoad's checks of the header's SHA-256, CtrPackKey and
+// CRC decide, as for a known file.
+TA_LINK CtrDataVersionResult Thinart_dataCheck(CTR_DATAVERSION_CHAIN_PARAMS) {
+    CtrDataVersionResult result = Thinart_check(path, game, part, cachePath, progress, cached, digest);
+    ta.wait = false;
+    if (result == CTR_DATA_UNKNOWN && digest != nullptr) {
+        ta.known = true;
+        memcpy(ta.digest, digest, 65);
+    }
+    return result;
+}
+
+// taLoad takes only an unused or free Smart copy, so after 16 copies in a session the bubble stayed stock. Before
+// taRoomUpdate would load, a full cache gives up its slot as smartCopySlot (ctr_renderer.c) would: the copy drawn
+// longest ago, never one drawn this frame or the one before (nothing queued samples it then; the renderer copies that
+// item again when it next draws it). If every copy is that recent, the load waits (no I/O, no log) and a later call
+// frees the slot and loads; leaving the room ends the wait.
+static TA_LINK void taMakeRoom(Renderer* r) {
+    Runner* runner = r->runner;
+    if ((ta.owner == r && !ta.wait) || !ta.known || r->dataWin == nullptr) return;
+    bool active = runner != nullptr && runner->currentRoom != nullptr && strcmp(runner->currentRoom->name, taSlotRoom) == 0;
+    if (active) {
+        int32_t group = RoomPlan_utstallGroup(runner);
+        active = group == 80 || group == 81;
+    }
+    if (!active || *(uint8_t*) ((char*) r + Smartiv_layout[8]) != Smartiv_layout[9]) {
+        ta.wait = false;
+        return;
+    }
+    int32_t slot = TA_COUNT(r) < 16 ? TA_COUNT(r) : 0;
+    while (slot < TA_COUNT(r) && TA_COPIES(r)[slot].tpag >= 0) slot++;
+    if (slot >= 16) {
+        uint32_t oldest = 1;
+        slot = -1;
+        for (int32_t i = 0; i < 16; i++) {
+            uint32_t age = TA_FRAME(r) - TA_COPIES(r)[i].usedFrame;
+            if (age > oldest) {
+                slot = i;
+                oldest = age;
+            }
+        }
+        if (0 > slot) {
+            ta.wait = true;
+            ta.owner = r; // taRoomUpdate then skips the load; its exit branch still clears this
+            ta.copy = nullptr;
+            return;
+        }
+        C3D_TexDelete(&TA_COPIES(r)[slot].tex);
+        TA_COPIES(r)[slot].tpag = -1; // stays free if taLoad then fails, as after smartCleanCopy's eviction
+    }
+    if (ta.wait) {
+        ta.wait = false;
+        ta.owner = nullptr;
+    }
+    ta.room = nullptr; // Thinart_endFrame loads this frame too, not only on a room change
+}
+
+TA_LINK void Thinart_slotPrefetch(Renderer* r) {
+    taMakeRoom(r);
+    Thinart_prefetchRoom(r);
+}
+
+TA_LINK uint32_t Thinart_slotCaps(Renderer* r) {
+    taMakeRoom(r);
+    return Thinart_caps(r);
+}
+
+TA_LINK void Thinart_slotEndFrame(Renderer* r) {
+    taMakeRoom(r);
+    Thinart_endFrame(r);
 }
 #endif

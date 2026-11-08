@@ -22,7 +22,8 @@ import products
 MAX_SAVE_BYTES = 65536
 IGNORED_SAVE_NAMES = {"steam_autocloud.vdf", "desktop.ini", "thumbs.db", ".ds_store"}
 IGNORED_SAVE_SUFFIXES = (".bak", ".tmp", ".part")
-READ_ONLY_MESSAGE = "%s is read-only.\nUnlock the SD card's Lock switch and try again."
+READ_ONLY_MESSAGE = ("The builder could not write to the SD card at %s. Check its free space and folder access. "
+                     "If you use an SD adapter with a Lock switch, check that it is unlocked, then try again.")
 NO_3DS_FOLDER_MESSAGE = ("Not a homebrew SD card (no 3ds folder).\n"
                          "Select your 3DS SD card root or create a 3ds folder.")
 
@@ -115,6 +116,7 @@ class SaveFile:
     detail: str = ""
     # The exact bytes that passed the checks above. An import writes these, never the file as it is later.
     data: bytes | None = dataclasses.field(default=None, repr=False, compare=False)
+    read_error: bool = False
 
     @property
     def valid(self) -> bool:
@@ -134,6 +136,7 @@ class SaveScan:
     folder: str
     files: list
     exists: bool = False
+    error: str | None = None
 
     @property
     def valid_files(self) -> list:
@@ -253,7 +256,9 @@ def inspect_save_file(path: str, game_key: str = "undertale") -> SaveFile:
         with open(path, "rb") as f:
             raw = f.read(MAX_SAVE_BYTES + 1)
     except OSError:
-        return SaveFile(name, path, 0, 0.0, "unknown", corrupt=True, detail="Corrupt (could not read file)")
+        return SaveFile(name, path, 0, 0.0, "unknown", corrupt=True,
+                        detail="Could not read this file. Check folder access or choose another folder.",
+                        read_error=True)
     # The file can change between stat and read; describe the bytes actually read.
     size = len(raw)
     if size == 0:
@@ -269,13 +274,13 @@ def inspect_save_file(path: str, game_key: str = "undertale") -> SaveFile:
 def _inspect_bytes(name, path, size, mtime, date, raw) -> SaveFile:
     low = name.lower()
     if b"\x00" in raw:
-        return SaveFile(name, path, size, mtime, date, corrupt=True, detail="Corrupt (name and LV could not be read)")
+        return SaveFile(name, path, size, mtime, date, corrupt=True, detail="Save format not recognized. Choose another save folder, or Skip.")
     try:
         text = raw.decode("utf-8-sig")
     except UnicodeDecodeError:
-        return SaveFile(name, path, size, mtime, date, corrupt=True, detail="Corrupt (name and LV could not be read)")
+        return SaveFile(name, path, size, mtime, date, corrupt=True, detail="Save format not recognized. Choose another save folder, or Skip.")
     if not _is_printable_text(text) or not text.strip():
-        return SaveFile(name, path, size, mtime, date, corrupt=True, detail="Corrupt (name and LV could not be read)")
+        return SaveFile(name, path, size, mtime, date, corrupt=True, detail="Save format not recognized. Choose another save folder, or Skip.")
 
     lines = text.splitlines()
 
@@ -286,7 +291,7 @@ def _inspect_bytes(name, path, size, mtime, date, raw) -> SaveFile:
         lv = _parse_lv(lines[1])
         if pname is None or lv is None:
             return SaveFile(name, path, size, mtime, date, corrupt=True,
-                            detail="Corrupt (name and LV could not be read)")
+                            detail="Save format not recognized. Choose another save folder, or Skip.")
         for extra in lines[2:]:
             s = extra.strip()
             if not s:
@@ -373,6 +378,9 @@ def validated_payloads(scan: SaveScan, game_key: str) -> list:
         data = sf.data
         if data is None:
             fresh = inspect_save_file(sf.path, game_key)
+            if fresh.read_error:
+                raise DeliverError("The builder could not read %s from the PC save folder. "
+                                   "Check access to that folder, then try again." % sf.name)
             if fresh.corrupt:
                 raise DeliverError("Can't read %s, so no saves were copied.\n"
                                    "Choose another folder or skip." % sf.name)
@@ -397,22 +405,28 @@ def _is_save_candidate(name: str, game_key: str = "undertale") -> bool:
 def scan_saves(folder, game_key="undertale") -> SaveScan:
     """Lists and inspects every save file in `folder` without writing anything."""
     folder, game_key = _resolve_folder_and_game(folder, game_key)
-    if not folder or not os.path.isdir(folder):
-        return SaveScan(folder or "", [], exists=False)
+    if not folder:
+        return SaveScan("", [], exists=False)
     try:
+        if not stat.S_ISDIR(os.stat(folder).st_mode):
+            return SaveScan(folder, [], exists=False)
         names = sorted(os.listdir(folder))
-    except OSError:
+    except FileNotFoundError:
         return SaveScan(folder, [], exists=False)
+    except OSError:
+        return SaveScan(folder, [], exists=True,
+                        error="The builder could not read the PC save folder %s. "
+                              "Check access, choose another folder, or Skip." % folder)
     files = []
     for name in names:
         if not _is_save_candidate(name, game_key):
             continue
         p = os.path.join(folder, name)
         try:
-            if not os.path.isfile(p):
+            if not stat.S_ISREG(os.stat(p).st_mode):
                 continue
         except OSError:
-            continue
+            pass  # Inspect it too: a listed save that cannot be read is not an empty folder.
         files.append(inspect_save_file(p, game_key))
     return SaveScan(folder, files, exists=True)
 
@@ -561,6 +575,12 @@ def copy_pc_saves(sd_root: str, product: products.Product, pc_scan_or_folder, ov
         raise DeliverError(NO_3DS_FOLDER_MESSAGE)
     pc_scan = (scan_saves(pc_scan_or_folder, product.key)
                if isinstance(pc_scan_or_folder, str) else pc_scan_or_folder)
+    if pc_scan.error:
+        raise DeliverError(pc_scan.error)
+    unreadable = [sf.name for sf in pc_scan.files if sf.read_error]
+    if unreadable:
+        raise DeliverError("The builder could not read %s from the PC save folder. "
+                           "Check access to that folder, then try again." % ", ".join(unreadable))
     if pc_scan.has_corrupt:
         bad = ", ".join(f.name for f in pc_scan.corrupt_files)
         raise DeliverError("Can't read %s, so no saves were copied.\n"
@@ -678,8 +698,12 @@ def copy_pc_saves(sd_root: str, product: products.Product, pc_scan_or_folder, ov
             shutil.rmtree(backup_dir, ignore_errors=True)
             raise DeliverError(BACKUP_MISMATCH_MESSAGE) from e
         err = write_error(sd_root, e)
-        if changing and backup_dir:
-            err = DeliverError("%s\nYour previous 3DS saves are in %s." % (err, backup_dir))
+        if changing:
+            message = ("Save copying stopped before it finished. Do not start the game yet. Reconnect the SD card "
+                       "and copy the same PC saves again to finish.")
+            if backup_dir:
+                message += " Your previous 3DS saves are backed up in %s." % backup_dir
+            err = DeliverError(message + "\nReason: " + str(e))
         raise err from e
 
     return SaveCopyResult(copied=len(pc_scan.valid_files), bytes_copied=bytes_copied, backup_dir=backup_dir,

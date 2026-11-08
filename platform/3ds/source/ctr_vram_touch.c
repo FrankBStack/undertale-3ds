@@ -84,6 +84,12 @@ bool __wrap_CtrTextures_addMirror(CtrTextureCache* cache, CtrTile* tile, void* v
 // this alias of vramTouchOn, so this file's code and statics stay as they were.
 __asm__(".globl CtrVramTouch_emulator\n.type CtrVramTouch_emulator, %function\n.set CtrVramTouch_emulator, vramTouchOn\n");
 
+// drawbatch: seam copies (z_seamcopy.c, UNDERTALE on the Old models) take their VRAM from CtrMemory_vramAllocTop too, and
+// aren't tiles' copies.
+#if defined(ENABLE_WAD16) && defined(CTRPORT_TARGET_O3DS) && !defined(CTRPORT_SMART_NO_DIRECT) && !defined(CTRPORT_SEAM_OFF)
+__asm__(".globl CtrVramTouch_touch\n.type CtrVramTouch_touch, %function\n.set CtrVramTouch_touch, vramTouch\n");
+#endif
+
 #ifdef CTRPORT_KNIGHTGPU_COMPACT_ON
 // Knight GPU A (change knightgpu): a surface moved within VRAM (ctr_renderer.c's kgcRun) and a spilled surface moved
 // into a gap the moves made (kgcPromote) take VRAM through CtrMemory_vramMoveTo and CtrMemory_vramAllocNow, which

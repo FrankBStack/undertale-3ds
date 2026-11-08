@@ -8,8 +8,8 @@
 // A layer over the card's device (the one ctr_open_files tracks, so every caller is under it: stat, fopen, open, the
 // game's file_exists) answers "no such file" at once for a name in the game folder that the folder's listing doesn't
 // have, and calls the card for everything else. Exact:
-// - The listing is made once, at the first lookup there. A listing error, a truncated read, or a name outside plain
-//   printable ASCII turns the layer off for the run (every call goes to the card).
+// - The listing is made once, at the first lookup there. A listing error turns the layer off for the run (every call
+//   goes to the card). So does a name outside plain printable ASCII on DELTARUNE; UNDERTALE skips such a name (gdList).
 // - Only names: a path into a folder below, a relative path, or a name FAT could match another way (an 8.3 alias with
 //   '~', a trailing dot or space, characters FAT refuses) is the card's to answer.
 // - Our creates add their name before they return: an open that may create, a rename's new name, mkdir, link. A write
@@ -80,6 +80,13 @@
 #else
 #define GD_RO __attribute__((section(".rodata_gamedir2_late")))
 #endif
+#endif
+
+// UNDERTALE skips a stray name the listing can't hold, where DELTARUNE's bytes still stop the listing (gdList; host
+// tests build it both ways).
+#if defined(ENABLE_WAD16) && !defined(ENABLE_WAD17)
+#define GD_SKIP_NAMES
+#define GD_SKIP_MAX 4096
 #endif
 
 #define GD_BITS 32768u
@@ -243,19 +250,49 @@ static GD_CODE bool gdList(struct _reent* r) {
     bool ok = gd.bits != NULL && dir.dirStruct != NULL && name != NULL && gd.real->diropen_r != NULL &&
               gd.real->dirnext_r != NULL && gd.real->diropen_r(r, &dir, gdDir()) != NULL;
     const char* why = gdWhyList;
+#ifdef GD_SKIP_NAMES
+    int skips = 0;
+#endif
     if (ok) {
+#ifdef GD_SKIP_NAMES
+        // A stray name in the folder (maintainer, 2026-11-06: "skip these files and any other files that could be
+        // problematic") must not cost every missing name a card lookup, every boot until the file is gone. On a normal
+        // install, a name outside plain ASCII left out of the listing can't change what a lookup finds: a lookup that
+        // could reach it by its own name or by an 8.3 alias (which has a '~' or a byte outside ASCII) is not plain, so
+        // gdName gives it to the card, and every other name is still listed, so it goes to the card as before.
+        // Two gaps are accepted because they cover a normal install, not arbitrary renamed files: a plain lookup whose
+        // only match is a skipped Unicode case-fold twin (U+212A for 'k') reads as missing, and so does a plain name of
+        // 255 bytes or more. A settings file renamed to such a twin could look absent.
+        // libctru's archive_dirnext has moved past the entry when it fails on converting its name: EILSEQ for bad
+        // UTF-16, ENAMETOOLONG for 255 or more UTF-8 bytes (the FS can give 765; it fills at most NAME_MAX of `name`, and
+        // returns none of it). Those two are skipped too, up to a cumulative 4,096 name-error limit in case a dirnext
+        // ever doesn't move: a hang at boot is worse. The limit counts only those errors; a read that succeeds moves on,
+        // so a non-ASCII name it returns doesn't count.
+#endif
         for (;;) {
             r->_errno = 0;
             if (gd.real->dirnext_r(r, &dir, name, &st) != 0) {
+#ifdef GD_SKIP_NAMES
+                if (r->_errno == EILSEQ || r->_errno == ENAMETOOLONG) {
+                    if (++skips < GD_SKIP_MAX) continue;
+                    why = gdWhyName;
+                }
+#endif
                 ok = r->_errno == ENOENT; // the end; anything else is an error
                 break;
             }
+#ifdef GD_SKIP_NAMES
+            const char* c = name;
+            while ((unsigned char) *c >= 0x20 && (unsigned char) *c <= 0x7e) c++;
+            if (*c != '\0') continue;
+#else
             for (const char* c = name; *c != '\0'; c++)
                 if ((unsigned char) *c < 0x20 || (unsigned char) *c > 0x7e) ok = false;
             if (!ok) {
                 why = gdWhyName;
                 break;
             }
+#endif
             gdBloom(name, true);
             found |= 1 << gdSettingsPart(name); // bit 1 settings.ini, 2 .tmp, 3 .new
             count++;

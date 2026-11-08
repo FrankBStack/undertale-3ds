@@ -21,6 +21,8 @@
 #include <string.h>
 
 #include "ctr_textures.h"
+#include "ctr_memory.h"
+#line 24
 #include "data_win.h"
 #include "gettime.h"
 #include "log.h"
@@ -143,6 +145,23 @@ static RL_CODE uint32_t rlGroupEnd(const DataWin* dw, uint32_t first, uint32_t* 
 // blocks the size of its reads, which filled the low holes the chapter's small long-lived blocks go to and pushed one
 // into the big region (DR44 Old: Chapter 5's bytecode no longer fitted).
 #define RL_ARENA_BLOCK (32u * 1024u)
+#if defined(ENABLE_WAD16)
+static uint8_t* upd1ArenaBlock(DataWin* dw, uint32_t size);
+static uint8_t* upd1Arena(DataWin* dw, uint32_t size);
+#endif
+#line 146
+#if defined(ENABLE_WAD16)
+#if defined(__arm__)
+// S2 rlArena is 276 B in all four UT targets; retain its entire slot.
+__attribute__((naked, noinline, section(".text.late.roomload")))
+static uint8_t* rlArena(DataWin* dw __attribute__((unused)), uint32_t size __attribute__((unused))) {
+    __asm__("b upd1Arena\n.space 272");
+}
+#else
+static RL_CODE uint8_t* rlArena(DataWin* dw, uint32_t size) { return upd1Arena(dw, size); }
+#endif
+#else
+#line 146
 static RL_CODE uint8_t* rlArena(DataWin* dw, uint32_t size) {
     size = (size + 3u) & ~3u;
     if (size > RL_ARENA_BLOCK / 4) {
@@ -166,6 +185,8 @@ static RL_CODE uint8_t* rlArena(DataWin* dw, uint32_t size) {
     return at;
 }
 
+#endif
+#line 169
 // Forgets the memory given to groups rl.groups[from..to) (it stays in the arena until the unload).
 static RL_CODE void rlUnplace(DataWin* dw, uint32_t from, uint32_t to) {
     for (uint32_t g = from; to > g; g++) {
@@ -735,4 +756,68 @@ CCFIX_CODE uint32_t ccRoomCode(Runner* runner, int32_t* out, uint32_t max) {
     }
     return 0;
 }
+#endif
+
+
+#if defined(ENABLE_WAD16)
+// ===[ upd1 R358-1: every optional arena allocation has a fallible block-list append ]===
+// Keep the arena and its accounting unchanged until both allocations succeed. In particular, the room load's
+// initial read has not passed through lcReserve. Plain realloc, with relief disabled as in lcReserve, must be
+// used here: stb_ds's checked growth aborts instead of letting this best-effort reader leave code for lazy loading.
+__attribute__((noinline, section(".text.late.upd1")))
+static uint8_t* upd1ArenaBlock(DataWin* dw, uint32_t size) {
+    uint8_t* block = (uint8_t*) malloc(size);
+    if (block == nullptr) return nullptr;
+    size_t capacity = arrcap(dw->codeArenaBlocks);
+    if ((size_t) arrlen(dw->codeArenaBlocks) == capacity) {
+        if (capacity > (SIZE_MAX - sizeof(stbds_array_header)) / (2u * sizeof(uint8_t*))) {
+            free(block);
+            return nullptr;
+        }
+        size_t want = capacity == 0 ? 4 : capacity * 2;
+        stbds_array_header* old = dw->codeArenaBlocks == nullptr ? nullptr : stbds_header(dw->codeArenaBlocks);
+        bool fresh = old == nullptr;
+        bool relief = CtrMemory_allowRelief(false);
+        stbds_array_header* list = (stbds_array_header*) realloc(old, sizeof(*list) + want * sizeof(uint8_t*));
+        CtrMemory_allowRelief(relief);
+        if (list == nullptr) {
+            free(block);
+            return nullptr;
+        }
+        if (fresh) {
+            list->length = 0;
+            list->hash_table = nullptr;
+            list->temp = 0;
+        }
+        list->capacity = want;
+        dw->codeArenaBlocks = (uint8_t**) (list + 1);
+    }
+    arrput(dw->codeArenaBlocks, block); // capacity is proven; no checked realloc can run
+    return block;
+}
+
+__attribute__((noinline, noipa, used, section(".text.late.upd1")))
+static uint8_t* upd1Arena(DataWin* dw, uint32_t size) {
+    size = (size + 3u) & ~3u;
+    if (size > RL_ARENA_BLOCK / 4) {
+        uint8_t* own = upd1ArenaBlock(dw, size);
+        if (own == nullptr) return nullptr;
+
+        dw->codeStats.residentBytes += size;
+        return own;
+    }
+    if (size > dw->codeArenaLeft) {
+        uint8_t* block = upd1ArenaBlock(dw, RL_ARENA_BLOCK);
+        if (block == nullptr) return nullptr;
+        dw->codeArena = block;
+
+        dw->codeArenaLeft = RL_ARENA_BLOCK;
+        dw->codeStats.residentBytes += RL_ARENA_BLOCK;
+    }
+    uint8_t* at = dw->codeArena;
+    dw->codeArena += size;
+    dw->codeArenaLeft -= size;
+    return at;
+}
+
 #endif

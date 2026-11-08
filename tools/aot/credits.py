@@ -124,7 +124,7 @@ def deltarune(chapters):
     return []
 
 
-def port(heading):
+def port(heading, game):
     out = []
     with open(PORT, encoding='utf-8') as f:
         for line in f.read().splitlines():
@@ -134,6 +134,9 @@ def port(heading):
                 out.append('')
             elif line[0] in 'HN':
                 out.append((heading if line[0] == 'H' else 'W') + line[1:])
+            elif line[0] == 'D':
+                if game == 'deltarune':
+                    out.append('W' + line[1:])
             else:
                 raise SystemExit('credits: bad line in %s: %r' % (PORT, line))
     return out
@@ -152,7 +155,7 @@ def credits(game, data):
             game_lines = deltarune([p for p in parts if 'chapter' in os.path.basename(os.path.dirname(p))])
     if not game_lines:
         print('credits: no %s credits found in the game data; the page has this port\'s only' % game.upper())
-    lines = game_lines + ([''] * 3 if game_lines else []) + port('Y' if game == 'undertale' else 'G')
+    lines = game_lines + ([''] * 3 if game_lines else []) + port('Y' if game == 'undertale' else 'G', game)
     return finish(game, lines)
 
 
