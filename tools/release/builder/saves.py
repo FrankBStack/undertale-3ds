@@ -497,9 +497,19 @@ def require_sd_save_path(sd_root, path):
     import install_record
     try:
         relative = os.path.relpath(path, sd_root).replace('\\', '/')
-        install_record.target(sd_root, relative)
-        if cleanup.linked(Path(path).absolute()):
-            raise OSError('linked save path')
+        current = install_record.target(sd_root, relative)
+        # Only the card's own folders are checked. How the computer reaches the card (/media on some Linux
+        # systems, /var and /tmp on macOS are links) is the installer's resolved root, as for the game files.
+        root = Path(sd_root).resolve()
+        if not current.is_relative_to(root):
+            raise OSError('Card root changed while checking saves')
+        while current != root:
+            try:
+                if cleanup.reparse(current.lstat()):
+                    raise OSError('linked save path')
+            except FileNotFoundError:
+                pass
+            current = current.parent
     except (OSError, ValueError) as exc:
         raise DeliverError('This card has a saves path that points to another folder. '
                            'No saves were replaced. Choose a card with ordinary folders for the game and saves.') from exc

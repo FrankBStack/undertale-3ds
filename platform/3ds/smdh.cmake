@@ -58,8 +58,9 @@ if(GIT_EXECUTABLE AND EXISTS "${ROOT}/.git")
     endforeach()
     execute_process(COMMAND "${GIT_EXECUTABLE}" rev-parse --show-toplevel WORKING_DIRECTORY "${ROOT}"
         RESULT_VARIABLE git_result OUTPUT_VARIABLE git_root OUTPUT_STRIP_TRAILING_WHITESPACE ERROR_QUIET TIMEOUT 10)
-    file(TO_CMAKE_PATH "${git_root}" git_root)
-    file(TO_CMAKE_PATH "${ROOT}" root_path)
+    # Git reports the top level with links resolved; compare it with the same form of this tree's root.
+    get_filename_component(git_root "${git_root}" REALPATH)
+    get_filename_component(root_path "${ROOT}" REALPATH)
     # Archives inside another checkout must not inherit its identity or lab label.
     if(git_result EQUAL 0 AND git_root STREQUAL root_path)
         execute_process(COMMAND "${GIT_EXECUTABLE}" rev-parse --short=7 HEAD WORKING_DIRECTORY "${ROOT}"

@@ -108,6 +108,37 @@ class LocalSafetyTests(unittest.TestCase):
         self.assertEqual({p.name: p.read_bytes() for p in outside.iterdir()},
                          {'file0': OLD, 'only-copy.txt': b'PLAYER DOCUMENT'})
 
+    def test_a_card_reached_through_a_linked_folder_imports_and_its_own_links_are_still_refused(self):
+        # Some Linux systems list a card under /media, itself a link to /run/media; macOS reaches /var the same way.
+        mounts = self.base/'mounts'
+        self.link(mounts, self.base)
+        card = mounts/'card'
+        self.assertEqual(saves.existing_sd_save_files(str(card), UT), [os.path.normpath(os.path.join(str(card), UT.sd_save_dir(), 'file0'))])
+        result = saves.copy_pc_saves(str(card), UT, self.scan, overwrite=True)
+        self.assertEqual(result.backed_up, 1)
+        self.assertEqual((self.live/'file0').read_bytes(), NEW)
+        self.assertEqual(next(self.live.glob('backup-*/file0')).read_bytes(), OLD)
+        # A link among the card's own folders is refused by this route too.
+        outside = self.base/'outside'
+        outside.mkdir()
+        (outside/'only-copy.txt').write_bytes(b'PLAYER DOCUMENT')
+        self.link(self.card/'inner', outside)
+        with self.assertRaisesRegex(saves.DeliverError, 'points to another folder'):
+            saves.require_sd_save_path(str(card), str(card/'inner'/'only-copy.txt'))
+        self.assertEqual((outside/'only-copy.txt').read_bytes(), b'PLAYER DOCUMENT')
+
+    def test_a_changed_card_root_refuses_instead_of_walking_forever(self):
+        import install_record
+        previous = self.base / 'previous-card' / 'file0'
+        original_lstat = Path.lstat
+        def bounded_lstat(path, *args, **kwargs):
+            self.assertNotEqual(path, path.parent, 'save walk escaped the selected card')
+            return original_lstat(path, *args, **kwargs)
+        with mock.patch.object(install_record, 'target', return_value=previous), mock.patch.object(Path, 'lstat', bounded_lstat):
+            with self.assertRaisesRegex(saves.DeliverError, 'No saves were replaced'):
+                saves.require_sd_save_path(str(self.card), str(self.live / 'file0'))
+        self.assertEqual((self.live / 'file0').read_bytes(), OLD)
+
     def test_staged_file_link_is_refused_without_touching_target(self):
         outside = self.base/'personal.txt'
         outside.write_bytes(b'KEEP')

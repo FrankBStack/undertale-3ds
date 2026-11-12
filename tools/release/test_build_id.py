@@ -1,4 +1,5 @@
 """A source archive gets its own stamp even inside a different Git checkout."""
+import os
 import pathlib
 import shutil
 import subprocess
@@ -35,6 +36,31 @@ class BuildIdTests(unittest.TestCase):
         result = self.run_cmake()
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn('"archive-1.2.3"', self.output.read_text())
+
+    def test_a_checkout_reached_through_a_linked_folder_keeps_its_commit(self):
+        # Git reports the top level with links resolved; this tree's root is compared in the same form.
+        env = dict(os.environ, GIT_CONFIG_NOSYSTEM='1', GIT_CONFIG_GLOBAL=os.devnull, GIT_TERMINAL_PROMPT='0')
+
+        def git(*args):
+            result = subprocess.run([GIT, *args], cwd=self.root, env=env, stdin=subprocess.DEVNULL,
+                                    capture_output=True, text=True, timeout=20)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            return result.stdout.strip()
+        git('init', '-q')
+        git('-c', 'core.autocrlf=false', 'add', '.')
+        git('-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.invalid', '-c', 'commit.gpgsign=false',
+            'commit', '-qm', 'Invented build fixture')
+        commit = git('rev-parse', '--short', 'HEAD')
+        link = self.root.parent / (self.root.name + '-link')
+        try:
+            link.symlink_to(self.root, target_is_directory=True)
+        except OSError:
+            self.skipTest('Host does not allow directory symlinks')
+        self.addCleanup(link.unlink)
+        self.source = link / 'platform/3ds'
+        result = self.run_cmake()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn('"%s"' % commit, self.output.read_text())
 
     def test_archive_aot_suffix_is_preserved(self):
         aot = self.root / 'aot'

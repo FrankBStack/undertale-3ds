@@ -134,6 +134,16 @@ class SmdhMetadata(unittest.TestCase):
             with self.subTest(game=game, model=model):
                 self.assertNotIn(version, self.query(game, model, mode='3dsx')[0])
 
+    def test_a_checkout_reached_through_a_linked_folder_names_its_commit(self):
+        # Git reports the top level with links resolved (macOS's /var, a linked home or projects folder).
+        commit = self.commit()
+        link = Path(self.temp.name) / 'linked source'
+        try:
+            link.symlink_to(self.root, target_is_directory=True)
+        except OSError:
+            self.skipTest('Host does not allow directory symlinks')
+        self.assert_launcher_build('source build ' + commit, root=link)
+
     def test_3dsx_description_in_a_checkout_git_cannot_read(self):
         (self.root / '.git').write_text('gitdir: gone\n')
         self.assert_launcher_build('source build')

@@ -18,9 +18,10 @@ if(GIT_EXECUTABLE)
     execute_process(COMMAND "${GIT_EXECUTABLE}" rev-parse --show-toplevel
         WORKING_DIRECTORY "${SOURCE_DIR}" RESULT_VARIABLE root_result
         OUTPUT_VARIABLE git_root OUTPUT_STRIP_TRAILING_WHITESPACE ERROR_QUIET TIMEOUT 10)
-    file(TO_CMAKE_PATH "${git_root}" git_root)
-    file(TO_CMAKE_PATH "${release_root}" release_root)
-    if(root_result EQUAL 0 AND git_root STREQUAL release_root)
+    # Git reports the top level with links resolved; compare it with the same form of this tree's root.
+    get_filename_component(git_real "${git_root}" REALPATH)
+    get_filename_component(root_real "${release_root}" REALPATH)
+    if(root_result EQUAL 0 AND git_real STREQUAL root_real)
     execute_process(COMMAND "${GIT_EXECUTABLE}" rev-parse --short HEAD
         WORKING_DIRECTORY "${SOURCE_DIR}"
         RESULT_VARIABLE result OUTPUT_VARIABLE hash OUTPUT_STRIP_TRAILING_WHITESPACE ERROR_QUIET TIMEOUT 10)
