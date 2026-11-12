@@ -4,23 +4,35 @@
 
 An unofficial fan port of UNDERTALE to the Nintendo 3DS.
 
+**LOOKING FOR PLAYTESTERS: If you are interested in playing the port early and own a copy of the game, please reach out to 3lit3hax on Discord.**
+
 > **Not released yet. There is nothing to download or install at the moment.**
 >
-> **The first release (UNDERTALE 1.0 beta) is planned for early November.** It will come with a builder, a program that builds the port from your game files.
+> **The first release (UNDERTALE 1.0 beta) is planned for mid-to-late November.** It will come with a builder, a program that builds the port from your game files.
 
 You build it from your own UNDERTALE copy.
 
 ## Status
 
-UNDERTALE beta 1.0: 99% there. Squashing the very last few bugs.
+UNDERTALE beta 1.0: Delayed. A change in project scope has pushed the release date back. Now aiming for a mid-to-late November release.
 
-DELTARUNE: In progress, chapters 1-5 will be prioritized after UNDERTALE releases.
+DELTARUNE: In progress. Chapters 1-5 will be prioritized after UNDERTALE releases.
+
+## Why is it delayed?
+
+I made the tough decision to hold the release back to add more planned 1.1/1.2 features to 1.0.
+
+Here are the new features that are WIP right now and will be added to beta 1.0:
+
+- Touch screen controls: Use the stylus to control the SOUL, skip dialogue, and select battle/menu options (90% there, more playtesting is required).
+- Split screen battle (3DS mode): Battles utilize both screens of the console. This is time-consuming, as multiple battles need to be adapted by hand so that they feel right (without altering gameplay).
+- Both of these features restrict code space and increase the work done per frame, causing the framerate to decrease in some fights that were previously stable. More optimization work is needed so that old consoles can hit a locked 30fps in all fights regardless of the battle mode.
 
 ## Known issues
 
-- When the game is open for a long time, audio caches accumulate which can cause slight stutter in heavy fights (e.g/ Omega Flowey).
-- Special Thanks drops a single frame at a single scene.
-- A couple of other bugs that have been caught and are being fixed.
+- Lag when 3DS mode (dual screen fights) is enabled.
+- 3DS mode has multiple fights that do not support split screen gameplay yet. These are being adapted.
+- Many other bugs tied to the new features mentioned above.
 
 ## Supported consoles (Every model)
 
@@ -45,7 +57,7 @@ No. There are no game code or assets in this repo. The builder constructs all pa
 Coming after beta 1.0's release, with initial n3ds/n2ds support (older console support will require a significant amount of work, so it will take some time, especially chapters 3-5).
 
 **Something looks or plays differently from the PC version.**
-Please open an issue, this port was designed to be 1:1 to the original game. If there are any inconsistencies, please let me know (or open a GitHub issue)!
+Please open an issue, this port was designed to be 1:1 to the original game. If there are any inconsistencies, please let me know!
 
 ## How it was made
 
