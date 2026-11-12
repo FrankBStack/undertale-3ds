@@ -36,7 +36,9 @@ def isolated_builder_host(folder):
         if roots is None:
             return []  # Do not even ask the OS which drives or mounts exist.
         roots = list(roots)
-        if any(not Path(os.path.abspath(path)).is_relative_to(temporary) or
+        # macOS reaches its temporary folder through a link (/var), so the spelled path may use either form.
+        spelled = {temporary, Path(os.path.abspath(tempfile.gettempdir()))}
+        if any(not any(Path(os.path.abspath(path)).is_relative_to(base) for base in spelled) or
                not Path(path).resolve().is_relative_to(temporary) for path in roots):
             raise AssertionError('Card discovery tests must supply temporary fixture roots.')
         bound.arguments['roots'] = roots
