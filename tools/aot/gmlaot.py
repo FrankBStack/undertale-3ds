@@ -360,12 +360,9 @@ UTFLAMES = True
 # which cells it may mark without a call (board_hit_body), with the operands it reads by name.
 # It returns 1 when it did the loop (on at aotb_<exit>) and 0 to run the generated loop. --no-boardgrid turns it off.
 BOARD_NATIVE = {0x956F0A35BE731E13: (0x1058, 0x1198)}
-# hitcheck aliases preserve the original bbox/pair calls in WAD17 (DELTARUNE).
-# Replacing only Collision_hitBBox/Collision_readBBox/Collision_hitPair with their WAD17 expansions
-# reproduces the preceding instance-place and sure-hit hashes exactly.
-BOARD_PLACE_BODY = "afdd7065c4af"
-BOARD_SIDES_BODY = "a63eac71035d"
-BOARD_HIT_BODY = "f25bc687cd84"
+BOARD_PLACE_BODY = "b4d2dd2d2431"
+BOARD_SIDES_BODY = "d9ac1960677f"
+BOARD_HIT_BODY = "2e111d44b748"
 BOARDGRID = True
 BOARD_TARGET = None   # --target
 LAYOUT_TAIL = 25   # --layout leaves the selection's last 25% of the files of generated code where they are
@@ -2981,8 +2978,7 @@ def main(argv):
         if r is not None:
             if late is not None:
                 late_entries.append(late)
-            import aacslot
-            funcs_out.append((aacslot.place(r[0], dw.wad, name, len(entries), TARGET), r[3]))
+            funcs_out.append((r[0], r[3]))
             func_keys.append((group_of[id(dw)], name))
             tables_out.append(r[1])
             entries.append(r[2])

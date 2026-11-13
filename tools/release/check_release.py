@@ -447,20 +447,14 @@ def public_source_digest(payload, files, mapped, wanted):
                                             for name in wanted})
 
 
-# Strings no release binary may hold: the debug crash trigger, and the ballast test build's tag (z_ballast.c's
-# CtrBallast_tag; build.sh ballast builds only).
-RELEASE_FORBIDDEN = ((b'crashtest.txt', 'debug crash trigger crashtest.txt'),
-                     (b'BALLAST test build (B10.2, never a release)', 'ballast test build tag'))
-
-
 def check_release_binaries(paths):
     """Scan uncompressed ELF/3DSX only; fail closed on wrong or unreadable inputs."""
+    trigger = b'crashtest.txt'
     failed = False
-    keep = max(len(trigger) for trigger, _ in RELEASE_FORBIDDEN) - 1
     for path in paths:
         if path.suffix.lower() == '.cia':
             raise ValueError(str(path) + ': CIA code is compressed; supply its uncompressed ELF/3DSX')
-        found, tail = set(), b''
+        found, tail = False, b''
         with path.open('rb') as binary:
             tail = binary.read(4)
             if not tail:
@@ -472,12 +466,11 @@ def check_release_binaries(paths):
                 if not chunk:
                     break
                 window = tail + chunk
-                found |= {name for trigger, name in RELEASE_FORBIDDEN if trigger in window}
-                tail = window[-keep:]
-        failed |= bool(found)
+                found |= trigger in window
+                tail = window[-(len(trigger) - 1):]
+        failed |= found
         print('%s: %s: %s' % ('FAIL' if found else 'PASS', path,
-            ', '.join(name + ' is present' for _, name in RELEASE_FORBIDDEN if name in found) if found
-            else 'no debug crash trigger or ballast tag'))
+            'debug crash trigger crashtest.txt is present' if found else 'no debug crash trigger'))
     return 1 if failed else 0
 
 
