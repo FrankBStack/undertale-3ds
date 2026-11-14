@@ -1,0 +1,164 @@
+static void onAptEvent(APT_HookType hook, void* param) {
+    CtrRenderer* r = param;
+    if (hook == APTHOOK_ONSUSPEND && gfxIsWide()) leaveWideMode();
+    if (hook == APTHOOK_ONRESTORE || hook == APTHOOK_ONWAKEUP) r->bottomBacklightOff = false;
+    if (hook == APTHOOK_ONRESTORE || hook == APTHOOK_ONWAKEUP || hook == APTHOOK_ONSUSPEND) r->displayDirty = true;
+}
+
+void CtrRenderer_beginFrame(Renderer* renderer) {
+    CtrRenderer* r = (CtrRenderer*) renderer; FW_T(fwB0);
+    processDeferredFrees(r);
+    parkIdleSurface(r);
+    // Outside the frame, so the copy can't interleave with queued GPU work.
+    r->screenshotCaptured = r->screenshotRequested;
+    r->screenshotTimingAffected = r->screenshotRequested || r->screenshotNoticeUntil != 0;
+    if (r->screenshotRequested) {
+        r->screenshotRequested = false;
+        bool saved = saveScreenshot(r, nullptr, true, r->screenshotPlayer);
+        r->screenshotSuffix[0] = '\0';
+        r->screenshotPlayer = false;
+        r->screenshotNoticeUntil = saved ? osGetTime() + 1000 : 0;
+        r->displayDirty = true;
+    }
+    if (r->screenshotNoticeUntil != 0 && osGetTime() >= r->screenshotNoticeUntil) {
+        r->screenshotNoticeUntil = 0;
+        r->displayDirty = true;
+    }
+    if (r->displayDirty) configureScreens(r);
+    dlgBeginFrame(r);
+    updateStereoTarget(r);
+    if (r->skip.cooldown > 0) r->skip.cooldown--;
+    // Fixed 2:1: the frame goes unshown without waiting, and its slot passes (CtrPacer_skipSlot); the next frame waits
+    // for the end of both. Never while the game reads the application surface or a screenshot is due.
+    r->skip.forced = r->skip.half && r->skip.forceNext && r->skip.cooldown == 0 && r->screenshotNoticeUntil == 0 && !r->screenshotRequested &&
+                     r->surfaceShotPath[0] == '\0';
+    r->skip.forceNext = false; FW_ACC(7, fwB0);
+    if (r->skip.forced) {
+        CtrPacer_skipSlot();
+        r->skip.active = true;
+    } else {
+        r->skip.active = !waitWithScreenshotNotice(r);
+    }
+    // After the wait, so the frame before keeps its own time: the main loop counts this to the new frame. The frames
+    // after it start late, but aren't skipped for it.
+    r->surfaceShotMs = 0.0; FW_T(fwB1);
+    if (r->surfaceShotPath[0] != '\0') {
+        uint64_t start = svcGetSystemTick();
+        saveScreenshot(r, r->surfaceShotPath, false, false);
+        r->surfaceShotPath[0] = '\0';
+        r->surfaceShotMs = (double) (svcGetSystemTick() - start) / (double) (SYSCLOCK_ARM11 / 1000);
+        if (r->skip.cooldown < 3) r->skip.cooldown = 3;
+    }
+    // After the screenshots of the frame before, and outside the frame.
+    updateAppResolution(r);
+    // The frame before may still be on the GPU; CtrRenderer_endFrame waits for it.
+    if (r->flicker.flags & FLICKER_NOOVERLAP) CtrGpu_waitIdle();
+    CtrGpu_frameBeginOverlapped(2 * CMDBUF_RESERVE_WORDS);
+    RENDER_TIMED(r, TIME_FRAME);
+    r->inFrame = true;
+    r->frame++;
+#ifdef CTRPORT_RENDER_TIMING
+    if (r->trace.wanted) traceBegin(r);
+#endif
+    if (r->probe.wanted) {
+        r->probe.wanted = false;
+        r->probe.frame = r->frame;
+        r->probe.listing = r->probe.batches;
+        probeCheckAll(r);
+    } FW_T(fwB2);
+    SEAM_BEGIN_FRAME(&r->textures, r->frame); FW_ACC(6, fwB2); FW_T(fwB4);
+    mirrorHotTiles(r); FW_ACC(13, fwB4); FW_T(fwB3);
+    if (r->palFrameTicks > r->palStats.worstTicks) {
+        r->palStats.worstTicks = r->palFrameTicks;
+        r->palStats.worstTexels = r->palFrameTexels;
+        r->palStats.worstFrame = r->frame - 1u;
+    }
+    if (r->palFrameTicks > r->palStats.worstLateTicks && r->textures.roomStartFrame + PAL_ENTRY_FRAMES < r->frame - 1u) {
+        r->palStats.worstLateTicks = r->palFrameTicks;
+        r->palStats.worstLateTexels = r->palFrameTexels;
+        r->palStats.worstLateFrame = r->frame - 1u;
+    }
+    r->palFrameTicks = 0;
+    r->palFrameTexels = 0;
+    r->palFrameCopies = 0;
+    r->palBehindLast = r->palBehind;
+    r->palBehind = UINT32_MAX;
+    r->palMixedBytes = 0;
+    for (ptrdiff_t i = 0; arrlen(r->palCopies) > i; i++) {
+        if (r->palCopies[i]->mixed && !r->palCopies[i]->stale) r->palMixedBytes += r->palCopies[i]->bytes;
+    }
+    if (r->palBytes > 0 && CtrTextures_roomThrashing(&r->textures)) palGiveBack(r);
+    else if ((r->frame & 31u) == 0) palAgeCopies(r);
+    palForgive(r);
+    palReclaim(r); FW_ACC(12, fwB3);
+
+    // This frame's vertices follow the last frame's (see makeVertexRoom).
+    r->frameVertexStart = r->vertexCount;
+    r->vertexLimit = VERTEX_CAPACITY;
+    r->vertexUsed = 0;
+    r->batchStart = r->vertexCount;
+    r->vertexFlushed = r->vertexCount;
+    r->batchTex = nullptr;
+    r->batchTexB = nullptr;
+    r->batchTexes[0] = nullptr;
+    r->batchTexCount = 1;
+    r->batchMultiOk = true;
+    r->batchPlainOnly = false;
+    // The last frame's end drew whatever was held.
+    r->addHold.mode = ADD_HOLD_OFF;
+    r->addHold.count = r->addHold.firstCount = r->addHold.passes = 0;
+    r->boundTarget = nullptr;
+    r->boundSurface = -1;
+    r->clearedTarget = nullptr;
+    r->spillBound = -1; // present() stored it when it bound the screen
+    r->spillLoadPending = false;
+    r->spillDirty = false;
+    r->boundTargetDrawn = false;
+    r->drawnSinceSplit = false;
+    r->savedAppStateValid = false;
+    memset(&r->frameStats, 0, sizeof(r->frameStats));
+
+    r->smallTextValid = false;
+    r->freshTextValid = false;
+
+    // The wrappers are in on skipped frames, and on shown ones while recordings wait (for them to be drawn first).
+    bool wrap = r->skip.active || arrlen(r->skip.recs) > 0;
+    if (wrap != r->skip.wrapped) {
+        setSkipWrappers(renderer, wrap);
+        r->skip.wrapped = wrap;
+    }
+    if (r->skip.active) {
+        // The screens keep the last frame, and the 3D slider waits for the next.
+        r->skip.skipped++;
+    } else {
+        C3D_RenderTargetClear(r->topTarget, C3D_CLEAR_ALL, 0x000000FF, 0);
+        float slider = sliderState(r);
+        r->stereoActive = r->topRightTarget != nullptr && slider > 0.0f;
+        if (r->stereoActive) C3D_RenderTargetClear(r->topRightTarget, C3D_CLEAR_ALL, 0x000000FF, 0);
+        updateDepthMode(r, slider);
+        if (r->bottomTarget != nullptr && !bottomLeftBlank(r)) C3D_RenderTargetClear(r->bottomTarget, C3D_CLEAR_ALL, 0x000000FF, 0);
+    }
+    applyAllState(r);
+    if (r->nativeCheck) promoteNativeSurfaces(r);
+    updateStereoDetail(r);
+    bindSurface(r, hostSurface(r));
+    setViewport(r, 0, 0, r->appW, r->appH, false);
+
+    r->grid.x = r->grid.y = r->grid.pick = false;
+    r->smart.active = r->smart.vertical = false;
+    r->smart.count = r->smart.merged = 0;
+    r->smart.pixels = 0;
+    r->gridMap.surface = -2;
+    CtrSurface* app = getSurface(r, renderer->runner->applicationSurfaceId);
+    if (app != nullptr) {
+        float scaleX, scaleY;
+        topScale(r, (float) app->width, (float) app->height, &scaleX, &scaleY);
+        r->grid.x = scaleX == 0.5f;
+        r->grid.y = scaleY == 0.5f;
+        r->grid.pick = r->grid.x && smoothingShown(r) != SMOOTHING_FULL && !r->depth.active;
+        r->smart.scaleX = scaleX;
+        r->smart.scaleY = scaleY;
+        r->smart.active = smoothingShown(r) == SMOOTHING_SMART && scaleY == 0.5f && (scaleX == 0.5f || scaleX == 1.0f) && !r->depth.active;
+        r->smart.vertical = scaleX == 1.0f || r->stereoActive;
+    } FW_ACC(8, fwB1);
+}

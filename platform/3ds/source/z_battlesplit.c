@@ -2910,3 +2910,16 @@ __attribute__((noinline, noipa, optimize("Os"), section(".text_stalecarry"))) bo
 }
 #endif
 #endif
+
+// Game-over presentation unit: presentation eligibility and automatic-role return only.
+#if defined(ENABLE_WAD16) && defined(__3DS__)
+#define GO_BS __attribute__((noinline, noipa, used, optimize("Os"), section(".text_gameoverscreen")))
+GO_BS bool CtrBattlesplit_gameoverOther(void) {
+    return bsState.armed || bsState.touch != 0;
+}
+void goTouchReturn(Renderer*, int32_t, int32_t, bool) __asm__("bsTouchMove");
+GO_BS void CtrBattlesplit_gameoverReturn(Renderer* renderer) {
+    if (bsState.touch != 0) goTouchReturn(renderer, renderer->runner->currentRoomIndex, -1, false);
+    if (CtrLayout_autoUp()) CtrLayout_moveUp(renderer, false);
+}
+#endif

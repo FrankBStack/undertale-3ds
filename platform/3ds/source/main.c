@@ -2469,3 +2469,13 @@ __attribute__((noinline, noipa, section(".text.late.dimlight"))) Result CtrDimli
     return CtrDimlight_lightsInit(top ? GSPLCD_SCREEN_TOP : GSPLCD_SCREEN_BOTTOM);
 }
 #endif
+
+#ifdef ENABLE_WAD16
+// S4's adopted black page, under the existing nonblocking console claim.
+// Only pointer rebinding: preserve painters; never clear or copy LCD pixels.
+__attribute__((noinline, noipa, used, section(".text_dlgretire_late"), optimize("Os")))
+void CtrDlgtop_bindConsoles(void* shown) {
+    statsConsole.frameBuffer = logConsole.frameBuffer = menuConsole.frameBuffer = shown;
+    CtrScreens_noteConsoles(shown, GSP_SCREEN_WIDTH * GSP_SCREEN_HEIGHT_TOP * 2u);
+}
+#endif

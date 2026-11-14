@@ -218,9 +218,11 @@ DLGTOP_CODE void CtrDlgtop_end(Renderer* renderer) {
         }
     }
     __real_CtrRenderer_endFrame(renderer);
-    // returnTop waits for idle/unlinks. It must run outside the GPU frame,
-    // after the final blank transfer, never between Draw and submission.
-    if (dlgtopLease.owner == r && (!r->dlg.shown || !dlgtopBoxOpen(r))) dlgtopReturn();
+    // Keep the loan after the existing black submission. Blocking retirement
+    // belongs to room/options/yield/destroy, outside ordinary play.
+    if (dlgtopLease.owner == r && (!r->dlg.shown || !dlgtopBoxOpen(r))) dlgtopClose();
 }
+#undef dlgtopBorrowed
+#undef dlgtopReturn
 #undef DLGTOP_CODE
 #endif

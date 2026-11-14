@@ -3,6 +3,8 @@
 GCC sees the original battletouch source and call graph. Only objcopy symbol
 names change afterward. The mutable claim boundary lives in touchquiz's tail;
 the original callback keeps its read-only ABI. A new reader/caller fails closed.
+Each edge is bound to its own caller: take2's one real CtrInput_take call is
+made through btRawTake (battletouch r2, BT2-1), the claim stays in take2.
 """
 from pathlib import Path
 import hashlib
@@ -14,6 +16,10 @@ import sys
 
 MARKER = '--touchquiz-compiler'
 ROUTES = {'__real_CtrInput_take': 'CtrTouchQuiz_buttons', 'CtrTouchExt_sample': 'CtrTouchQuiz_claim'}
+# The one function (and its section) each routed edge must sit in.
+CALLERS = {'__real_CtrInput_take': ('btRawTake', '.text_battletouchmenu'),
+           'CtrTouchExt_sample': ('Battletouch_take2', '.text_battletouch2')}
+BOUNDED = ('Battletouch_take2', 'btRawTake')
 
 
 def inventory(data):
@@ -37,8 +43,8 @@ def inventory(data):
             pool = data[strings[4]:strings[4]+strings[5]]
             for offset in range(sec[4], sec[4]+sec[5], sec[9]):
                 s = struct.unpack_from('<IIIBBH', data, offset)
-                if name(pool, s[0]) == 'Battletouch_take2':
-                    bounds.append((name(names, sections[s[5]][0]), s[1], s[1]+s[2]))
+                if name(pool, s[0]) in BOUNDED and s[3] & 15 == 2:
+                    bounds.append((name(pool, s[0]), name(names, sections[s[5]][0]), s[1], s[1]+s[2]))
         if sec[1] != 9:
             continue
         syms = sections[sec[6]]
@@ -49,15 +55,17 @@ def inventory(data):
             address, info = struct.unpack_from('<II', data, offset)
             s = struct.unpack_from('<IIIBBH', data, syms[4]+(info >> 8)*syms[9])
             edges.append((caller, address, info & 255, name(pool, s[0])))
-    return allocated, sorted(edges), bounds
+    return allocated, sorted(edges), sorted(bounds)
 
 
 def selected_edges(allocated, edges, bounds):
     selected = [e for e in edges if e[3] in ROUTES or e[3] in ROUTES.values()]
-    assert len(bounds) == 1 and bounds[0][0] == '.text_battletouch2', ('unqualified sampler', bounds)
-    section, start, end = bounds[0]
+    found = {b[0]: b[1:] for b in bounds}
+    assert len(bounds) == len(found) == len(BOUNDED) and all(
+        found[f][0] == s for f, s in CALLERS.values()), ('unqualified sampler', bounds)
     assert len(selected) == 2 and {e[3] for e in selected} == set(ROUTES), ('unqualified sampler edges', selected)
     for caller, at, kind, symbol in selected:
+        section, start, end = found[CALLERS[symbol][0]]
         assert caller == section and start <= at < end and kind == 28, ('unqualified sampler edge', symbol, caller, at, kind)
         word = struct.unpack_from('<I', allocated[caller][-1], at)[0]
         assert word >> 24 == 0xeb, ('sampler edge is not unconditional ARM BL', symbol, hex(word))

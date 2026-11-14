@@ -1489,3 +1489,41 @@ bool CtrLayout_otherText(void) {
 }
 #endif
 #endif
+
+// Game-over presentation unit: reassign held targets without allocating or consuming a carry.
+#if defined(ENABLE_WAD16) && defined(__3DS__) && !defined(CTR_LAYOUT_SETTINGS_ONLY)
+void goPlace(void*, LyTargets*, bool) __asm__("lyPlace");
+__attribute__((noinline, noipa, used, optimize("Os"), section(".text_gameoverscreen")))
+bool CtrLayout_gameoverRole(Renderer* renderer, bool below) {
+    LyTargets* t = lyRoot.targets;
+    if (t == nullptr || t->top == nullptr || t->bottom == nullptr || t->owner != renderer) return false;
+    if (!below && CtrScreens_onBottom) {
+        // utfade's black is already queued; the standard move carries black,
+        // never a revealed room. Protect both session-owned targets from delete.
+        LY_R(renderer, topTarget, C3D_RenderTarget*) = nullptr;
+        LY_R(renderer, bottomTarget, C3D_RenderTarget*) = nullptr;
+        if (!Layout_renderer.scanoutMove(renderer, false)) {
+            goPlace(renderer, t, true);
+            return false;
+        }
+    }
+    goPlace(renderer, t, below);
+    return true;
+}
+#endif
+
+// Idle dialogue loans keep ownership, not the LIGHT claim. Enum equality
+// alone cannot validate a descriptor after a renderer/target replacement.
+#if defined(ENABLE_WAD16) && !defined(CTR_LAYOUT_SETTINGS_ONLY)
+__attribute__((noinline, noipa, used, section(".text_dlgretire_late"), optimize("Os")))
+bool CtrLayout_dialogueLease(struct Renderer* renderer, struct C3D_RenderTarget_tag* target, int light) {
+    const LyTargets* t = lyRoot.targets;
+    if (t == nullptr || t->owner != (void*) renderer || t->top != target ||
+        LY_HOLDER18() != CTR_LAYOUT_TOP_DIALOGUE) return false;
+    if (light >= 0) {
+        if (light) lyRoot2.lent |= LY_LENT_LIGHT;
+        else lyRoot2.lent &= (uint8_t) ~LY_LENT_LIGHT;
+    }
+    return true;
+}
+#endif

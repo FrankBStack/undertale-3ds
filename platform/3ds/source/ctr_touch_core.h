@@ -321,7 +321,7 @@ static inline TOUCH_INLINE void Touch_follow(TouchState* s, int32_t x, int32_t y
             } else if (m->soulY - y * 16 > TOUCH_BLUE_ABOVE) {
                 // maintainer: "press above the heart and it jumps (tries to jump) toward the stylus". Up held: the game
                 // starts a jump only from the ground and cuts it when Up is let go, so the SOUL rises toward the
-                // pen and a pen held high jumps again on landing, as a held Up does. Never Down.
+                // pen. Never Down. One jump per stroke, none on landing (law v2): btBlue, z_battletouch.c.
                 out->hold |= TOUCH_KEY_UP;
             }
         }

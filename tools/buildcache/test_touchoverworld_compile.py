@@ -43,6 +43,18 @@ def test_extra_reader_rejected(tmp_path, source):
         adapter.main([adapter.MARKER, cc, '-O0', '-marm', '-DENABLE_WAD16', '-c', str(path), '-o', str(tmp_path / 'out.o')])
 
 
+def test_take2_continuation_edge_fails_closed_after_r2(tmp_path):
+    # Pre-r2 shape: the observer edge made from take2 rather than btRawTake is not the qualified caller.
+    cc = arm_tools('gcc')[0]
+    path = tmp_path / 'z_battletouch.c'
+    path.write_text('extern int CtrTouchQuiz_buttons(int);\n'
+        '__attribute__((noipa,section(".text_battletouchmenu"))) int btRawTake(int n) { return n + 1; }\n'
+        '__attribute__((noinline,section(".text_battletouch2"))) int Battletouch_take2(int n) '
+        '{ return CtrTouchQuiz_buttons(n) + btRawTake(n); }\n')
+    with pytest.raises(AssertionError, match='wrong continuation caller'):
+        adapter.main([adapter.MARKER, cc, '-O0', '-marm', '-DENABLE_WAD16', '-c', str(path), '-o', str(tmp_path / 'out.o')])
+
+
 def test_before_final_public_launcher():
     text = (ROOT / 'platform/3ds/CMakeLists.txt').read_text()
     assert text.index('get_target_property(touchoverworld_delegate') < text.index('get_target_property(p51_delegate')

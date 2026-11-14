@@ -1,0 +1,30 @@
+static inline __attribute__((always_inline)) void lyUpFlip18(void) {
+    if (CtrScreens_game != 1) lyRoot2.up18 &= (uint8_t) ~LY_UP_WAIT; // D2 (LAYD-1): a Game screen change ends the wait
+    if ((lyRoot2.up18 & LY_UP_ON) == 0 || CtrScreens_game == 0) return;
+    CtrScreens_game = 0;
+    CtrScreens_gameAtOpen = 1;
+    lyRoot2.up18 &= (uint8_t) ~LY_UP_ON;
+    LY_NOTE(lyUpPicked);
+}
+
+static LY_CODE18 void lyOptRow18(const CtrMenu* menu, uint32_t page, uint32_t i, LyOptRow* r) {
+    if (page == 0 && i == LY_OPT_GAME) lyUpFlip18();
+    CtrOptbattle_row(menu, page, i, r);
+    if (page != 0 || i > LY_OPT_DIALOGUE || !LY_UP18()) return;
+    if (i == LY_OPT_GAME) {
+        r->value = lyValBottom;
+        r->help = lyHlpBottom;
+    } else {
+        r->dis = true;
+        r->value = r->help = lyNeedsTop;
+    }
+}
+
+LY_CODE void CtrLayout_optRow(const void* menu, uint32_t page, uint32_t i, void* row) {
+    LyOptRow* r = row;
+    lyOptRow18((const CtrMenu*) menu, page, i, r);
+    const char* note = nullptr;
+    if (page == 0 && i == LY_OPT_GAME) note = CtrLayout_menuNoteFor(CTR_LAYOUT_ROW_GAME);
+    if (page == 0 && i == LY_OPT_DIALOGUE) note = CtrLayout_menuNoteFor(CTR_LAYOUT_ROW_TEXT);
+    if (note != nullptr) r->help = note;
+}

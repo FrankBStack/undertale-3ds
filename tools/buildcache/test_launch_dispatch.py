@@ -2590,7 +2590,9 @@ def test_c26rev4_archive_index_retargeted_to_a_header_inside_a_member(tmp_path):
 
 
 def thin_build(tmp_path, body):
-    """A build directory holding libthin.a, a thin archive (ar T) whose one member is ext/x.o outside it."""
+    """A build directory holding libthin.a, a thin archive (ar T) whose one member is ext/x.o outside it.
+    Deterministic (ar D): the member header's date is 0, not ext/x.o's mtime, so two builds of the same-size member
+    give the same container bytes even when a second boundary falls between them (ar U failed the N5 suite 11-14)."""
     ext, build = tmp_path / 'ext', tmp_path / 'build'
     for d in (ext, build, tmp_path / 'objs'):
         d.mkdir(parents=True, exist_ok=True)
@@ -2598,7 +2600,7 @@ def thin_build(tmp_path, body):
     lib = build / 'libthin.a'
     if lib.exists():
         lib.unlink()
-    subprocess.run([str(devkit('devkitARM/bin/arm-none-eabi-ar')), 'qcsTU', 'build/libthin.a', 'ext/x.o'],
+    subprocess.run([str(devkit('devkitARM/bin/arm-none-eabi-ar')), 'qcsTD', 'build/libthin.a', 'ext/x.o'],
                    cwd=tmp_path, stdin=subprocess.DEVNULL, check=True, capture_output=True, timeout=60)
     return build
 

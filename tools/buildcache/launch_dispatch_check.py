@@ -1307,12 +1307,19 @@ _TESTPROC = []
 
 def testproc():
     """tools/testproc.py, whose kill group (_Group) the probes run in: on Windows a job object the command joins
-    while still suspended, before it runs; elsewhere a new session."""
+    while still suspended, before it runs; elsewhere a new session. Loaded without writing bytecode: the first load
+    happens inside the first probe, after the source snapshot, and a tools/__pycache__ file written then made the
+    checker report its own write as NOT CLEAN (N5 suite 11-14)."""
     if not _TESTPROC:
         import importlib.util
         spec = importlib.util.spec_from_file_location('ctrport_testproc', ROOT / 'tools' / 'testproc.py')
         module = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(module)
+        before = sys.dont_write_bytecode
+        sys.dont_write_bytecode = True
+        try:
+            spec.loader.exec_module(module)
+        finally:
+            sys.dont_write_bytecode = before
         _TESTPROC.append(module)
     return _TESTPROC[0]
 

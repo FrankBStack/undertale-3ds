@@ -184,11 +184,6 @@
         "name": "psReadArt",
         "offset": 1832,
         "size": 184
-      },
-      {
-        "name": "lsPackRun",
-        "offset": 2016,
-        "size": 1844
       }
     ],
     ".text.h1hole.asgborder": [
@@ -678,11 +673,6 @@
         "name": "psReadArt",
         "offset": 1832,
         "size": 184
-      },
-      {
-        "name": "lsPackRun",
-        "offset": 2016,
-        "size": 1844
       }
     ],
     "__constants": {

@@ -13,6 +13,15 @@ def fixture(count=6, name='CtrRenderer_endFrame.part.0'):
 
 
 class Scope(unittest.TestCase):
+    def test_deferred_return_is_retained_by_existing_helper_pass(self):
+        before = ('\t.section .aacout.text.dlgtop4,"ax"\nold:\n\tbx lr\n'
+                  '\t.section .text_dlgretire_late,"ax"\nCtrDlgtop_menuOpen:\n\tbx lr\n'
+                  '\t.section .text.other,"ax"\nunrelated:\n\tbx lr\n')
+        after, sections = utwindow_compile.vine_extract.late_sections(before, 'dlgtop4')
+        self.assertIn('.text_dlgretire_late', sections)
+        self.assertIn('CtrDlgtop_menuOpen:', after)
+        self.assertNotIn('unrelated', after)
+
     def test_s4_helper_retains_tail_storage_without_ordinary_bss(self):
         before = ('\t.section .aacout.text.dlgtop4,"ax"\nhelper:\n\tbx lr\n'
                   '\t.type dlgtopLease, %object\n'

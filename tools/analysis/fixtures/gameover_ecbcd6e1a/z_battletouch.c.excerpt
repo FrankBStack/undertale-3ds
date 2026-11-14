@@ -1,0 +1,60 @@
+static BT_CODE3 void obRow(const CtrMenu* menu, uint32_t k, ObRow* r) {
+    uint32_t id = obOrder[k];
+    if (OB_LAYOUT > id) {
+        { void CtrLayout_optRow(const void*, uint32_t, uint32_t, void*); CtrLayout_optRow(menu, 0, id, r); } // layout's note
+        return;
+    }
+    bool below = Battletouch_zero18 != 0;
+    r->dis = false;
+    if (id == OB_LAYOUT) {
+        uint32_t split = CtrBattlesplit_setting() != 0;
+        r->label = obNth(OB_LBL_LAYOUT);
+        r->dis = below;
+        r->value = Battletouch_obValue18(below ? OB_NEEDS_TOP : OB_ORIGINAL + split);
+        r->help = Battletouch_obHelp18(below ? OB_NEEDS_TOP : OB_HLP_ORIGINAL + split);
+        return;
+    }
+    uint32_t mode = (uint32_t) btMode();
+    r->label = obNth(OB_LBL_STYLUS);
+    r->value = obNth(OB_OFF + mode);
+    r->help = Battletouch_obHelp18(OB_HLP_OFF + mode);
+}
+
+static BT_CODE3 uint32_t obCursor(void) {
+    uint32_t cur = CtrOptbattle_state.cur[0];
+    if (cur != OB_CONTROLS) obOn = 0;
+    uint32_t id = obOn != 0 ? OB_LAYOUT - 1u + obOn : cur;
+    for (uint32_t k = 0; OB_ROWS > k; k++) {
+        if (obOrder[k] == id) return k;
+    }
+    return 0;
+}
+
+BT_CODE3 void CtrOptbattle_compose(const CtrMenu* menu, uint16_t* fb) {
+    if (CtrOptbattle_state.page != 0) {
+        CtrOptbattle_composeOriginal(menu, fb);
+        return;
+    }
+    uint16_t* p = fb;
+    for (uint32_t x = 0; 320u > x; x++) {
+        for (uint32_t y = 0; 240u > y; y++) *p++ = (x - 2u >= 316u || y - 2u >= 236u || y == 25u) ? 0xFFFFu : 0u;
+    }
+    uint32_t sel = obCursor();
+    for (uint32_t k = 0; OB_ROWS > k; k++) {
+        ObRow r;
+        Battletouch_obRowGrey(menu, k, &r);
+        int32_t y = obY[k];
+        uint32_t col = r.dis ? 0x8410u : (k == sel ? 0xFFE0u : 0xFFFFu);
+        CtrOptmenu_text(fb, 24, y, r.label, col);
+        CtrOptmenu_text(fb, 148, y, r.value, col);
+        if (k == sel) {
+            CtrOptmenu_text(fb, 11, y, obNth(OB_HEART), 0xF800u);
+            CtrOptmenu_text(fb, 12, 221, r.help, 0xFFFFu);
+        }
+    }
+}
+
+static BT_CODEG void btObRowGrey(const CtrMenu* menu, uint32_t k, ObRow* r) {
+    Battletouch_obRowOld(menu, k, r);
+    if (obOrder[k] == OB_STYLUS && CtrBattlesplit_setting() == CTR_BATTLE_LAYOUT_TOP) r->dis = true;
+}

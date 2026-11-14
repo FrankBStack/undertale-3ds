@@ -1,0 +1,10 @@
+MT_CODE void CtrMenutime_open(CtrMenu* menu, PrintConsole* console, const CtrDisplaySettings* settings, CtrDisplayCaps caps) {
+    mtBegin(MT_OPEN);
+    mtg.previewsDue = true;
+    mtg.idle = 0;
+    mt.timing = true;
+    mt.openStart = mtTick();
+    Upd1_menuOpen(menu, console, settings, caps);
+    mt.openTicks = mtTick() - mt.openStart;
+    mt.timing = false;
+}

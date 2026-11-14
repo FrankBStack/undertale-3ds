@@ -1,0 +1,9 @@
+UPD1_CODE void Upd1_menuOpen(CtrMenu* menu, PrintConsole* console,
+                           const CtrDisplaySettings* settings, CtrDisplayCaps caps) {
+    // As in main's normal close path, compare against the snapshot from open:
+    // a --ini override alone must not become a persistent menu edit.
+    upd1Options.before = *settings;
+    upd1Options.display = settings;
+    upd1Options.menu = menu;
+    CtrArgui_menuOpen(menu, console, settings, caps);
+}

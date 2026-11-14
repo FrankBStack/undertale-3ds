@@ -1401,7 +1401,14 @@ typedef struct {
 // NULL until the first game-screen swap; 1 if that allocation failed (nothing is recorded then).
 CtrHeldslowState* CtrHeldslow_state __attribute__((section(".data.heldslow_late"))) = NULL;
 Runner* CtrHeldslow_liveRunner(void); // main.c's liveRunner (its appended late text)
+#if defined(ENABLE_WAD16)
+void CtrHeldslow_realSwap(gfxScreen_t screen, bool hasStereo) __asm__("CtrTap_finalSwap");
+#else
+#line 1426
 void CtrHeldslow_realSwap(gfxScreen_t screen, bool hasStereo) __asm__("__real_gfxScreenSwapBuffers");
+#endif
+#line 1426
+
 void __real_CtrScreens_pacerSwap(gfxScreen_t screen, bool hasStereo);
 void __wrap_CtrScreens_pacerSwap(gfxScreen_t screen, bool hasStereo);
 void CtrHeldslow_swap(gfxScreen_t screen, bool hasStereo);

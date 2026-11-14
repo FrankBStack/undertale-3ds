@@ -730,6 +730,7 @@ typedef struct BtLive {
     bool fixFlip;              // btMenuFix changed the press on that frame (a button, the rows, a picked-up stroke)
     bool fixWait;              // that frame's newest sample waited (Touch_pen's jump): the core used the one before
     int8_t back;               // at the buttons, a lit stroke released off them: 1 + the cursor to put back (btTake)
+    uint8_t jump;              // the blue SOUL's jump for this stroke (btBlue): 0 none or spent, 1 its chance, 2 jumping
 } BtLive;
 
 // The pen log (lead 11-08): test builds write the pen's samples to the log as one [pen] line a while after the pen
@@ -948,10 +949,37 @@ static BT_CODE void btLetGo(BtLive* L, bool pen) {
     Touch_reset(&L->s);
 }
 
+// take2's one call of the real CtrInput_take goes through here (r2, c26rev5 BT2-1): the buttons' pressed keys as
+// the latch gave them, before the stylus's merge. A key pressed and let go between two takes comes back held 0 but
+// pressed, so the look's player-key test (btTakeM, which reads them on the same take) reads these, not
+// take2's held keys. noipa: take2 calls it as it called CtrInput_take, and its bytes stay as built.
+#ifdef PLATFORM_3DS
+// An underscore section name needs explicit NOBITS, as the port's other late state does (z_menulag.c's pattern).
+#define BT_BSSM __attribute__((section(".bss_battletouchmenu,\"aw\",%nobits @")))
+#else
+#define BT_BSSM __attribute__((section(".bss_battletouchmenu")))
+#endif
+static uint32_t btRawPressed BT_BSSM;
+static __attribute__((noipa, section(".text_battletouchmenu"))) CtrInputEdges btRawTake(const CtrInputMap* map,
+        uint32_t held, uint32_t down, bool enabled, bool suppressHeld, CtrInputStats* stats) {
+    CtrInputEdges e = __real_CtrInput_take(map, held, down, enabled, suppressHeld, stats);
+    btRawPressed = e.pressed;
+    return e;
+}
+
 bool Battletouch_view(Runner* runner, CtrBottomView* out); // the view, and the menus first (the file's end)
+// Unit M's code in the fourth pair's r2-drop pad (lead 11-14; late_reserve.ld's .text_battletouchfill: at most
+// __bt_paintgap4 B with runner.c's drawSelfLook): release builds; touch-test builds (pad 0) append it with the rest.
+#ifdef CTRPORT_TOUCH_TEST
+#define BT_FILL ".text_battletouchmenu"
+#else
+#define BT_FILL ".text_battletouchfill"
+#endif
+// take2's menu read (unit M): btRead_menu, then English ITEM's rectangles kept out of the edge strips (the file's end).
+static __attribute__((noinline, noclone, section(BT_FILL))) void btReadT(Runner* runner, TouchMenu* m, int32_t* slot);
 BT_CODE2 CtrInputEdges Battletouch_take2(const CtrInputMap* map, uint32_t held, uint32_t down, bool enabled, bool suppressHeld,
                                          CtrInputStats* stats) {
-    CtrInputEdges e = __real_CtrInput_take(map, held, down, enabled, suppressHeld, stats);
+    CtrInputEdges e = btRawTake(map, held, down, enabled, suppressHeld, stats);
     Runner* runner = bt.runner;
     if (runner == nullptr || btMode() == 0) return e;
     BtNames* names = bt.names;
@@ -1031,7 +1059,7 @@ BT_CODE2 CtrInputEdges Battletouch_take2(const CtrInputMap* map, uint32_t held, 
 #ifdef CTRPORT_TOUCH_TEST
         if (!shown && BT_SCRIPTED) shown = btTestView(runner, &view);
 #endif
-        if (shown) btRead_menu(runner, &m, &slot);
+        if (shown) btReadT(runner, &m, &slot);
         // The slot's reader knows red only: read every SOUL kind again.
         if (m.ctx == TOUCH_CTX_DEFENCE && btMode() == 2) {
             m.soul = TOUCH_SOUL_NONE;
@@ -1090,21 +1118,21 @@ BT_CODE2 CtrInputEdges Battletouch_take2(const CtrInputMap* map, uint32_t held, 
 
 // ===[ The slot's CtrInput_take wrap ]===
 
-// The slot's CtrInput_take wrap: a branch to btTake, then Battletouch_take2 (same arguments, same return), padded to
-// 021a570b8's size (0x8ac B, Old and New alike), so every symbol after it keeps its address. check_layout against
-// 021a570b8's ELF proves the size.
+// The slot's CtrInput_take wrap: a branch to btTake, then Battletouch_take2 (same arguments, same return). Its pad to
+// 021a570b8's size (0x8ac B) is now part of the battletouch hole (codediet B, 11-09; late_reserve.ld), which
+// keeps every later symbol where it was.
 #define BT_UNUSED __attribute__((unused))
 __attribute__((naked, noinline, section(".text.battletouch_late")))
 CtrInputEdges __wrap_CtrInput_take(BT_UNUSED const CtrInputMap* map, BT_UNUSED uint32_t held, BT_UNUSED uint32_t down,
                                    BT_UNUSED bool enabled, BT_UNUSED bool suppressHeld, BT_UNUSED CtrInputStats* stats) {
-    __asm__("b Battletouch_take\n\t.space 0x8a8\n"); // btTake (the file's end), then Battletouch_take2
+    __asm__("b Battletouch_take\n"); // btTake (the file's end), then Battletouch_take2
 }
 
 // ===[ Options: the Controls page's Battles row, and the Battles page (Layout, Stylus, Back) ]===
 //
 // The options menu's main page has no free row (New uses all 11), so the Battles page opens from the Controls page
-// (ctr_ctrlui.c, 11-08). That page is frozen late code, so nothing in it changes: optmenu's calls to
-// CtrCtrlui_main, CtrCtrlui_update and CtrCtrlui_holdMoves come here first (link wraps, UNDERTALE only).
+// (ctr_ctrlui.c, 11-08). Way B's main-page rows took its place, so CtrCtrlui_main, CtrCtrlui_update
+// and CtrCtrlui_holdMoves were never wrapped: the code below is in .text.battletouch_unused, which gc-sections drops.
 //
 // - The Controls page: rows 0-11 are the buttons, as before; then Battles, Layout and Back (y 176, 189 and 202, 13 px
 //   apart instead of 14, so Back's ink stays above the help line's rule at y 214). Its own code still draws
@@ -1150,11 +1178,11 @@ static struct {
     bool isNew;      // a New 3DS: ZL, ZR and the C-stick rows are usable
 } btm BT_STATE;
 
-// battlesplit's Layout setting (its strong definitions replace these where it is linked).
-__attribute__((weak)) BT_CODE int32_t CtrBattlesplit_setting(void) {
+// battlesplit's Layout setting (its strong definitions replace these where it is linked; then gc-sections drops these).
+__attribute__((weak, noinline, section(".text.battletouch_unused"))) int32_t CtrBattlesplit_setting(void) {
     return 0;
 }
-__attribute__((weak)) BT_CODE void CtrBattlesplit_setSetting(int32_t value) {
+__attribute__((weak, noinline, section(".text.battletouch_unused"))) void CtrBattlesplit_setSetting(int32_t value) {
     (void) value;
 }
 
@@ -1207,7 +1235,7 @@ static BT_CODE void bmControlsTail(const CtrMenu* menu) {
     bmRow(fb, 202, bmNth(BT_BACK), bmNth(BT_HEART) + 1, bmNth(BT_HLP_BACK), row == BM_BACK, false);
 }
 
-static BT_CODE void bmPageDraw(const CtrMenu* menu) {
+static __attribute__((noinline, section(".text.battletouch_unused"))) void bmPageDraw(const CtrMenu* menu) {
     uint16_t* p = (uint16_t*) menu->console->frameBuffer;
     uint16_t* fb = p;
     for (uint32_t x = 0; 320u > x; x++) {
@@ -1224,7 +1252,7 @@ static BT_CODE void bmPageDraw(const CtrMenu* menu) {
 }
 
 // The Battles page's keys. SELECT: back to the game; B or Back: the Controls page; left, right or A: change the row.
-static BT_CODE CtrMenuAction bmPageKeys(CtrMenu* menu, u32 down) {
+static __attribute__((noinline, section(".text.battletouch_unused"))) CtrMenuAction bmPageKeys(CtrMenu* menu, u32 down) {
     if (down & KEY_SELECT) return MENU_ACTION_RESUME;
     u32 folded = CTR_MENU_FOLD(down);
     uint32_t row = btm.pageRow;
@@ -1265,7 +1293,7 @@ static BT_CODE CtrMenuAction bmPageKeys(CtrMenu* menu, u32 down) {
 
 // The main page's Controls row: A opens the Controls page with the cursor on its first row; left or right change its
 // button layout (no page).
-BT_CODE CtrMenuAction __wrap_CtrCtrlui_main(CtrMenu* menu, int32_t dir) {
+__attribute__((noinline, section(".text.battletouch_unused"))) CtrMenuAction __wrap_CtrCtrlui_main(CtrMenu* menu, int32_t dir) {
     CtrMenuAction action = __real_CtrCtrlui_main(menu, dir);
     if (dir == 0 && menu->page == MENU_PAGE_CONTROLS) {
         APT_CheckNew3DS(&btm.isNew);
@@ -1276,7 +1304,7 @@ BT_CODE CtrMenuAction __wrap_CtrCtrlui_main(CtrMenu* menu, int32_t dir) {
     return action;
 }
 
-BT_CODE CtrMenuAction __wrap_CtrCtrlui_update(CtrMenu* menu, u32 down) {
+__attribute__((noinline, section(".text.battletouch_unused"))) CtrMenuAction __wrap_CtrCtrlui_update(CtrMenu* menu, u32 down) {
     if (menu->page != MENU_PAGE_CONTROLS) return __real_CtrCtrlui_update(menu, down);
     if (btm.onPage) return bmPageKeys(menu, down);
     uint32_t row = btm.ctlRow;
@@ -1307,7 +1335,7 @@ BT_CODE CtrMenuAction __wrap_CtrCtrlui_update(CtrMenu* menu, u32 down) {
 }
 
 // A held Up or Down repeats while there is a row to go to (the list's end stops it, without a wrap).
-BT_CODE bool __wrap_CtrCtrlui_holdMoves(u32 key) {
+__attribute__((noinline, section(".text.battletouch_unused"))) bool __wrap_CtrCtrlui_holdMoves(u32 key) {
     if (!btm.onPage) return __real_CtrCtrlui_holdMoves(key);
     return btm.pageRow != (key == KEY_DUP ? 0u : BP_ROWS - 1u);
 }
@@ -1536,6 +1564,8 @@ bool CtrScreens_benchLaunched(void);
 void CtrLog_beginConsole(void);
 void CtrLog_endConsole(void);
 u8* CtrPacer_backFramebuffer(gfxScreen_t screen, gfx3dSide_t side);
+u8* CtrTap_paintFramebuffer(gfxScreen_t, gfx3dSide_t);
+#line 1567
 u8* CtrPacer_shownFramebuffer(gfxScreen_t screen, gfx3dSide_t side, u16* width, u16* height);
 void __real_CtrScreens_pacerSwap(gfxScreen_t screen, bool hasStereo);
 void Battletouch_pacerSwap(gfxScreen_t screen, bool hasStereo);
@@ -1635,17 +1665,22 @@ static BT_CODE4 bool btHintPaint(uint8_t* fb, uint32_t bpp, uint32_t xMul, uint3
     return true;
 }
 
-static void btMenuPaint(BtLive* L); // the menus' lit button (the file's end)
-
 // The frames' swap (heldslow's wrap continues here, then to the real swap; ctr_frame_pacer.c's define). The game on top,
 // split: the line on each finished frame of the top screen before its flip (the GSP thread), where its rows are black:
-// BT_HINT_Y, else BT_HINT_Y2, kept once found. The bottom screen: a submenu's lit button (btMenuPaint) while its press
-// is held.
+// BT_HINT_Y, else BT_HINT_Y2, kept once found. The menus' lit and put-out buttons are drawn by touchui's draw hook
+// (CtrBattletouch_menuLook), not here.
+// The bottom screen's recolour that was here (btMenuPaint, and this function's call of it: 536 B) and the drag-off
+// rule's put-out (btMenuFix 160 B shorter, btMenuOff's 92 B gone; Old and New) left their pairs' text; late_reserve.ld
+// keeps those bytes as zero fill right after that text (public builds: 696 B in the fourth pair, 92 B in the fifth;
+// touch-test builds, where BT_CODE4 is the fifth pair: 788 B there), so no later code or constant moves.
+#ifdef CTRPORT_TOUCH_TEST
+__asm__(".global __bt_paintgap5\n.set __bt_paintgap5, 788\n");
+#else
+__asm__(".global __bt_paintgap4\n.set __bt_paintgap4, 696\n");
+__asm__(".global __bt_paintgap5\n.set __bt_paintgap5, 92\n");
+#endif
 BT_CODE4 void Battletouch_pacerSwap(gfxScreen_t screen, bool hasStereo) {
     BtLive* L = __atomic_load_n(&bt.live, __ATOMIC_ACQUIRE);
-    if (L != nullptr && screen == GFX_BOTTOM && __atomic_load_n(&L->menuLit, __ATOMIC_ACQUIRE) != 0
-        && L->s.mode == TOUCH_BUTTON && L->pen.pen)
-        btMenuPaint(L);
     // BT_HINT_GAMETOP is the 11-08 hint's place: the stylus hint (the section's end) never sets it.
     if (L != nullptr && screen == GFX_TOP && __atomic_load_n(&L->hintWhere, __ATOMIC_ACQUIRE) == BT_HINT_GAMETOP
         && CtrScreens_game == 0) {
@@ -1992,7 +2027,7 @@ static BT_HS_CODE bool btHintDraw(uint8_t* fb, uint32_t bpp, uint32_t x0, uint32
     return true;
 }
 
-// The frames' swap, after the menus' lit button (Battletouch_pacerSwap's last call): Split's line on each finished
+// The frames' swap (Battletouch_pacerSwap's last call): Split's line on each finished
 // bottom frame before its flip, where its band is black; a taken band keeps it off for the rest of the menu turn.
 static BT_HS_LINK void btHintSwap(gfxScreen_t screen, bool hasStereo) {
     BtLive* L = __atomic_load_n(&bt.live, __ATOMIC_ACQUIRE);
@@ -2001,7 +2036,7 @@ static BT_HS_LINK void btHintSwap(gfxScreen_t screen, bool hasStereo) {
         uint32_t level = __atomic_load_n(&L->hintLevel, __ATOMIC_ACQUIRE), len = L->hintLen;
         GSPGPU_FramebufferFormat format = gfxGetScreenFormat(GFX_BOTTOM);
         uint32_t bpp = format == GSP_BGR8_OES ? 3u : format == GSP_RGB565_OES ? 2u : 0u;
-        uint8_t* fb = level != 0u && bpp != 0u ? CtrPacer_backFramebuffer(GFX_BOTTOM, GFX_LEFT) : nullptr;
+        uint8_t* fb = level != 0u && bpp != 0u ? CtrTap_paintFramebuffer(GFX_BOTTOM, GFX_LEFT) : nullptr;
         if (fb != nullptr && !btHintDraw(fb, bpp, (320u - BT_HINT_IW(len)) / 2u, BT_HINT_ROW, len, level, true))
             __atomic_store_n(&L->hintWrite, true, __ATOMIC_RELAXED);
     }
@@ -2099,6 +2134,16 @@ __asm__(".global Battletouch_loadHint\n.set Battletouch_loadHint, btHintLoad\n"
         ".global Battletouch_hintSwap\n.set Battletouch_hintSwap, btHintSwap\n"
         ".global Battletouch_hintGlyphs\n.set Battletouch_hintGlyphs, btHintPaint\n");
 
+
+#if defined(ENABLE_WAD16) && defined(__3DS__)
+__attribute__((noinline, noipa, optimize("Os"), section(".text_fpsghost_hintpage")))
+bool CtrTap_hintBottom(void) {
+    BtLive* L = __atomic_load_n(&bt.live, __ATOMIC_ACQUIRE);
+    return L != nullptr && __atomic_load_n(&L->hintWhere, __ATOMIC_ACQUIRE) == BT_HINT_BOTTOM;
+}
+#endif
+
+#line 2135
 // ===[ The Battle layout row's help line after a refused layout (R10, 11-08) ]===
 //
 // After layout refused a set of places (not enough video memory for the two screens' targets, CtrLayout_menuNoteFor),
@@ -2133,12 +2178,12 @@ __asm__(".global Battletouch_obValue\n.set Battletouch_obValue, btObValue\n");
 // core alone would stop:
 // - in a submenu, the pen on a button (put down on it, or dragged onto it from the submenu's rows or anywhere) is a
 //   button press (the core's TOUCH_BUTTON), and it follows the pen from button to button. The button under the pen is
-//   lit by recolouring the bottom screen's pixels (btMenuPaint): nothing in the game changes, the submenu stays as it
-//   is. A release on it is the core's way there: the game's Cancel, one every other frame, to the buttons, then the
+//   lit on the screen by touchui's draw hook (menuLit and menuRect, read by CtrBattletouch_menuLook): nothing in the
+//   game changes, the submenu stays as it is. A release on it is the core's way there: the game's Cancel, one every other frame, to the buttons, then the
 //   cursor and Confirm (the open button: back to the buttons, nothing confirmed). Dragged off the buttons (maintainer 11-09),
-//   it stays a button press until the pen lifts: none lit, the open button put out, the rows not pressed; a release
-//   there chooses nothing. At the buttons, a stroke that lit one and is off them shows none lit, and its release
-//   puts the cursor back where the stroke found it;
+//   it stays a button press until the pen lifts: still lit, the open button still out, the rows not pressed; a release
+//   there chooses nothing, and the open one comes back only then (ask-stylus-dragoff). At the buttons, a stroke that
+//   lit one keeps it lit off them (the game's cursor), and its release puts the cursor back where the stroke found it;
 // - a stroke the core let go of (a pen put down where the stylus does nothing, a press whose menu changed) comes back
 //   when a new menu appears under the held pen, unless a button is held (the player's own keys win).
 // It runs inside take2's view call, which names Battletouch_view (a second name): the second pair changes call target
@@ -2235,14 +2280,6 @@ static BT_CODE4 __attribute__((noinline)) bool btOnButton(const TouchState* s, c
     int32_t item = back ? s->pItem : s->item;
     if ((back ? s->pLit : s->lit) && item >= 0 && Touch_inside(m->item[item], x, y, TOUCH_GROW)) return true;
     return Touch_hit(m->item, m->count, m->valid, x, y) >= 0;
-}
-// None lit on the screen: the button shown chosen (the open one, or the cursor's) put out. btMenuPaint's two rects
-// the same: nothing orange in it to light, its yellow put out.
-static BT_CODE5 void btMenuOff(BtLive* L, const CtrBottomView* v, TouchRect r, int32_t seamY,
-                                                         int32_t lift) {
-    btMenuRect(v, r, seamY, lift, L->menuRect[0]);
-    memcpy(L->menuRect[1], L->menuRect[0], sizeof(L->menuRect[0]));
-    __atomic_store_n(&L->menuLit, (uint8_t) 1, __ATOMIC_RELEASE);
 }
 static BT_CODE4 void btMenuFix(Runner* runner, CtrBottomView* v) {
     BtLive* L = bt.live;
@@ -2352,16 +2389,13 @@ static BT_CODE4 void btMenuFix(Runner* runner, CtrBottomView* v) {
         mode = TOUCH_PRESS;
     }
     if (m.ctx != TOUCH_CTX_MENU) return;
-    if (m.atButtons) {
-        // maintainer 11-09: a stroke that lit a button and is now off every button shows none lit (the cursor's button put
-        // out on the screen), so the picture says a release here chooses nothing; the release puts the cursor back.
-        if (mode == TOUCH_PRESS && s->id == m.id && s->item >= 0 && m.cursor >= 0 && !btOnButton(s, &m, false, x, y))
-            btMenuOff(L, v, m.item[m.cursor & 3], seamY, lift);
-        return;
-    }
-    // The button under the pen (a button press keeps its own while the pen is within its grown box, as the core's release).
-    int32_t k = mode == TOUCH_BUTTON && Touch_inside(m.button[s->item], x, y, TOUCH_GROW)
-                    ? s->item : Touch_hit(m.button, 4, m.buttonValid, x, y);
+    // At the buttons, a stroke that lit a button and is off every button keeps it lit (the game's cursor on it) until
+    // the pen lifts; the release puts the cursor back (above). Nothing to light here.
+    if (m.atButtons) return;
+    // The button under the pen. A button press keeps its own within its grown box (as the core's release), and off
+    // every button too: the pressed button stays lit and the open one out until the pen lifts (the drag-off rule).
+    int32_t k = Touch_hit(m.button, 4, m.buttonValid, x, y);
+    if (mode == TOUCH_BUTTON && (0 > k || Touch_inside(m.button[s->item], x, y, TOUCH_GROW))) k = s->item;
     bool down = !s->pen && mode == TOUCH_IDLE; // the core's pen-down makes the same button press
     if (k >= 0 && (down || mode == TOUCH_PRESS || mode == TOUCH_PAGE || mode == TOUCH_BUTTON)) {
         if (!down) {
@@ -2375,46 +2409,6 @@ static BT_CODE4 void btMenuFix(Runner* runner, CtrBottomView* v) {
             btMenuRect(v, m.button[m.openButton & 3], seamY, lift, L->menuRect[1]);
             __atomic_store_n(&L->menuLit, (uint8_t) 1, __ATOMIC_RELEASE);
         }
-    } else if (mode == TOUCH_BUTTON) {
-        // Off the buttons (maintainer 11-09: "the currently selected menu shouldnt re appear, it should only re appear on
-        // stylus release"): the stroke stays a button press until the pen lifts. None lit, the open button put out,
-        // the rows not pressed; a release here chooses nothing, and the open button comes back with it.
-        btMenuOff(L, v, m.button[m.openButton & 3], seamY, lift);
-    }
-}
-// The bottom screen's finished frame (the GSP thread, before its flip): the lit button's orange pixels turned yellow,
-// the open button's yellow ones orange, at the same brightness (the edges' blends with black keep their shade).
-static BT_CODE4 void btMenuPaint(BtLive* L) {
-    GSPGPU_FramebufferFormat format = gfxGetScreenFormat(GFX_BOTTOM);
-    uint32_t bpp = format == GSP_BGR8_OES ? 3u : format == GSP_RGB565_OES ? 2u : 0u;
-    uint8_t* fb = CtrPacer_backFramebuffer(GFX_BOTTOM, GFX_LEFT);
-    if (bpp == 0u || fb == nullptr) return;
-    for (uint32_t b = 0; 2u > b; b++) {
-        const uint16_t* r = L->menuRect[b];
-        uint8_t* c0 = fb + r[0] * 240u * bpp;
-        uint32_t n = (r[2] > r[0] ? (uint32_t) (r[2] - r[0]) : 0u) * 240u * bpp;
-        GSPGPU_InvalidateDataCache(c0, n);
-        for (uint32_t x = r[0]; r[2] > x; x++) {
-            for (uint32_t y = r[1]; r[3] > y; y++) {
-                uint8_t* q = fb + (x * 240u + 239u - y) * bpp;
-                uint32_t v = bpp == 2u ? (uint32_t) q[0] | (uint32_t) q[1] << 8 : 0u;
-                uint32_t R = bpp == 2u ? (v >> 11) << 3 : q[2], G = bpp == 2u ? (v >> 5 & 63u) << 2 : q[1];
-                uint32_t B = bpp == 2u ? (v & 31u) << 3 : q[0];
-                if (64u > R || B * 2u > R) continue;
-                // Orange (G about R / 2) to yellow (G = R, no blue); yellow (G about R) to orange.
-                bool orange = G * 4u > R && R * 3u > G * 4u;
-                if (b == 0u ? !orange : G * 4u < R * 3u) continue;
-                G = b == 0u ? R : R / 2u;
-                B = b == 0u ? 0u : R * 39u / 255u;
-                if (bpp == 2u) {
-                    v = (R >> 3) << 11 | (G >> 2) << 5 | B >> 3;
-                    q[0] = (uint8_t) v, q[1] = (uint8_t) (v >> 8);
-                } else {
-                    q[0] = (uint8_t) B, q[1] = (uint8_t) G;
-                }
-            }
-        }
-        GSPGPU_FlushDataCache(c0, n);
     }
 }
 static BT_CODE4 __attribute__((used)) bool btView(Runner* runner, CtrBottomView* out) {
@@ -2536,7 +2530,7 @@ static BT_CODE4 __attribute__((used)) CtrInputEdges btTake(const CtrInputMap* ma
 #endif
     return e;
 }
-__asm__(".global Battletouch_take\n.set Battletouch_take, btTake\n");
+__asm__(".global Battletouch_take0\n.set Battletouch_take0, btTake\n");
 
 // ===[ The relative touchpad: an Original battle on the top screen with nothing of it below (lead GO 11-09) ]===
 //
@@ -2710,6 +2704,345 @@ static BT_CODET bool btViewT(Runner* runner, CtrBottomView* out) {
 __asm__(".global Battletouch_menus0\n.set Battletouch_menus0, btView\n"
         ".global Battletouch_menus\n.set Battletouch_menus, btViewT\n");
 
+// ===[ The menus' look: no menu SOUL after a touch, all orange after a re-tap, ITEM's edges (battletouch r2, 11-13) ]===
+//
+// Three play-test asks (11-12), held to the reviewed contract (H3, D1, E1). The stylus UI's
+// draw hook (runner.c, the default sprite draw) owns the picture, the buttons' included: it reads
+// CtrBattletouch_menuHide, then asks CtrBattletouch_menuLook() about the instance being drawn, and leaves out the menu
+// SOUL or draws a button's frame 0 (its icon) in yellow or orange ink instead of the game's frame. This section keeps
+// the state behind the answer, and ITEM's edges. No existing byte
+// changes: btTake keeps its body and gets a second name (Battletouch_take0); Battletouch_take (the slot's branch)
+// names this section's btTakeM, which calls it first. Own sections (.text_battletouchmenu, .rodata_battletouchmenu,
+// .bss_battletouchmenu), appended after every older late tenant; the existing helpers are called, never copied.
+// - Provenance (CtrBattletouch_menuHide): set by an admitted menu touch (a stroke the core takes as a press in a menu:
+//   an item, a button, the page label, or the pen off them all, which follows onto one) with no key of the player's
+//   on that take. Cleared by the first physical press, in the battle menu, of a game key the menus read, by the
+//   logical key so a remap follows it: Z, X, C, Enter, Shift, Ctrl and the arrows (A, B, X, Y, START, the D-pad and
+//   Circle Pad as shipped; L, R, ZL, ZR and SELECT send none). Keys taken outside the menu (the defence, enemy speech,
+//   the FIGHT bar) leave it: it carries across turns. The stylus's own keys (a tap, a cancel, a confirm, an edge's
+//   Left or Right) are never the player's: take2 keeps those apart (its ePrev is the buttons' alone).
+// - The look (the query, at draw time, from the live setting and phase): the stylus on (Menus and SOUL, or Menus),
+//   provenance set in this battle, the battle in its menu (active 1, mnfight 0, myfight 0): at the buttons, or in a
+//   list the stylus can tap until the pen lights one of its options (then the stock heart, on that option, for as long
+//   as that list is up; a list entered again, or another, starts hidden). BT_LOOK_HIDE for the menu SOUL (obj_heart);
+//   BT_LOOK_FRAME0 for the chosen button (bmenucoord[0]; in a list, any, the open one: maintainer 11-12): its icon, yellow.
+//   Never the defence (the same instance), enemy speech, the FIGHT bar, ACT's or ITEM's text, the two-way choice,
+//   Japanese ITEM.
+// - A held stroke's lit or put-out button (what btMenuPaint recoloured; btMenuFix's menuLit, this frame): in a list, the
+//   pressed button BT_LOOK_FRAME0 (lit, yellow), on it or dragged off every button, and the open one BT_LOOK_FRAME0 |
+//   BT_LOOK_ORANGE (put out: plain frame 0) until the pen lifts; at the buttons nothing (the game's cursor is on the
+//   pressed button). Equal rects (only the open one out) are no longer set (ask-stylus-dragoff).
+// - All orange (BT_LOOK_ORANGE): set when a release on the open button goes back to the buttons (the core's cascade
+//   with no target). Cleared by the stylus's next confirm, the player's first menu key, or leaving the menu.
+// - ITEM's edges (English): no item's rectangle reaches the bottom screen's outer 32 px columns (btReadT, take2's
+//   menu read: unit M, maintainer 11-12), so a pen-down there is a press on nothing (or the page label's), and the core's
+//   press on nothing there is held from the core (TOUCH_DEAD, as the skip zone). Two pages: released in its column
+//   (4 px grown), the cursor goes to that side's column of its row (btWrite) and the game's own Left or Right turns
+//   the page. One page: its lift does nothing, and the stroke changes no look. Released elsewhere, under a key, or
+//   after the menu changed: nothing.
+// - Lifetime: Options (enabled false) keeps every flag and takes no key as the player's; the setting Off clears them.
+//   A new battle controller (a new battle, a replaced controller), none (the battle's end, the game over, a load)
+//   or another data file clears them.
+#define BT_CODEM __attribute__((noipa, used, section(".text_battletouchmenu")))
+#define BT_ROM __attribute__((section(".rodata_battletouchmenu")))
+// BT_BSSM: the menus' late state, NOBITS on 3DS (with btRawPressed, above).
+// The query's flags (BT_LOOK_HIDE, BT_LOOK_ORANGE, BT_LOOK_FRAME0) and the two exports, in one header shared with
+// touchui's draw hook (sonrev13 K2, 11-13). Three lines, as the three #defines were: no line below moves.
+#include "ctr_battletouch_look.h"
+#define BT_LOOK_KEYS (TOUCH_KEY_ABANDON | 1u << GAME_KEY_C | 1u << GAME_KEY_CTRL)
+#define BT_EDGE 32        // ITEM's edge columns, bottom-screen px
+typedef struct {
+    uint8_t orange;      // all orange
+    uint8_t shown;       // the list where the pen lit an option (bmenuno times 2, or 1: ITEM's pages one list)
+    uint8_t edge;        // the held stroke's ITEM edge: 1 left, 2 right; 0 none
+    uint8_t spare;
+    uint32_t edgeId;     // the menu the edge's stroke went down in
+    uint32_t controller; // the battle controller's instance id when provenance was set
+    const void* data;    // the data file then
+} BtLook;
+static BtLook btLook BT_BSSM;
+// H2 (sonrev13), D1 (lead 11-13): the one byte touchui's forwarder reads before it calls CtrBattletouch_menuLook()
+// (exported by this name, its only one). It means only: touch provenance is live and the setting is on. It is set
+// from the touch alone (btTakeM, on the take of the admitted touch, before that frame's game Step), never from the
+// menu's phase, so a menu the game opens on the touch's own frame is already hidden at that frame's draw. It is
+// cleared by the player's menu key, the setting Off, and a new or absent battle or data file. A stale 1 (the setting
+// just turned Off, the battle gone) is harmless: the query reads the live setting and phase at draw time. A stale 0
+// while the last menu input was a touch can't happen.
+uint8_t CtrBattletouch_menuHide BT_BSSM;
+#ifdef CTRPORT_TOUCH_TEST
+static const char btLookLog[] BT_ROM = "[touch] f=%lu look hide=%d orange=%d shown=%d edge=%d pulse=%03lx\n";
+#endif
+
+// The stylus on and this data file's names read: the runner, else none.
+static BT_CODEM Runner* btLookOn(void) {
+    Runner* runner = bt.runner;
+    BtNames* names = bt.names;
+    return runner != nullptr && names != nullptr && names->named && names->namesFor == runner->dataWin && btMode() != 0
+           ? runner : nullptr;
+}
+// Appended, out of the pad (28 B): the pad's room went to drawSelfLook's two-draw ink (M18, hiscase 11-14).
+static BT_CODEM void btLookReset(void) {
+    CtrBattletouch_menuHide = 0;
+    btLook.orange = btLook.shown = btLook.edge = 0;
+}
+// The battle's menu as the touch reads it (btRead_menu, into *m and *slot), when the battle is in it (btRead_menu's
+// menu context: active 1, mnfight 0, myfight 0; or the two-way choice, its id's top bit, left out): bmenuno times 2,
+// else -1. A list the stylus taps has
+// *slot 1 or more (targets, ACT, English ITEM, MERCY; not Japanese ITEM's scrolling rows).
+#define BT_MENU8 __attribute__((aligned(8))) // btLookMenu's callers' TouchMenu: its hint's alignment
+static BT_CODEM int32_t btLookMenu(Runner* runner, TouchMenu* m, int32_t* slot) {
+    // m as aligned as the old callers' locals (GCC passes a pointer's known alignment into btRead_menu's copies). True
+    // for both callers: their locals are BT_MENU8 (c26rev5 BT2-2; tools/analysis/battletouch_menu_align.py checks the
+    // built objects' call sites).
+    btRead_menu(runner, __builtin_assume_aligned(m, 8), slot);
+    return m->ctx == TOUCH_CTX_MENU && (int32_t) m->id >= 0 ? (int32_t) (m->id & 0xffu) : -1;
+}
+
+// For touchui's draw hook (runner.c's default sprite draw, after CtrBattletouch_menuHide reads nonzero), about the
+// instance being drawn (currentInstance): BT_LOOK_HIDE for the menu SOUL to leave out; BT_LOOK_FRAME0 (and
+// BT_LOOK_ORANGE) for a button to draw as its frame 0; 0: the game's own draw. Reads only: no state, no I/O; objects
+// other than the SOUL and the four buttons cost no menu read.
+BT_CODEM uint32_t CtrBattletouch_menuLook(void) {
+    Runner* runner = btLookOn();
+    BtLive* L = bt.live;
+    if (CtrBattletouch_menuHide == 0 || runner == nullptr || L == nullptr) return 0u;
+    BtNames* names = bt.names;
+    Instance* inst = runner->vmContext->currentInstance;
+    int32_t o = O_HEART;
+    while (inst != nullptr && o >= O_FIGHTBT && names->obj[o] != inst->objectIndex) o--;
+    if (inst == nullptr || O_FIGHTBT > o) return 0u;
+    Instance* bc = btFirst(runner, names->obj[O_BC]);
+    TouchMenu m BT_MENU8;
+    int32_t slot, menu2 = btLookMenu(runner, &m, &slot);
+    if (0 > menu2 || bc->instanceId != btLook.controller) return 0u; // in the menu: bc is live
+    if (o == O_HEART) return menu2 == 0 || (slot > 0 && btLook.shown != (menu2 | 1)) ? BT_LOOK_HIDE : 0u;
+    // A button (FIGHT, ACT, ITEM, MERCY: the enum's order). The one the game shows chosen: the cursor's at the buttons,
+    // the open one in a list.
+    const TouchState* s = &L->s;
+    int32_t k = o - O_FIGHTBT, chosen = menu2 == 0 ? m.cursor : m.openButton;
+    if (L->menuLit != 0) // btMenuFix's, this frame (only with the pen down): the chosen one out, the lit one if any
+        return k == chosen ? BT_LOOK_FRAME0 | BT_LOOK_ORANGE
+               : k == s->item && memcmp(L->menuRect[0], L->menuRect[1], sizeof(L->menuRect[0])) != 0 ? BT_LOOK_FRAME0 : 0u;
+    if (k != chosen) return 0u; // a list's open one too: its icon kept, not the empty slot (unit MC, 11-14)
+    // All orange (its cascade's frames in the list too), but not while the pen holds a button (its chosen yellow).
+    return BT_LOOK_FRAME0 | (btLook.orange != 0 && !(s->pen && s->mode == TOUCH_PRESS) ? BT_LOOK_ORANGE : 0u);
+}
+
+// ITEM's edges, on the take of a stroke's pen-down (the claim: the core's press on nothing) or of its lift (the
+// stroke held from the core to the end). Returns the Left or Right to merge, after the cursor's write.
+static __attribute__((noipa, used, section(BT_FILL))) uint32_t btLookEdge(Runner* runner, BtLive* L, const TouchMenu* m, uint32_t ePrev) {
+    BtLook* k = &btLook;
+    const TouchPen* p = &L->pen;
+    uint32_t side = k->edge;
+    k->edge = 0;
+    if (m->pageSlot == 0) return 0u; // btRead_menu's: English ITEM in the menu, one page or two
+    if (side == 0) {
+        // The claim: the pen-down's sample in a column (the core found nothing under it: no item, button or label).
+        int32_t sx = p->x[0];
+        side = BT_EDGE > sx ? 1u : sx >= 320 - BT_EDGE ? 2u : 0u;
+        if (side == 0u) return 0u;
+        L->s.mode = TOUCH_DEAD;
+        k->edge = (uint8_t) side;
+        k->edgeId = m->id;
+        return 0u;
+    }
+    // The lift: the sample before the newest (a lift's newest can be a smear; the column is grown 4 px for the rest),
+    // the same menu, no key of the player's held on the take before (one pressed on this one has reset the look).
+    int32_t sx = p->x[p->n >= 2];
+    if (!m->pageValid || m->id != k->edgeId || (ePrev & TOUCH_KEY_ABANDON) != 0
+        || (side == 1u ? sx >= BT_EDGE + 4 : 320 - BT_EDGE - 4 > sx))
+        return 0u;
+    // That side's column of the cursor's row (as take2 writes: no sound), then the game's own Left or Right from it.
+    // The values go through an empty asm, so the compiler makes no copy of btWrite for constants, and keep the ranges
+    // take2's call gives (slot and value not negative), so btWrite's own code is unchanged.
+    int32_t at = 3, col = (m->cursor & 2) | (side == 2u ? 1 : 0);
+    bool sound = false;
+    __asm__("" : "+r"(at), "+r"(col), "+r"(sound));
+    if (0 > at || 0 > col) __builtin_unreachable();
+    btWrite(runner, at, col, sound);
+    return side == 1u ? TOUCH_KEY_LEFT : TOUCH_KEY_RIGHT;
+}
+
+// take2's menu read (unit M, maintainer 11-12: a tap at ITEM's edge used an item). English ITEM's item rectangles end
+// TOUCH_GROW short of the bottom screen's outer BT_EDGE columns, as take2 maps the pen there (this frame's view, as
+// btView reads it), so neither the core's hit nor its grown confirm edge reaches a strip: a pen-down there is on no
+// item (btLookEdge claims it), and a lit item dragged into one is let go. The page label keeps its rectangle.
+static __attribute__((noinline, noclone, section(BT_FILL))) void btReadT(Runner* runner, TouchMenu* m, int32_t* slot) {
+    btRead_menu(runner, __builtin_assume_aligned(m, 8), slot);
+    CtrBottomView v;
+    bool shown = *slot == 3 && CtrLayout_bottomView(runner, &v);
+#ifdef CTRPORT_TOUCH_TEST
+    if (*slot == 3 && !shown && BT_SCRIPTED) shown = btTestView(runner, &v);
+#endif
+    if (!shown) return;
+    // The room x of the last left-strip column, and of the first right-strip one (take2's mapping: x only).
+    int32_t a = (int32_t) (v.roomX0 + ((float) BT_EDGE - 0.5f) * v.roomPerPx) + 1 + TOUCH_GROW;
+    int32_t b = (int32_t) (v.roomX0 + ((float) (320 - BT_EDGE) + 0.5f) * v.roomPerPx) - TOUCH_GROW;
+    for (int32_t k = 0; 4 > k; k++) {
+        TouchRect* r = &m->item[k];
+        if (a > r->x0) r->x0 = (int16_t) a;
+        if (r->x1 > b) r->x1 = (int16_t) b;
+    }
+}
+
+// The blue SOUL's jump, law v2 (maintainer 11-10: "press and hold based ... not click and drag ... the stylus should follow
+// the buffer rules"; 11-09 23:31, 23:38, 23:40). The core holds Up while the pen is above the SOUL (law v1);
+// here, after take2 and before the game's keys, that Up reaches the game only as one jump per stroke:
+// - The stroke's chance is its first grounded frame as a blue SOUL: the pen-down frame if the SOUL stands on the
+//   ground then, else the frame it lands (the buffer: a press in the air jumps on landing). Grounded is the game's
+//   own test for a jump (obj_heart's Up event: jumpstage 1 and vspeed 0), read before its keys run. If the pen is
+//   above the SOUL on that frame, Up goes through and the jump starts; if not, the chance is gone: a pen dragged above
+//   later never jumps.
+// - The jump holds Up while the pen stays above (the game cuts a jump when Up is let go). Once Up is let go or the SOUL
+//   lands, the stroke is spent: no re-hold in the air, no second jump on landing.
+// - A stroke that did not go down on a blue SOUL the core follows (red turned blue under the pen, the skip zone, a
+//   menu) owns no jump.
+// - The touchpad: its pen-down stands for the SOUL, so it is never above at first; a pad stroke keeps its chance while
+//   grounded until its own above test (the pen dragged up past the line) holds Up.
+// Up the game sees from the stylus otherwise is taken back out of this frame's edges and out of take2's tPrev (as a
+// let-go), so the merge stays consistent next frame. Gravity, the jump's height and the game's jump rules are the
+// game's: the stylus only decides when Up is held, as the key twin's arrows would. A button's Up is never touched: the
+// core gives the up/down axis to the buttons for the rest of the stroke once one holds Up or Down (TouchState locked),
+// so the stylus never holds Up under a button's, and its Up this frame is the stylus's alone. The let-go counts last
+// frame's holders of either side (ePrev, tPrev): a button's Up let go on the pen-down frame was merged into the
+// stylus's, so the game has seen it held.
+#define BT_JUMP_CHANCE 1
+#define BT_JUMP_UP 2
+static const char btJumpVar[] BT_ROM = "jumpstage";
+#ifdef CTRPORT_TOUCH_TEST
+static const char btBlueLog[] BT_ROM = "[touch] f=%lu blue jump=%d ground=%d up=%d vs=%d y=%d\n";
+#endif
+static BT_CODEM void btBlue(BtLive* L, CtrInputEdges* e, uint32_t ePrev, uint32_t tPrev) {
+    const TouchState* s = &L->s;
+    bool blue = s->mode == TOUCH_FOLLOW && s->soul == TOUCH_SOUL_BLUE;
+    if (L->pen.pen && L->pen.n == 1) L->jump = blue ? BT_JUMP_CHANCE : 0; // the stroke's pen-down
+    if (!blue) return;
+    uint32_t u = TOUCH_KEY_UP;
+    bool up = (L->tPrev & u) != 0; // the stylus's Up this frame
+    Runner* runner = bt.runner;
+    VMContext* ctx = runner->vmContext;
+    Instance* h = btFirst(runner, bt.names->obj[O_HEART]);
+    ptrdiff_t at = shgeti(ctx->varNameMap, (char*) btJumpVar);
+    bool ground = h != nullptr && 0 <= at && h->vspeed == 0.0f
+                  && btInt(btSlot4(&h->selfVars, ctx->varNameMap[at].value), 0, false) == 1;
+#ifdef CTRPORT_TOUCH_TEST
+    logInfo(btBlueLog, (unsigned long) bt.frame, (int) L->jump, (int) ground, (int) up,
+            h != nullptr ? (int) (h->vspeed * 100.0f) : 0, h != nullptr ? (int) h->y : 0);
+#endif
+    if (L->jump == BT_JUMP_CHANCE && ground) {
+        if (up) {
+            L->jump = BT_JUMP_UP;
+            return;
+        }
+        if (!L->padDown) L->jump = 0;
+    } else if (L->jump == BT_JUMP_UP) {
+        if (up && !ground) return;
+        L->jump = 0;
+    }
+    if (!up) return;
+    e->held &= ~u;
+    e->pressed &= ~u;
+    e->released = (e->released & ~u) | (u & (ePrev | tPrev));
+    L->tPrev &= ~u;
+}
+
+// The slot's CtrInput_take wrap (Battletouch_take): btTake (take2, the text taps), then the blue SOUL's jump
+// (btBlue), then the look's state from this take, then an edge's key, merged as btTake merges a tap.
+CtrInputEdges Battletouch_take0(const CtrInputMap* map, uint32_t held, uint32_t down, bool enabled, bool suppressHeld,
+                                CtrInputStats* stats);
+static BT_CODEM CtrInputEdges btTakeM(const CtrInputMap* map, uint32_t held, uint32_t down, bool enabled,
+                                      bool suppressHeld, CtrInputStats* stats) {
+    BtLive* L = bt.live;
+    uint32_t ePrev = 0u, tPrev = 0u, mode0 = TOUCH_IDLE; // the keys (buttons', stylus's) and the stroke, as the last
+                                                         // take left them
+    bool pen0 = false, live0 = false;
+    if (L != nullptr) {
+        ePrev = L->ePrev, tPrev = L->tPrev, mode0 = L->s.mode, pen0 = L->s.pen;
+        live0 = pen0 && L->s.ctx == TOUCH_CTX_MENU
+                && (mode0 == TOUCH_PRESS || mode0 == TOUCH_BUTTON || mode0 == TOUCH_PAGE);
+    }
+    CtrInputEdges e = Battletouch_take0(map, held, down, enabled, suppressHeld, stats);
+    uint32_t raw = btRawPressed; // this take's: btTake's take2 calls btRawTake first, every take
+    L = bt.live;
+    Runner* runner = btLookOn();
+    BtLook* k = &btLook;
+    if (L != nullptr) btBlue(L, &e, ePrev, tPrev);
+    if (L == nullptr || runner == nullptr) {
+        btLookReset();
+        return e;
+    }
+    TouchState* s = &L->s;
+    bool hide = CtrBattletouch_menuHide != 0;
+    bool admitted = !live0 && s->pen && s->ctx == TOUCH_CTX_MENU
+                    && (s->mode == TOUCH_PRESS || s->mode == TOUCH_BUTTON || s->mode == TOUCH_PAGE);
+    // The player's presses this take: the buttons' pressed keys before the stylus's merge, the ones the game gets (a
+    // key pressed and let go since the last take counts: c26rev5 BT2-1). Options, playback and release-to-arm take
+    // none; HOME, sleep and the lid give none (CtrInput_take samples no key while suspended, and its wake clears the
+    // edges and ignores keys held through it).
+    uint32_t phys = raw;
+#ifdef CTRPORT_TOUCH_TEST
+    phys |= L->ePrev & ~ePrev; // test builds' scripted keys, merged after btRawTake: their newly held ones
+#endif
+    phys = enabled && !suppressHeld ? phys & BT_LOOK_KEYS : 0u;
+    uint32_t pulse = 0u;
+    // The edge's stroke lets go when the core resets it (an input cut, HOME, sleep, another room or battle:
+    // Touch_reset's context 0). One the core picks up in another menu (btMenuFix's press) has another id at its lift.
+    // And when take2 didn't reach the menus this take (no bottom view, c26rev4 BTM-2: btTake counted the take, btMenuFix
+    // didn't run): no input from a menu the player can't see. For the rest of the stroke: the core's let-go stroke
+    // stays let go in the same menu when the view comes back before the lift, and nothing claims it again.
+    if (s->ctx != TOUCH_CTX_MENU || L->fixAt + 1u != L->takes) k->edge = 0;
+    if (hide || admitted || k->edge != 0) {
+        TouchMenu m BT_MENU8;
+        int32_t slot, menu2 = btLookMenu(runner, &m, &slot);
+        uint32_t id = L->extScope.controller; // take2's, this take
+        if (hide && (id != k->controller || runner->dataWin != k->data)) {
+            btLookReset(); // another battle, none, or another data file
+            hide = false;
+        }
+        bool was = hide; // the look before this take's touch (unit M: a one-page column's stroke leaves it)
+        if (admitted && phys == 0u) {
+            hide = true;
+            k->controller = id;
+            k->data = runner->dataWin;
+        }
+        if (phys != 0u && menu2 >= 0) {
+            // The player's key in the menu: the stock heart, at once (and no edge).
+            btLookReset();
+            hide = false;
+        } else {
+            if ((admitted && !pen0 && s->mode == TOUCH_PRESS && s->item < 0) || (k->edge != 0 && !s->pen))
+                pulse = btLookEdge(runner, L, &m, ePrev);
+            if (k->edge != 0 && !m.pageValid) hide = was; // claimed, and its lift does nothing: no touch of the menu
+            if (hide) {
+                // A list's reveal: the pen lights one of its options. Another menu ends it.
+                if (s->mode == TOUCH_PRESS && s->lit && s->item >= 0 && slot > 0)
+                    k->shown = (uint8_t) (menu2 | 1);
+                else if ((menu2 | 1) != k->shown)
+                    k->shown = 0;
+                // All orange: the release on the open button (the cascade back, no target). Ended by the stylus's
+                // confirm, or the buttons gone.
+                if (s->mode == TOUCH_CASCADE && mode0 == TOUCH_BUTTON && 0 > s->target)
+                    k->orange = 1;
+                else if ((L->tPrev & TOUCH_KEY_Z) != 0 || (s->mode != TOUCH_CASCADE && menu2 != 0))
+                    k->orange = 0;
+            }
+        }
+    }
+    CtrBattletouch_menuHide = (uint8_t) hide;
+    // The edge's key: the stylus's, as btTake's tap (pressed this take, released the next through take2's tPrev). The
+    // buttons hold no arrow (the lift's rule), so it is pressed and nothing of theirs is released under it.
+    e.held |= pulse;
+    e.pressed |= pulse;
+    L->tPrev |= pulse;
+#ifdef CTRPORT_TOUCH_TEST
+    if (pulse != 0u || admitted || phys != 0u)
+        logInfo(btLookLog, (unsigned long) bt.frame, (int) hide, (int) k->orange, (int) k->shown, (int) k->edge,
+                (unsigned long) pulse);
+#endif
+    return e;
+}
+__asm__(".global Battletouch_take\n.set Battletouch_take, btTakeM\n");
+
 // ===[ Battle layout: Original, 3DS Mode, Top screen, with the game on either screen (battletouch18, 11-10) ]===
 //
 // maintainer 11-10: battles should go on the top screen with the game on the bottom one. Every change to earlier code keeps
@@ -2796,3 +3129,5 @@ static BT_CODEG void btObRowGrey(const CtrMenu* menu, uint32_t k, ObRow* r) {
 }
 __asm__(".global Battletouch_obRowGrey\n.set Battletouch_obRowGrey, btObRowGrey\n");
 #endif
+
+#line 3120

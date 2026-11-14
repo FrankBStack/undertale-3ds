@@ -904,7 +904,11 @@ void __wrap_CtrPack_setDataWinPath(const char* path);
 DataWin* __real_DataWin_parse(const char* filePath, DataWinParserOptions options);
 DataWin* __wrap_DataWin_parse(const char* filePath, DataWinParserOptions options);
 void __real_CtrPackScreen_run(const DataWin* dataWin);
-void __wrap_CtrPackScreen_run(const DataWin* dataWin); __attribute__((noinline, noipa, R216_UT(used,) section(".text.late.packscreen"))) static void lsPackRun(const DataWin* dataWin); R216_UT(void CtrFirstboot_packRun(const DataWin* dataWin);) // firstboot: file end; used in UNDERTALE only (DELTARUNE calls it)
+void __wrap_CtrPackScreen_run(const DataWin* dataWin); R216_UT(void CtrFirstboot_packRun(const DataWin* dataWin);) // firstboot: file end; used in UNDERTALE only (DELTARUNE calls lsPackRun)
+#ifndef ENABLE_WAD16 // UNDERTALE calls CtrFirstboot_packRun instead (codediet B removed its lsPackRun)
+__attribute__((noinline, noipa, section(".text.late.packscreen"))) static void lsPackRun(const DataWin* dataWin);
+#endif
+#line 694
 VMContext* __real_VM_create(DataWin* dataWin);
 VMContext* __wrap_VM_create(DataWin* dataWin);
 FileSystem* __real_SandboxFileSystem_create(FileSystem* real, FileSystem* bundleOnly);
@@ -1577,113 +1581,10 @@ PS_CODE static void psPresent(int32_t fillW, int32_t frame) {
 
 
 // __wrap_CtrPackScreen_run's call, the loading screen's thread paused: CtrPackScreen_run inside the loading screen.
-#ifdef ENABLE_WAD16
-PS_CODE static void lsPackRun(const DataWin* dataWin) {
-    if (!ls.running) {
-        Loadgame_packFallback(dataWin);
-        return;
-    }
-    CtrPack_init();
-    CtrPackKey key = CtrPack_keyFor(dataWin);
-    if (CtrPack_isComplete(&key, dataWin->txtr.count)) return;
-    CtrPackWorker* worker = CtrPackWorker_start(dataWin, &key, true);
-    if (worker == nullptr) return;
-
-    uint64_t start = nowNanos();
-    // The bar: source bytes and a fixed allowance per page, as CtrPackScreen_run's estimate weighs the work. It is the
-    // setup's own bar, from empty (when the line appears) to LS_CAP, and ls.shown is left there: it only grows, so the
-    // load's bar then holds at LS_CAP and is full at the end. (Going on from the load's bar instead left the setup
-    // nothing to show after a first data.win hash, whose time had already taken that bar past 90%.)
-    uint64_t totalWork = 0, finishedWork = 0;
-    for (uint32_t i = 0; i < dataWin->txtr.count; i++) {
-        const Texture* texture = &dataWin->txtr.textures[i];
-        if (texture->externalPath == nullptr && texture->blobOffset > 0 && texture->blobSize > 0)
-            totalWork += (uint64_t) texture->blobSize + PS_PAGE_SLACK;
-    }
-    uint32_t done = 0, total = 0, built = 0, pictures = ls.pictures;
-    bool skipped = false;
-    double bytesWritten = 0, writingMs = 0, waitingMs = 0;
-#if LS_DELTARUNE
-    psFindLine(ls.art, ls.artSize);
-#else
-    psReadArt();
-#endif
-    bool line = psLine != nullptr;
-    logInfo(psLogThreads, (unsigned) CtrPackWorker_threadCount(worker));
-    CtrLog_flush();
-    LightLock_Lock(&ls.lock);
-    ls.gen++;
-    uint32_t barAt = 0;
-    LightLock_Unlock(&ls.lock);
-    u64 lastDisplay = 0;
-    while (aptMainLoop()) {
-        CtrWatchdog_mark(psWatchPhase);
-        hidScanInput();
-        if (hidKeysDown() & KEY_B) {
-            skipped = true;
-            break;
-        }
-        CtrPackResult result;
-        while (CtrPackWorker_poll(worker, &result)) {
-            finishedWork += (uint64_t) dataWin->txtr.textures[result.pageId].blobSize + PS_PAGE_SLACK;
-            if (result.built) {
-                built++;
-                logInfo(psLogPage, (unsigned) result.pageId, (unsigned) (result.size / 1024), (double) result.decodeMs,
-                        (double) result.packMs, (double) result.readMs, (double) result.inflateMs, (double) result.convertMs,
-                        (double) result.compressMs, (double) result.writeMs, (int) result.thread, (int) result.core,
-                        (double) (nowNanos() - start) / 1e9);
-                const CtrPackWriteStats* io = &result.io;
-                double ms = (double) (io->openMs + io->sizeMs + io->dataMs + io->flushMs + io->closeMs + io->renameMs);
-                logInfo(psLogWrote, (unsigned) (result.size / 1024), io->streamed ? psStreamed : io->staged ? psStaged : psWhole,
-                        (unsigned) io->calls, (double) io->callMinMs, (double) io->callMaxMs,
-                        ms > 0 ? (double) result.size / (1024.0 * 1024.0) / (ms / 1000.0) : 0.0, (double) io->openMs,
-                        (double) io->sizeMs, (double) io->dataMs, (double) io->flushMs, (double) io->closeMs, (double) io->renameMs,
-                        (double) io->waitMs);
-                bytesWritten += (double) result.size;
-                logInfo(psLogPublication, io->publication.direct ? psSdArchive : psStdio, (double) io->publication.deleteMs,
-                        (double) io->publication.renameMs);
-                writingMs += ms;
-                waitingMs += (double) io->waitMs;
-            }
-            CtrPacked_free(result.packed);
-        }
-        CtrPackWorker_progress(worker, &done, &total);
-        bool last = done >= total;
-        u64 tick = svcGetSystemTick();
-        if (last || lastDisplay == 0 || tick - lastDisplay >= 33ull * LS_TICKS_PER_MS) {
-            uint64_t share = last || totalWork == 0 ? 1000u : finishedWork * 1000u / totalWork;
-            if (share > 1000u) share = 1000u;
-            LightLock_Lock(&ls.lock);
-            int32_t frame = psDogKey((uint32_t) ((tick - ls.loadStart) / LS_TICKS_PER_MS));
-            barAt = (uint32_t) (LS_CAP * share / 1000u);
-            psDraw((int32_t) ((uint32_t) ls.fillMax * barAt / 1000u), frame);
-            LightLock_Unlock(&ls.lock);
-            lastDisplay = tick;
-        }
-        if (last) break;
-        gspWaitForVBlank();
-    }
-    LightLock_Lock(&ls.lock);
-    if (barAt > ls.shown) ls.shown = barAt;
-    LightLock_Unlock(&ls.lock);
-    uint32_t memoryWaits = 0, deferred = 0;
-    CtrPackWorker_memoryStats(worker, &memoryWaits, &deferred);
-    CtrPackWorker_stop(worker);
-    CtrQoi_releaseWorkspace();
-    psLine = nullptr;
-    free(psOwned);
-    psOwned = nullptr;
-    // The heap is never trimmed (ctr_memory.c), so its arena is the peak so far.
-    struct mallinfo mi = mallinfo();
-    logInfo(psLogReady, (unsigned) (done - deferred), (unsigned) total, (unsigned) built, (double) (nowNanos() - start) / 1e9,
-            skipped ? psSkipped : psNothing, (double) mi.arena / (1024.0 * 1024.0), (unsigned) memoryWaits, (unsigned) deferred);
-    if (built > 0) {
-        logInfo(psLogWritten, bytesWritten / (1024.0 * 1024.0), writingMs / 1000.0,
-                writingMs > 0 ? bytesWritten / (1024.0 * 1024.0) / (writingMs / 1000.0) : 0.0, waitingMs / 1000.0);
-    }
-    logInfo(psLogScreen, line ? psWithLine : psWithoutLine, (unsigned) (ls.pictures - pictures));
-}
-#else
+// (codediet B, 11-09) UNDERTALE's copy was here: unused since firstboot's CtrFirstboot_packRun took its call
+// (R216_PICK above), its bytes are now the packscreen hole (late_reserve.ld). DELTARUNE keeps its own.
+#ifndef ENABLE_WAD16
+#line 1387
 PS_CODE static void lsPackRun(const DataWin* dataWin) {
     if (!ls.running) {
         __real_CtrPackScreen_run(dataWin);

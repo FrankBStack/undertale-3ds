@@ -1,0 +1,15 @@
+        bool openMenu = !menu.open && !benchActive && combo.menu;
+        if (openMenu) {
+            CtrLog_setConsoleEnabled(false);
+            displayAtMenuOpen = display;
+            CtrMenu_open(&menu, &menuConsole, &display, CtrRenderer_capsAuditfixh(renderer));
+            down = 0; // the release that opened it isn't a menu input
+        } else if (menu.open)
+
+        if (autopauseLeft < 0 && arrlen(autopause) >= 2 && autopause[0] == runner->frameCount && !menu.open) {
+            displayAtMenuOpen = display;
+            CtrMenu_open(&menu, &menuConsole, &display, CtrRenderer_capsAuditfixh(renderer));
+            autopauseLeft = autopause[1] > 2 ? autopause[1] : 2;
+            logInfo("Menu opened as scheduled (%s)\n", AUTOPAUSE_PATH);
+        }
+        if (autopauseLeft > 0

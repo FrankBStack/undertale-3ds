@@ -120,7 +120,7 @@
     {
       "member": "engine/src/runner.c",
       "class": "engine-lookups",
-      "sha256": "afaec439102c4e6f4f01280769d5f5bdff83854d19694dcf0cc69154f63ab654",
+      "sha256": "924c22d260ae8e73cb9ff49ef3274622f42ea07d834367d7da6c95c6f05be70c",
       "justification": "Object and variable lookup examples explain runner initialization and dispatch.",
       "evidence_sha256": [
         "e21b4a0970f25e43698b263730323baeaa930e9907f1661a433985a117c25dc1"
@@ -201,7 +201,7 @@
     {
       "member": "platform/3ds/source/ctr_renderer.c",
       "class": "engine-lookups",
-      "sha256": "0d08fb5a71521fbf1f141fdb713f666fdec6ff962321bff9712ece016c784bdc",
+      "sha256": "59468e766f904f3e22336f108fdb6ed981831a4c3dbe02196d248bac809eea88",
       "justification": "Shader, object and sprite lookup names select renderer compatibility paths.",
       "evidence_sha256": [
         "3ed79f9b7583c83142de5f28eacb6d2f2812841561d123ca4eeb55dc4a503d84"
@@ -246,7 +246,7 @@
     {
       "member": "platform/3ds/source/main.c",
       "class": "engine-lookups",
-      "sha256": "27c79cb95af727d2caf6247215d81815c1b0a116902e694a2006c2f4ec5963e3",
+      "sha256": "b5c940ee3d8d5f4284000cfbc83154a347109320a0cf25b6d64302c462d79829",
       "justification": "Intro and title room names select startup rooms in player data.",
       "evidence_sha256": [
         "beff7c970aaeadca3f94aedfe4901d446f31340c60d5b22c361461f1f3cc2cdc"
@@ -309,7 +309,7 @@
     {
       "member": "platform/3ds/source/z_btlentry.c",
       "class": "engine-lookups",
-      "sha256": "f5c434442dd9b31d34952866187f32de5f4cbbfdaa9cc06ccb339c81ae18feb9",
+      "sha256": "c22d33bddd3087744465c6a783ed0fa38d9a7e477d1ffdff2ec03c108a6bdece",
       "justification": "Two object names tell that a battle is starting, one that its soul is still flying to its place (no tile installs or code copies while it moves), two object names and one room name that a story battle is starting (its room's own planned tiles are read instead of a battle group's), and eight door object names that a door is fading out, so the planned tiles and code of the battle or of the door's destination can be read before the room change (textures and code only).",
       "evidence_sha256": [
         "fe3633cd79e49914f03da92f7758c5dbce0eba1f6e9e18512ae1aadd4d361396"
@@ -408,7 +408,7 @@
     {
       "member": "platform/3ds/source/z_loadscreen.c",
       "class": "engine-lookups",
-      "sha256": "144f77ae0d94fb9ab1155b1009904af2da344f289230c3233d931c3588f65af6",
+      "sha256": "fbb3660899577192042687c96fa8c0b761a80edc74bf3b3487efce8e79cbccc6",
       "justification": "Source asset names document loading art extracted privately from player data. The DR cold chapter hash callback reuses that existing UI; identifier evidence is unchanged.",
       "evidence_sha256": [
         "af267ff21c3f4923516026bbfb91dc4fb53532535d95b783ebc4ccb02d985c62"
@@ -804,7 +804,7 @@
     {
       "member": "platform/3ds/source/z_battlesplit.c",
       "class": "engine-lookups",
-      "sha256": "34f816e81ce9336e14aaa9511525b6df7d84ce31f8763ba83bd9cb396a6fb9c6",
+      "sha256": "95c45f39c923312033b7c051a10dae2764bcf6d45fec2d0372922bd19c6fad1d",
       "justification": "battlesplit (lead approved 2026-11-08): names used only as runtime lookups, as z_battletouch.c: battle object names (bullets and their parents, the SOUL and its shots, the battle controller, the target and name bars, the text writer, the box borders, the faders, and the fight-specific objects of its encounter tables) sort a battle's draws between the two screens; the battle room names and the battle group variable find the rooms and the fight; no game text, art or generated code; exported with UNDERTALE only. The exact names are bound by the evidence hash and listed in the commit that added this entry.",
       "evidence_sha256": [
         "b41ebeb0006d6f9a68f98882583a8d97c83038c4527dbcb4e81d7fb35e642720"
@@ -924,7 +924,7 @@
     {
       "member": "tools/buildcache/launch_dispatch_check.py",
       "class": "engine-symbols",
-      "sha256": "faac3bafe58fc11f9d4355360fffe2c50780ec06daa4fee0046514eacc032d55",
+      "sha256": "69c7c8eaa901949114a2694fbabfe5137326d17723fc393b336425e13b3fe4e6",
       "justification": "buildfast identity checker: the flagged name is the ELF section-header type field it reads; prefix overlap is not a game asset.",
       "evidence_sha256": [
         "18ecdaf31888c2de321b900dbf2eb3f15e093af15594d8c087ac84fa527fb11e"
@@ -1185,7 +1185,7 @@
     {
       "member": "platform/3ds/source/z_battletouch.c",
       "class": "engine-lookups",
-      "sha256": "4acaa3bbff2f4bab7af89ef46f5ac9c069a3665427e267190423b7bbc15cf056",
+      "sha256": "5595360ee51b99d8e36edbd95b052e21c0e0e83a39e5ab91243ffcbdb33382bf",
       "justification": "battletouch (lead approved 2026-11-08; the game-over room lookup added for r1c, lead approved 2026-11-14): battle object names used only as runtime lookups for stylus hit areas and the SOUL's position, and the game-over room's name, compared with the current room's so that a tap there presses Z; no game text or art. The battle menu's and the SOUL's variables are read by name the same way; UNDERTALE only, compiled empty for DELTARUNE.",
       "evidence_sha256": [
         "8c5cb50df32297c7e1e8d74d46f64c55fdab20849486f35f4a60d5c959c6821c"
@@ -1245,7 +1245,7 @@
     {
       "member": "platform/3ds/source/ctr_dlgtop_lease.inc",
       "class": "engine-lookups",
-      "sha256": "c0c35c0b97fedffb6325e89c6f1a74ad332e5db5bae3fe0a6d21e4bd86405851",
+      "sha256": "efc4b7d8da59524dc4232553eb3c6800d435a653baddb06d1607ccdca9f2d95d",
       "justification": "S4 reads the existing engine battle-room lookup name solely to return the held top-target loan before battle Step and keep text with the game during battle; no game event body, text, resource number or asset.",
       "evidence_sha256": [
         "0dd2ae8faf2a32113f9c52491903b8d12d333bf2fd5199478d48a6a861ba4fee"
@@ -1258,6 +1258,15 @@
       "justification": "touchui, lead-scoped shops and SAVE reader (2026-11-11): exact object-name lookup keys select native shop owners and veto active battles. The adapter reads live cursor/writer metadata and sends ordinary keys. Native events remain in player-owned data; no event bodies, dialogue, sprites or audio are included. Final sonrev10 review remains required.",
       "evidence_sha256": [
         "dbcb4f31fd144201e1c7f2cb09bca0500d3b215bb4447ff55260729dd4ebd6f2"
+      ]
+    },
+    {
+      "member": "platform/3ds/source/ctr_gameoverscreen.inc",
+      "class": "engine-lookups",
+      "sha256": "a0bb7c0111c4254f0eba541240dc671061091a5629e2820453d2132ba622d980",
+      "justification": "Game-over screen unit (lead approved 2026-11-10): room and object lookup keys select presentation and SOUL/shard translation in the player's own data; no game text, logic or art.",
+      "evidence_sha256": [
+        "14d150128220737f71a206c9a52776353d38d8af359bc82525bd530019925c25"
       ]
     }
   ],

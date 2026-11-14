@@ -82,6 +82,19 @@ def route_dialogue(text, diagnostic=False):
     return text
 
 
+def route_gameover_yield(text):
+    # F1: dlgflash owns the live wrapper call on dv8u20. Route its terminal
+    # layout operand, preserving S4's preceding lease return and refresh.
+    symbol = 'CtrDlgflash_yield'
+    scopes = list(re.finditer(r'(?ms)^' + symbol + r':\r?\n.*?^\s*\.size\s+' + symbol + r',\s*\.-' + symbol + r'\s*$', text))
+    assert len(scopes) == 1, ('game-over dlgflash yield scope', len(scopes))
+    scope = scopes[0]
+    routed, count = re.subn(r'(?m)^([ \t]+bl[ \t]+)CtrLayout_yield8(\(PLT\))?([ \t]*(?:@[^\n]*)?)$',
+                            lambda m: m[1]+'CtrGameover_yield'+(m[2] or '')+m[3], scope[0])
+    assert count == 1, ('game-over dlgflash yield calls', count)
+    return text[:scope.start()]+routed+text[scope.end():]
+
+
 def route_top_dialogue(text, development=False):
     name = 'ctrDestroy'
     scopes = list(re.finditer(r'(?ms)^' + name + r':\r?\n.*?^\s*\.size\s+' + name + r',\s*\.-' + name + r'\s*$', text))
@@ -130,6 +143,19 @@ def run(command):
     return subprocess.run(command, stdin=subprocess.DEVNULL, timeout=1800).returncode
 
 
+def route_gameover_setup(text):
+    """One call in real beginFrame; readback before it stays untouched."""
+    name = 'CtrRenderer_beginFrame'
+    scopes = list(re.finditer(r'(?ms)^'+name+r':\r?\n.*?^\s*\.size\s+'+name+
+                             r',\s*\.-'+name+r'\s*$', text))
+    assert len(scopes)==1, ('Game-over begin scope',len(scopes))
+    scope = scopes[0]
+    changed,count = re.subn(r'(?m)^([ \t]+bl[ \t]+)configureScreens(\(PLT\))?([ \t]*(?:@[^\n]*)?)$',
+                           lambda m:m[1]+'CtrGameover_configure'+(m[2] or '')+m[3],scope[0])
+    assert count==1, ('Game-over begin setup calls',count)
+    return text[:scope.start()]+changed+text[scope.end():]
+
+
 def route_lcd(text):
     """Apply dimlight only after this adapter's existing picture-call edits."""
     path = Path(__file__).resolve().parents[1] / 'buildcache/dimlight_compile.py'
@@ -163,6 +189,7 @@ def main(args):
                         size_optimized=any(flag in command for flag in ('-Os', '-Oz')))
     text = route_top_dialogue(text, development=development)
     text = route_solid(text)
+    text = route_gameover_setup(text)
     text = route_dialogue(text, diagnostic="-DCTRPORT_DLGFLASH_LOG" in command)
     # Helper-only pass retains no ordinary body or data, preserving GCC's
     # pre-existing compiler-local tables and all original slot identities.
@@ -180,7 +207,37 @@ def main(args):
     extra, sections = vine_extract.late_sections(helper_file.read_text(encoding='utf-8'), 'dlgwhite')
     flash, flash_sections = vine_extract.late_sections(helper_file.read_text(encoding='utf-8'), 'dlgflash')
     top, top_sections = vine_extract.late_sections(helper_file.read_text(encoding='utf-8'), 'dlgtop4')
+    flash = route_gameover_yield(flash)
+    # Keep frozen S4 arbitration first; only its terminal layout operand
+    # enters the game-over guard. Inactive guard delegates to layout as before.
+    top, go_chain_count = re.subn(r'(?m)^([ \t]+b(?:l)?[ \t]+)CtrLayout_chain18(\(PLT\))?([ \t]*(?:@[^\n]*)?)$',
+                                  lambda m: m[1]+'CtrGameover_beginFrame'+(m[2] or '')+m[3], top)
+    assert go_chain_count == 1, ('S4 to game-over begin seam', go_chain_count)
     text += '\n'+extra+'\n'+flash+'\n'+top
+    # The game-over unit is independent: ordinary renderer compilation sees
+    # none of its C, preserving all existing instructions and static locals.
+    go_file = output.with_name('gos2.s')
+    go_helper = [a for a in helper if a not in ('-DCTRPORT_DLGWHITE_HELPER', '-DCTRPORT_DLGFLASH_HELPER')]
+    go_helper[go_helper.index('-o') + 1] = str(go_file)
+    # Keep discarded surrounding bodies at the stock optimization too: -Os
+    # exposes a -Wrestrict warning there. GO_CODE sizes only the retained unit.
+    go_helper += ['-DCTRPORT_GAMEOVERSCREEN_HELPER']
+    rc = run(go_helper)
+    if rc: return rc
+    go_extra, go_sections = vine_extract.late_sections(go_file.read_text(encoding='utf-8'), 'gameoverscreen')
+    go_extra = go_extra.replace('.LFlowery_', '.LGameover_').replace('FloweryLocal_', 'GameoverLocal_')
+    go_pattern = r'(?m)^([ \t]+b(?:l)?[ \t]+)ctrDrawSprite(\(PLT\))?([ \t]*(?:@[^\n]*)?)$'
+    go_callers = [re.findall(r'(?m)^([A-Za-z_][\w.]*):', text[:m.start()])[-1]
+                  for m in re.finditer(go_pattern, text)]
+    assert sorted(go_callers) == sorted(['skipReplayOps', 'aslFineSprite', 'utkDrawSpriteBody',
+                                         'utkDrawSprite', 'utkDrawSprite', 'skipDrawSprite', 'utaFineSprite']), go_callers
+    text = re.sub(go_pattern, lambda m: m[1]+'CtrGameover_drawSprite'+(m[2] or '')+m[3], text)
+    coarse_pattern = r'(?m)^([ \t]+b(?:l)?[ \t]+)utkDrawSpriteBody(\(PLT\))?([ \t]*(?:@[^\n]*)?)$'
+    coarse_callers = [re.findall(r'(?m)^([A-Za-z_][\w.]*):', text[:m.start()])[-1]
+                      for m in re.finditer(coarse_pattern, text)]
+    assert coarse_callers == ['utkDrawSprite'], coarse_callers
+    text = re.sub(coarse_pattern, lambda m: m[1]+'CtrGameover_coarseSprite'+(m[2] or '')+m[3], text)
+    text += '\n'+go_extra
     text, lcd_receipt = route_lcd(text)
     with open(routed_file, 'w', encoding='utf-8', newline='\n') as handle:  # write_text(newline=) needs Python 3.10
         handle.write(text)

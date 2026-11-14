@@ -23,7 +23,13 @@ static struct {
     C3D_RenderTarget* target;
     const Room* room;
     bool battle, drawing, denied;
+    uint8_t parked; // existing padding: 0=active, 1=black pending, 2=console rebound
 } dlgtopLease __attribute__((section(".bss.dlgtop4")));
+
+// Layout validates owner + target; light=-1 leaves the lighting claim alone.
+bool CtrLayout_dialogueLease(Renderer*, C3D_RenderTarget*, int light);
+_Static_assert(sizeof(dlgtopLease) == ((3 * sizeof(void*) + 3 + sizeof(void*) - 1) /
+               sizeof(void*)) * sizeof(void*), "deferred return must use existing padding");
 
 DLGTOP_CODE static int dlgtopHolder(void) { return CtrLayout_topHolder(); }
 
@@ -34,6 +40,11 @@ DLGTOP_COLD static void dlgtopReturn(void) {
     }
     dlgtopLease.target = nullptr;
 }
+
+// Keep the original cold body and its neighbours fixed. Boundary callers
+// retarget to the validating continuation appended in the late reserve.
+static void dlgtopDrain(void);
+#define dlgtopReturn dlgtopDrain
 
 DLGTOP_CODE static bool dlgtopWants(const CtrRenderer* r) {
     return !dlgtopLease.battle && CtrScreens_gameBelow() && CtrLayout_otherText() &&
@@ -69,8 +80,9 @@ DLGTOP_COLD static void dlgtopRoom(CtrRenderer* r, const Room* room) {
     (void)r;
 }
 
-// Called before battlesplit can move the game or admit T1, and before Step.
-// A closed box releases here even if the preceding frame had no presentation.
+static void dlgtopClose(void);
+// Called before battlesplit/Step. Room/renderer/settings boundaries drain;
+// an ordinary close keeps DIALOGUE's target until one of those boundaries.
 DLGTOP_CODE static void dlgtopPrepare(CtrRenderer* r) {
     if (dlgtopLease.owner != r) {
         dlgtopReturn();
@@ -88,7 +100,7 @@ DLGTOP_CODE static void dlgtopPrepare(CtrRenderer* r) {
         dlgtopRoom(r, room);
     }
     dlgtopLease.drawing = false;
-    if (dlgtopLease.target != nullptr && (!dlgtopWants(r) || !dlgtopBoxOpen(r))) dlgtopReturn();
+    if (dlgtopLease.target != nullptr && (!dlgtopWants(r) || !dlgtopBoxOpen(r))) dlgtopClose();
 }
 
 DLGTOP_CODE static void dlgtopTake(CtrRenderer* r) {
@@ -109,11 +121,17 @@ DLGTOP_CODE static C3D_RenderTarget* dlgtopBorrowed(CtrRenderer* r) {
            dlgtopLease.target : nullptr;
 }
 
+#include "ctr_dlgtop_retire.inc"
+// Retain the original query; uses below and in replay also validate layout.
+#define dlgtopBorrowed dlgtopWake
+#define CtrLayout_chain18 CtrDlgtop_idleChain
+
 void CtrLayout_chain18(Renderer*);
 DLGTOP_CODE void CtrDlgtop_frame(Renderer* renderer) {
     dlgtopPrepare((CtrRenderer*) renderer);
     CtrLayout_chain18(renderer);
 }
+#undef CtrLayout_chain18
 
 DLGTOP_CODE void CtrDlgtop_yield(Renderer* renderer, bool yield) {
     if (yield && dlgtopLease.owner == (CtrRenderer*) renderer) dlgtopReturn();

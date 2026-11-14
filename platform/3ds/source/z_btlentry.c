@@ -29,6 +29,12 @@
 // every frame still shown on time). BT_INSTALL_MS keeps a frame's installs within those two (what r2's rows passed on
 // all three Old models), so the interval stays under ~42 ms; the log line gives the most install time one frame took.
 //
+// 11-14 (fix-btlentry-install-idle-1114, slice): the collector installs nothing now. The o2ds G47 witness held 4
+// encounter frames on those installs (a frame's start late by them, its image a vblank late), so every finished read
+// waits in its slot and CtrBtHand_roomLoad installs it at the battle room's load, in the hidden transition (no eviction
+// there: rounds 4 and 2b's evictions no longer run, and a tile without room is left to the room load). The two
+// paragraphs above, and the log line's install figures (now 0), describe the encounter installs this replaced.
+//
 // Optional all the way (c26rev r101): the game thread never does a read of ours (a wait for one of its own reads that
 // takes ours from the queue gets no file, as flowstream's refill: F1); the tile's texture is allocated here without
 // evicting anything and counted as a read's reserved tile, so installTile allocates nothing (F2); and the read record
@@ -308,21 +314,6 @@ static BT_TEXT CtrTile* btVictims(CtrTextureCache* cache, const uint8_t* room, b
     return best;
 }
 
-static BT_TEXT bool btMakeRoom(CtrTextureCache* cache, const CtrPage* page, const CtrTile* tile) {
-    const uint8_t* room = btRoomProof(cache);
-    while (!btRoomFor(cache, page, tile)) {
-        if (room == nullptr) return false;
-        uint32_t from = 0;
-        CtrTile* best = btVictims(cache, room, true, &from);
-        if (best == nullptr) return false;
-        if (BT_GONE > bt.gone) bt.goneKey[bt.gone++] = from;
-        bt.evicted++;
-        bt.evictedBytes += best->tex.size;
-        CtrTextures_btlentryEvict(cache, &cache->pages[from >> 8], best);
-    }
-    return true;
-}
-
 // Rev 2b: the bytes btMakeRoom may evict for the battle (btVictims without the age), counted at its first armed frame.
 // Tiles drawn again later only leave it, so it is never short of what btMakeRoom finds.
 static BT_TEXT uint32_t btPool(CtrTextureCache* cache) {
@@ -352,25 +343,6 @@ static BT_TEXT void btReloads(const CtrTextureCache* cache, uint32_t before) {
             i++;
         }
     }
-}
-
-// The tile's texture, allocated without evicting anything (initTile, as allocateTile does with mayEvict false) and
-// counted as reserveTile counts a read's: installTile's allocateTile then takes it as allocated, and releaseRead's
-// unreserveTile frees it if the install fails first. False (nothing allocated) if linear memory can't give it.
-static BT_TEXT bool btReserve(CtrTextureCache* cache, CtrPage* page, CtrTile* tile) {
-    uint32_t bytes = btTileBytes(page, tile);
-    if (tile->reserved || !C3D_TexInit(&tile->tex, (u16) page->tileW, (u16) page->tileH, CtrPack_gpuFormat((CtrTileFormat) tile->format)))
-        return false;
-    if (tile->tex.size != bytes) {
-        C3D_TexDelete(&tile->tex);
-        return false;
-    }
-    C3D_TexSetFilter(&tile->tex, GPU_NEAREST, GPU_NEAREST);
-    C3D_TexSetWrap(&tile->tex, GPU_CLAMP_TO_EDGE, GPU_CLAMP_TO_EDGE);
-    tile->reserved = true;
-    page->bytes += bytes;
-    cache->residentBytes += bytes;
-    return true;
 }
 
 // Whether the heap keeps the promotion reserve free after bytes more.
@@ -696,90 +668,16 @@ BT_TEXT void __wrap_CtrFlowstream_collect(CtrTextureCache* cache, bool drop) {
     }
     BTD(btdMark(cache->frame - bt.roomStart == 300u ? "the room's first 300 frames" : nullptr));
     btReloads(cache, UINT32_MAX);
-    // The reads in: their tiles installed while there is room and time, else dropped; a read is released once all its
-    // tiles are, and one cut short by the time keeps the page until the next frame.
+    // No installs here: installing in the collector put each
+    // tile's check, unpack and flush (3-8 ms) before Step on encounter frames, and on o2ds G47 that held 4 frames. A
+    // finished read now waits in its slot for the battle room's load: CtrBtHand_roomLoad installs it there, in the
+    // hidden transition, by its own rules (no eviction; a tile without room is left to the room load and first draw).
+    // A read the cache took (drawn, or released) leaves its slot here, as before.
     if (btMoving(runner)) goto look; // round 6: not while the soul flies (the reads stay in flight or wait)
-    uint64_t start = svcGetSystemTick();
-    uint64_t budget = (uint64_t) BT_INSTALL_MS * (SYSCLOCK_ARM11 / 1000u);
-    uint32_t done = 0;
     btPlaceCode(cache);
     for (uint32_t k = 0; BT_READS > k; k++) {
         CtrTileRead* read = bt.read[k];
-        if (read == nullptr) continue;
-        CtrPage* page = &cache->pages[bt.page[k]];
-        if (page->read != read) { // the cache took it (drawn, or released)
-            bt.read[k] = nullptr;
-            continue;
-        }
-        if (!CtrTileReader_finished(cache->reader, read)) continue;
-        const CtrPageLayout* layout = &read->view.layout;
-        bool allowed = CtrMemory_allowRelief(false);
-        if (read->headerOk && !page->layoutKnown && (page->tiles = calloc((size_t) (layout->tilesX * layout->tilesY), sizeof(CtrTile))) != nullptr) {
-            // A page not used yet this session: its grid from the read's header (ctr_textures.c's setLayout).
-            page->width = layout->width;
-            page->height = layout->height;
-            page->tileW = layout->tileW;
-            page->tileH = layout->tileH;
-            page->tilesX = layout->tilesX;
-            page->tilesY = layout->tilesY;
-            page->layoutKnown = true;
-        }
-        CtrMemory_allowRelief(allowed);
-        if (read->headerOk && page->layoutKnown && !page->packInfo && page->width == layout->width && page->height == layout->height &&
-            page->tileW == layout->tileW && page->tileH == layout->tileH && page->tilesX == layout->tilesX && page->tilesY == layout->tilesY) {
-            // Its tile table, from the same header (ctr_textures.c's applyView, as takeView does on a page's first load).
-            for (int32_t i = 0; page->tilesX * page->tilesY > i; i++) {
-                CtrTile* each = &page->tiles[i];
-                each->format = layout->formats[i];
-                each->offset = read->view.tileOffset[i];
-                each->size = read->view.tileSize[i];
-                each->checksum = read->view.tileChecksum[i];
-            }
-            page->formatsKnown = true;
-            page->packInfo = true;
-            page->cacheFile = CTR_CACHE_FILE_VALID;
-        }
-        bool more = false;
-        for (uint32_t t = bt.next[k]; CTR_PAGE_MAX_TILES > t; t++) {
-            if (!read->want[t]) continue;
-            if (done > 0 && svcGetSystemTick() - start + bt.tileTicks > budget) {
-                bt.next[k] = (uint16_t) t;
-                more = true;
-                break;
-            }
-            CtrTile* tile = page->packInfo && t < (uint32_t) (page->tilesX * page->tilesY) ? &page->tiles[t] : nullptr;
-            if (tile != nullptr && tile->valid) continue;
-            bool usable = read->headerOk && tile != nullptr && read->data != nullptr && read->tileAt[t] != CTR_READ_NOT_READ &&
-                          tile->offset == read->view.tileOffset[t] && tile->size == read->view.tileSize[t];
-            if (usable && !btRoomFor(cache, page, tile) && (bt.pool == 0 || !btMakeRoom(cache, page, tile))) {
-                if (bt.pool > 0 && cache->frame <= bt.encounter + CTR_THRASH_FRAMES + 1u) { // the tiles drawn just before may be evicted soon
-                    bt.next[k] = (uint16_t) t;
-                    more = true;
-                    break;
-                }
-                bt.full = true;
-            } else if (usable && BTD(!btdFault(k, 3) &&) btReserve(cache, page, tile)) {
-                done++;
-                uint64_t before = svcGetSystemTick();
-                bool ok = CtrTextures_btlentryInstall(cache, page, (int32_t) t);
-                uint32_t took = (uint32_t) (svcGetSystemTick() - before);
-                if (took > bt.tileTicks) bt.tileTicks = took;
-                if (ok) {
-                    bt.installed++;
-                    continue;
-                }
-            }
-            bt.dropped[k] = true;
-        }
-        if (more) break;
-        BTD(if (read->data == nullptr || bt.dropped[k]) btdFault(k, read->data == nullptr ? 4 : 5);)
-        CtrTextures_btlentryInstall(cache, page, -1); // released: frees a reserved texture whose install failed
-        bt.read[k] = nullptr;
-    }
-    if (done > 0) {
-        uint32_t ticks = (uint32_t) (svcGetSystemTick() - start);
-        bt.installTicks += ticks;
-        if (ticks > bt.maxTicks) bt.maxTicks = ticks;
+        if (read != nullptr && cache->pages[bt.page[k]].read != read) bt.read[k] = nullptr;
     }
 look:;
     const uint8_t* plan = RoomPlan_utstallPlan(cache);

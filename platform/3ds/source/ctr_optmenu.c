@@ -851,8 +851,8 @@ OPT_STATIC void optCompose(const CtrMenu* menu, uint16_t* fb) {
 // in the middle 320 columns of the top screen. Done again whenever the game has moved (the renderer's move points the
 // console at its own buffer, which is then what the console gets back at close).
 #if defined(ENABLE_WAD16)
-u8* CtrBlank_settledShown(gfxScreen_t screen, gfx3dSide_t side, u16* width, u16* height); // ctr_gpu_queue.c, dlgblank
-#define OPT_SHOWN CtrBlank_settledShown
+u8* CtrTap_optionsShown(gfxScreen_t screen, gfx3dSide_t side, u16* width, u16* height); // z_fpsghost_hintpage.c, drain held/pending before borrowing
+#define OPT_SHOWN CtrTap_optionsShown
 #else
 #define OPT_SHOWN CtrPacer_shownFramebuffer
 #endif

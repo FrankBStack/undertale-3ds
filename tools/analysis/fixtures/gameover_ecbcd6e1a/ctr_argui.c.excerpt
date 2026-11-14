@@ -1,0 +1,48 @@
+ARGUI_NOINLINE void arguiPaintScreen(void* fb, bool rgb565) {
+    bool open = g.menuIsOpen;
+    if (gFpsScreen < gHintSeen || g.texCache == nullptr || CtrBench_running()) return;
+    // Retired fpsFrames/fpsVb fields retain their layout; the pacer supplies the reading.
+    uint32_t game = CtrScreens_game;
+    gfxScreen_t screen = (gfxScreen_t) (game ^ rgb565);
+    bool other565 = gfxGetScreenFormat((gfxScreen_t) (game ^ 1u)) == GSP_RGB565_OES;
+    if (rgb565 && !other565) return;
+    bool otherFree = CtrScreens_otherOff && other565;
+    uint32_t draw = (uint32_t) (!gHintSeen && rgb565 == otherFree && (rgb565 || g.hintFrames < 180u)) |
+                    ((uint32_t) (gFpsScreen == (uint32_t) screen + 1u) << 1);
+    if (!draw) return;
+    if (fb == nullptr && (fb = CtrPacer_backFramebuffer(screen, GFX_LEFT)) == nullptr) return;
+
+#if defined(ENABLE_WAD17)
+    // The GSP callback must never wait for a paint on the main thread. Unload
+    // waits for an already-started paint, then withdraws the cache under this lock.
+    bool CtrFpsbox_tryPaint(void);
+    void CtrFpsbox_endPaint(void);
+    if (!CtrFpsbox_tryPaint()) return;
+#endif
+    uint32_t xMul = (!rgb565 && gfxIsWide()) ? 2u : 1u;
+    g.rgb565 = rgb565;
+    g.adv = 5;
+    // The main-thread flush below samples the pacer, including paused frames.
+#line 539
+    GSPGPU_InvalidateDataCache(fb, 320u * 240u * 2u); // dialogue can transfer into RGB565 too
+    // The other framebuffer can hold dialogue; never erase it for a counter.
+    g.fb = fb;
+    g.menuIsOpen = false; // the counter's own font and cells, not the menu's
+    if (draw & 1u) {
+        g.sx = (uint8_t) xMul;
+        g.sy = 1;
+        uint32_t col = rgb565 ? 0x9CF3u : (g.hintFrames++ < 150u ? 0xA8u : (181u - g.hintFrames) * 5u);
+        CtrHint_draw(2, 228, strHint, col);
+    }
+    if (draw & 2u) {
+        uint32_t s = (uint32_t) gFpsSize + 1u;
+        g.sx = (uint8_t) (s * xMul);
+        g.sy = (uint8_t) s;
+        CTR_FPSDIAG_DRAW(2, 2, g.fpsBuf, 0xFFFFu);
+    }
+    g.menuIsOpen = open;
+    GSPGPU_FlushDataCache(fb, 320u * 240u * 2u);
+#if defined(ENABLE_WAD17)
+    CtrFpsbox_endPaint();
+#endif
+}

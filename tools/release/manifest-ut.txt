@@ -239,6 +239,7 @@ platform/3ds/source/z_popbot.c
 platform/3ds/source/z_popbot2.c
 platform/3ds/source/z_battletouch.c
 platform/3ds/source/ctr_touch_core.h
+platform/3ds/source/ctr_battletouch_look.h
 platform/3ds/source/z_menutime.c
 platform/3ds/source/z_logfix.c
 platform/3ds/source/z_heldslow.c
@@ -439,6 +440,7 @@ platform/3ds/source/ctr_readback.h
 platform/3ds/source/ctr_release_branding.c
 platform/3ds/source/ctr_release_branding.h
 platform/3ds/source/ctr_renderer.c
+platform/3ds/source/ctr_gameoverscreen.inc
 platform/3ds/source/ctr_renderer.h
 platform/3ds/source/ctr_renderer_palette_retry.inc
 platform/3ds/source/ctr_renderer_tpaggrow_layout.inc
@@ -1188,6 +1190,7 @@ tools/analysis/check_dlgtop_layout.py
 # S4 exclusive-loan controller and Draw-created-box seam.
 platform/3ds/source/ctr_dlgtop.h
 platform/3ds/source/ctr_dlgtop_lease.inc
+platform/3ds/source/ctr_dlgtop_retire.inc
 platform/3ds/source/ctr_dlgtop_buffers.inc
 platform/3ds/source/ctr_dlgtop_birth.inc
 tools/analysis/capture_png.py
@@ -1211,6 +1214,10 @@ tools/analysis/test_menulag_verdict_retain.py
 platform/3ds/source/z_fpsghost_return.c
 tools/buildcache/fpsghost_return_compile.py
 
+# FPS Options-window hint page and its CMake include.
+platform/3ds/fpsghost_hintpage.cmake
+platform/3ds/source/z_fpsghost_hintpage.c
+
 # sfxlate: appended Old cooler preparation and its source-build adapter.
 platform/3ds/source/ctr_sfxlate_cooler.inc
 tools/buildcache/sfxlate_compile.py
@@ -1228,3 +1235,20 @@ tools/buildcache/parity_motion_verify.py
 tools/buildcache/test_parity_motion_compile.py
 tools/buildcache/test_parity_motion_verify.py
 tools/analysis/check_parity_motion_layout.py
+
+# Game-over N policy and handover regression tests.
+tools/analysis/test_gameoverscreen_nooptions.py
+tools/analysis/test_gameoverscreen_handover.py
+tools/analysis/gameoverscreen_host_fixture.py
+tools/analysis/gameoverscreen_frozen.py
+tools/analysis/test_gameoverscreen_frozen.py
+tools/analysis/fixtures/gameover_ecbcd6e1a/ctr_renderer.c.excerpt
+tools/analysis/fixtures/gameover_ecbcd6e1a/z_layout.c.excerpt
+tools/analysis/fixtures/gameover_ecbcd6e1a/z_battletouch.c.excerpt
+tools/analysis/fixtures/gameover_ecbcd6e1a/z_menutime.c.excerpt
+tools/analysis/fixtures/gameover_ecbcd6e1a/z_upd1_options.c.excerpt
+tools/analysis/fixtures/gameover_ecbcd6e1a/ctr_argui.c.excerpt
+tools/analysis/fixtures/gameover_ecbcd6e1a/main.c.excerpt
+tools/analysis/test_gameoverscreen_lifecycle.py
+tools/analysis/test_gameoverscreen_entry_sequence.py
+tools/analysis/test_gameoverscreen_input.py

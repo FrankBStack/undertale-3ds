@@ -387,6 +387,7 @@ endif()
 
 # ===[ 3DS platform layer ]===
 file(GLOB PLATFORM_SOURCES CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/source/*.c")
+list(REMOVE_ITEM PLATFORM_SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/source/z_fpsghost_hintpage.c")
 list(REMOVE_ITEM PLATFORM_SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/source/z_audioboost.c") # Explicit Old-only unit below.
 list(REMOVE_ITEM PLATFORM_SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/source/z_bootline_console.c") # Added explicitly for UT below.
 list(REMOVE_ITEM PLATFORM_SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/source/z_stalecarry.c") # Only stalecarry builds add it below.
@@ -1322,7 +1323,9 @@ endforeach()
 # profiles that add late code before a hole (shots, spikerec, ...) still link, packed. Release builds (the release
 # source URL set) also ASSERT every hole ends at or before it, so any overflow stops the link whatever its size (a
 # wrapped pad would end the hole 4 KiB or more later). A change that moves late code by whole pages before a hole
-# updates these. Other targets: the hole's own start and end, always true.
+# updates these (codediet B, rebased on E' 11-14: the -4096 B move after utasgore takes bxreview, relprep and asgborder
+# 4 KiB down).
+# Other targets: the hole's own start and end, always true.
 if(CTRPORT_GAME STREQUAL "undertale" AND CTRPORT_TARGET STREQUAL "o3ds")
     set(ctrport_h1loadtime_text_limit 0x608028)
     set(ctrport_h1coverage_text_limit 0x610a9c)
@@ -1344,6 +1347,11 @@ if(CTRPORT_GAME STREQUAL "undertale" AND CTRPORT_TARGET STREQUAL "o3ds")
                  h1bxreview h1relprep asgborder)
         math(EXPR ctrport_${hole}_text_limit "${ctrport_${hole}_text_limit} + 0x9000" OUTPUT_FORMAT HEXADECIMAL)
     endforeach()
+    # codediet B (lead 11-09; rebased on E' 11-14): the -4096 B move after utasgore takes the three holes after it 4 KiB
+    # down (the rule above); the ones before it stay.
+    foreach(hole h1bxreview h1relprep asgborder)
+        math(EXPR ctrport_${hole}_text_limit "${ctrport_${hole}_text_limit} - 0x1000" OUTPUT_FORMAT HEXADECIMAL)
+    endforeach()
 endif()
 foreach(hole H1LOADTIME H1COVERAGE H1REND H1UTSTALL AOTLHELP AOTLGEN AOTLATE UTLAVA UTLHELP H1UTLOOP UTOLDREG H1BXREVIEW H1RELPREP ASGBORDER)
     string(TOLOWER "${hole}" hole_lower)
@@ -1362,6 +1370,36 @@ foreach(hole H1LOADTIME H1COVERAGE H1REND H1UTSTALL AOTLHELP AOTLGEN AOTLATE UTL
                    "${CTRPORT_LATE_LD_TEXT}")
         endif()
     endforeach()
+endforeach()
+# codediet B (lead 11-09; rebased on E' 11-14; late_reserve.ld's utasgore, packscreen and battletouch H1 holes): dead
+# code at three late sections' ends left the link and its bytes are holes in place. Each pad ends a fixed size after its
+# own section's start (the section's E' size, so it holds whatever a later change adds before it, in Steam, GOG, dev and
+# release builds alike): utasgore 9,720 B less 4,096 on Old (so every later late byte moves by exactly -4,096 B there,
+# the one move) and 9,720 B on New (nothing moves); packscreen 3,860 B and battletouch 9,080 B on both. DELTARUNE: 0,
+# no pad (none of the code is in its build). Release builds cap each section at its size (a test profile that adds
+# code there packs instead).
+if(CTRPORT_GAME STREQUAL "undertale" AND CTRPORT_TARGET STREQUAL "o3ds")
+    set(ctrport_cdhole_sizes utasgore 5624 packscreen 3860 battletouch 9080)
+elseif(CTRPORT_GAME STREQUAL "undertale")
+    set(ctrport_cdhole_sizes utasgore 9720 packscreen 3860 battletouch 9080)
+else()
+    set(ctrport_cdhole_sizes utasgore 0 packscreen 0 battletouch 0)
+endif()
+foreach(index 0 2 4)
+    math(EXPR at1 "${index} + 1")
+    list(GET ctrport_cdhole_sizes ${index} hole)
+    list(GET ctrport_cdhole_sizes ${at1} hole_size)
+    string(TOUPPER "${hole}" hole_upper)
+    foreach(hole_marker "/* H1${hole_upper}_TEXT_SIZE */ 0" "/* H1${hole_upper}_TEXT_CAP */ 0x7fffffff")
+        string(FIND "${CTRPORT_LATE_LD_TEXT}" "${hole_marker}" hole_at)
+        if(hole_at LESS 0)
+            message(FATAL_ERROR "codediet H1: late_reserve.ld has no ${hole_marker}")
+        endif()
+    endforeach()
+    string(REPLACE "/* H1${hole_upper}_TEXT_SIZE */ 0" "${hole_size}" CTRPORT_LATE_LD_TEXT "${CTRPORT_LATE_LD_TEXT}")
+    if(CTRPORT_RELEASE_SOURCE_URL AND hole_size GREATER 0)
+        string(REPLACE "/* H1${hole_upper}_TEXT_CAP */ 0x7fffffff" "${hole_size}" CTRPORT_LATE_LD_TEXT "${CTRPORT_LATE_LD_TEXT}")
+    endif()
 endforeach()
 # UNDERTALE did not link libctru's RomFS driver on main 36a55611. benchromfs (first) put romfs_dev.o right after its own
 # late lines, so its addresses are frozen there; relprep's later RELPREP_ROMFS_<kind> placeholders stay empty (a second
@@ -1399,6 +1437,13 @@ endif()
 # release; .rodata, .data and .bss move by two pages in those builds alone.
 if(CTRPORT_TITANDIAG)
     string(REPLACE "__late_text_limit = ALIGN(__late_text_start, 0x1000) +" "__late_text_limit = ALIGN(__late_text_start, 0x1000) + 0x2000 +"
+           CTRPORT_LATE_LD_TEXT "${CTRPORT_LATE_LD_TEXT}")
+endif()
+# Touch-test builds (CTRPORT_TOUCH_TEST, never a release) on UNDERTALE Old: one more 4 KiB page of late code for the
+# test's own (about 3.5 KB), which overflowed the reserve by 129 B. Text keeps
+# its addresses; .rodata, .data and .bss move by one page in those builds alone.
+if(CTRPORT_TOUCH_TEST AND CTRPORT_GAME STREQUAL "undertale" AND CTRPORT_TARGET STREQUAL "o3ds")
+    string(REPLACE "__late_text_limit = ALIGN(__late_text_start, 0x1000) +" "__late_text_limit = ALIGN(__late_text_start, 0x1000) + 0x1000 +"
            CTRPORT_LATE_LD_TEXT "${CTRPORT_LATE_LD_TEXT}")
 endif()
 # Screenshot (shots) builds on Old 3DS, both games (review decision, legalui round 21, 2026-10-26): one more 4 KiB page of
@@ -3987,12 +4032,12 @@ if(CTRPORT_GAME STREQUAL "undertale")
     # ctr_audio_system.c) since loadaudio 76dd8ab09; on z_freebies.c this define was dead and the window hooks never
     # installed (UT-036 regression, zq47). tools/analysis/test_utwindow_chain.py checks the chain from the caller.
     # utfade (source/z_utfade.c) sits in front: a door's room change shows black while the room loads. The chain is
-    # CtrLoadmix_handleRoomChange -> CtrUtfade_pendingRoom -> CtrUtWindow_pendingRoom
+    # CtrLoadmix_handleRoomChange -> CtrUtfade_pendingRoom -> CtrGameover_pendingRoom -> CtrUtWindow_pendingRoom
     # -> the real function; each unit's __real_ call names the next link. No new link wraps.
     set_property(SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/source/ctr_audio_system.c" APPEND PROPERTY
         COMPILE_DEFINITIONS __real_Runner_handlePendingRoomChange=CtrUtfade_pendingRoom)
     set_property(SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/source/z_utfade.c" APPEND PROPERTY
-        COMPILE_DEFINITIONS __real_Runner_handlePendingRoomChange=CtrUtWindow_pendingRoom)
+        COMPILE_DEFINITIONS __real_Runner_handlePendingRoomChange=CtrGameover_pendingRoom)
     set_source_files_properties("${CMAKE_CURRENT_SOURCE_DIR}/source/z_utfade.c" PROPERTIES COMPILE_OPTIONS
         "-Os;-fno-builtin-printf;-fno-builtin-puts;-fno-builtin-putchar;-fno-builtin-fprintf;-fno-builtin-fputs;-fno-tree-switch-conversion;-fno-jump-tables")
     # utfadeprobe (build.sh "utfadeprobe", tests only, never Release): z_utfade.c writes the game screen's picture
@@ -4406,7 +4451,8 @@ endif()
 # benchfidLoad, benchfidOverride and CtrDisplay_save (the battle_touch setting). Its options are two rows on the main
 # page (tools/buildcache/builderx_compile.py routes optmenu's main-page keys and draw there); the Controls page is as
 # before, so the first slot's Battles row and page code is not wrapped in, and its __real_ calls name the originals
-# (--defsym: no code). CTRPORT_TOUCH_TEST (build.sh
+# (--defsym: no code; codediet B put that code in .text.battletouch_unused, which gc-sections drops, and its bytes
+# are a hole). CTRPORT_TOUCH_TEST (build.sh
 # "touchtest"; test builds only): touchscript.txt in the game folder drives the pen, and each stylus frame is logged.
 if(CTRPORT_GAME STREQUAL "undertale")
     set_source_files_properties("${CMAKE_CURRENT_SOURCE_DIR}/source/z_battletouch.c" PROPERTIES
@@ -4422,7 +4468,9 @@ if(CTRPORT_GAME STREQUAL "undertale")
 endif()
 option(CTRPORT_TOUCH_TEST "Test only: touchscript.txt drives the stylus in battles, and stylus frames are logged" OFF)
 if(CTRPORT_TOUCH_TEST)
-    set_property(SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/source/z_battletouch.c" APPEND PROPERTY COMPILE_DEFINITIONS CTRPORT_TOUCH_TEST)
+    # runner.c: its default-draw forwarder (drawSelfLook) goes with the menus' code, as the pad is 0 in these builds.
+    set_property(SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/source/z_battletouch.c" "${ENGINE_DIR}/src/runner.c" APPEND PROPERTY
+                 COMPILE_DEFINITIONS CTRPORT_TOUCH_TEST)
 endif()
 # The pen log (lead 11-08): test builds keep every stylus sample in a ring and write it as one [pen] line a while after
 # the pen lifts, so a player's log has the console's samples. Never in a public build (CTRPORT_RELEASE_SOURCE_URL).
@@ -4576,11 +4624,11 @@ if(CTRPORT_GAME STREQUAL "undertale")
     set_property(SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/source/ctr_argui.c" APPEND PROPERTY COMPILE_DEFINITIONS
         CtrDisplay_load=CtrLayout_chainLoad CtrDisplay_override=CtrLayout_chainOverride
         CtrDisplay_saveEdits=CtrLayout_chainSaveEdits)
-    # A2: the display settings' chain goes errtext's wrap -> CtrLayout_display18 -> inputlate's link (z_layout.c says
+    # A2: the display settings' chain goes errtext's wrap -> game-over lock -> CtrLayout_display18 -> inputlate's link (z_layout.c says
     # why: the battle's move up runs the whole chain before the frame without taking the frame's input).
     set_property(SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/source/z_errtext_e1.c" APPEND PROPERTY COMPILE_DEFINITIONS
-        "__real_CtrRenderer_chainDisplayInputlate=CtrLayout_display18")
-    # LAY-1: the beginFrame chain goes inputlate's link -> CtrLayout_chain18 (a Battle layout pick's repick, outside the
+        "__real_CtrRenderer_chainDisplayInputlate=CtrGameover_display")
+    # LAY-1: the beginFrame chain goes inputlate's link -> S4 -> game-over lock -> CtrLayout_chain18 (a Battle layout pick's repick, outside the
     # frame) -> shopsplit's wrap -> battlesplit's chain. inputlate's one call, another target (z_layout.c says why).
     set_property(SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/source/z_inputlate.c" APPEND PROPERTY COMPILE_DEFINITIONS
         "CtrRenderer_chainBeginFrameBattlesplit=CtrLayout_chain18")
@@ -5001,8 +5049,32 @@ if(CTRPORT_GAME STREQUAL "undertale")
         COMPILE_OPTIONS "-Os")
 endif()
 
+include("${CMAKE_CURRENT_SOURCE_DIR}/fpsghost_hintpage.cmake")
+
 # sfxboost: configure the Old-only audio ceiling before the final dispatcher.
 include("${CMAKE_CURRENT_SOURCE_DIR}/sfxlate_boost.cmake")
+
+# Game-over presentation unit, after the ordinary tail. Its renderer helper
+# pass adds only named late sections; existing sprite branches keep their size.
+if(CTRPORT_GAME STREQUAL "undertale")
+    target_link_options(ctrport PRIVATE -Wl,--wrap=CtrMenutime_open)
+    set_property(SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/source/ctr_renderer.c" APPEND PROPERTY OBJECT_DEPENDS
+        "${CMAKE_CURRENT_SOURCE_DIR}/source/ctr_gameoverscreen.inc"
+        "${CMAKE_CURRENT_SOURCE_DIR}/../../tools/analysis/vine_extract.py")
+    set_property(SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/source/ctr_renderer.c" APPEND PROPERTY COMPILE_DEFINITIONS
+        __real_Runner_handlePendingRoomChange=CtrUtWindow_pendingRoom)
+endif()
+
+# Dialogue close retirement: a source-level continuation, no compiler adapter
+# or new product flag. Menutime's existing open calls this before any painter.
+if(CTRPORT_GAME STREQUAL "undertale")
+    set_property(SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/source/z_menutime.c" APPEND PROPERTY
+        COMPILE_DEFINITIONS "Upd1_menuOpen=CtrDlgtop_menuOpen")
+    set_property(SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/source/main.c" APPEND PROPERTY
+        COMPILE_DEFINITIONS "CtrBlank_dialogueShown=CtrDlgtop_consoleShown")
+    set_property(SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/source/ctr_renderer.c" APPEND PROPERTY OBJECT_DEPENDS
+        "${CMAKE_CURRENT_SOURCE_DIR}/source/ctr_dlgtop_retire.inc")
+endif()
 
 # Last: the launcher dispatcher wraps the finished C_COMPILER_LAUNCHER chain.
 include("${CMAKE_CURRENT_SOURCE_DIR}/launch_dispatch.cmake")

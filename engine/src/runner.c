@@ -1391,6 +1391,68 @@ static void rebuildDrawableCache(Runner* runner) {
     }
 }
 
+#if defined(ENABLE_WAD16) && defined(__3DS__)
+// battletouch's menu look (UNDERTALE, 11-14): the default draw's sprite call goes through drawSelfLook, which asks
+// z_battletouch.c about the instance being drawn (ctr_battletouch_look.h; drawInstanceNormally sets currentInstance)
+// only while CtrBattletouch_menuHide is nonzero. BT_LOOK_HIDE leaves the draw out; a button draws its frame 0, plain
+// (orange) or in yellow ink: the game's own selected yellow (frame 1's, RGB565 (31, 63, 8) on the bottom screen) on
+// every lit texel, black kept black (lead 11-14). Three draws of frame 0: as the game gives it, then twice under bm_add
+// with the colour cut to its green and its blue's 0x50 bits (c_white: (0, 255, 80)). The bottom screen reads the
+// orange (31, 30, 5), texels held at five bits: about (255, 123, 41). Its green is under half its red, so the second
+// add clamps green at 255 (any green from 85 up); blue comes to 41 + 2 x 41 x 80 / 255 = 67, the yellow's level (8:
+// 64 to 71, for an orange blue of 40 to 43); black adds nothing. (M' used the fog, which replaces every texel's RGB, the opaque black inside included: a flat
+// yellow rectangle, hiscase 11-14.) The added draws happen only under bm_normal, the buttons' (gpuSetBlendMode then
+// restores it exactly).
+// Release and dev builds keep it in battletouch's pad (.text_battletouchfill, at most 696 B with z_battletouch.c's);
+// touch-test builds, whose pad is 0, append it with the menus' code.
+#include "ctr_battletouch_look.h"
+#ifdef CTRPORT_TOUCH_TEST
+#define DRAW_SELF_LOOK_SECTION ".text_battletouchmenu"
+#else
+#define DRAW_SELF_LOOK_SECTION ".text_battletouchfill"
+#endif
+#define DRAW_SELF_LOOK_CUT 0xAF00FFu // cleared for the adds (two BICs; a 0x50FF00 mask would load a literal)
+static __attribute__((noinline, noclone, optimize("Os"), section(DRAW_SELF_LOOK_SECTION))) void drawSelfLook(Renderer* renderer, int32_t spriteIndex, int32_t subimg, float x, float y, float xscale, float yscale, float rot, uint32_t color, float alpha) {
+    uint32_t look = CtrBattletouch_menuHide != 0 ? CtrBattletouch_menuLook() : 0u;
+    if ((look & BT_LOOK_HIDE) != 0) return;
+    bool ink = look == BT_LOOK_FRAME0;
+    if (look != 0u) subimg = 0;
+    bool add = ink && renderer->vtable->gpuGetBlendMode(renderer) == bm_normal;
+    for (int32_t pass = 0;; pass++) { // one call site for the three draws
+        Renderer_drawSpriteExt(renderer, spriteIndex, subimg, x, y, xscale, yscale, rot, color, alpha);
+        if (!add) return;
+        if (pass == 2) break;
+        renderer->vtable->gpuSetBlendMode(renderer, bm_add);
+        color &= ~DRAW_SELF_LOOK_CUT;
+    }
+    renderer->vtable->gpuSetBlendMode(renderer, bm_normal);
+}
+
+// Renderer_drawSelf (renderer.h) with its sprite call through drawSelfLook; otherwise that function's text, token for
+// token (a host test checks it).
+static inline void drawSelfLooked(Renderer* renderer, Instance* instance) {
+    if (0 > instance->spriteIndex) return;
+
+    int32_t subimg = (int32_t) instance->imageIndex;
+    drawSelfLook(
+        renderer,
+        instance->spriteIndex,
+        subimg,
+        (float) instance->x,
+        (float) instance->y,
+        (float) instance->imageXscale,
+        (float) instance->imageYscale,
+        (float) instance->imageAngle,
+        instance->imageBlend,
+        (float) instance->imageAlpha
+    );
+}
+#define DRAW_SELF drawSelfLooked
+#else
+#define DRAW_SELF Renderer_drawSelf
+#endif
+// The lines after keep their numbers (__LINE__ in the asserts' text below).
+#line 1369
 static void drawInstanceNormally(Runner* runner, Instance* inst) {
     if (runner->drawEnabled) {
         int32_t ownerObjectIndex = -1;
@@ -1410,7 +1472,7 @@ static void drawInstanceNormally(Runner* runner, Instance* inst) {
             int32_t savedEventType = ctx->currentEventType;
             ctx->currentInstance = inst;
             ctx->currentEventType = EVENT_DRAW;
-            Renderer_drawSelf(runner->renderer, inst);
+            DRAW_SELF(runner->renderer, inst);
             ctx->currentInstance = savedInstance;
             ctx->currentEventType = savedEventType;
         }

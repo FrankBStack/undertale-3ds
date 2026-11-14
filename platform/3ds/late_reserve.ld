@@ -507,7 +507,23 @@ SECTIONS
     __bootlog_text_gap_end = ABSOLUTE(.);
     /* utasgore (round 17, after bootlog, before the catch-all; UNDERTALE only): fine sprites outside the view and in
        steady held runs (ctr_renderer.c's tail, utaFineSprite, which utkDrawSprite hands Smart's fine sprites to). */
+    /* codediet B (lead 11-09; rebased on E' 11-14; UNDERTALE): utasgore's originals (utaPlan, utaLinear, utaFineDraw,
+       utaFineSprite: 7,828 B at the section's end, unused since asgorelong's copies took their call) left the link
+       (.text.utasgore_unused, which gc-sections drops), and their place is an H1 hole counted from the section's own
+       start (__h1utasgore_sec_start: ALIGN(4), the input's own alignment, so it is the section's start and moves
+       nothing). CMake substitutes H1UTASGORE_TEXT_SIZE: on UNDERTALE Old the section's E' size less 4096 (5,624 B),
+       so every later late byte moves by exactly -4096 B (one I-cache set period: dec-1031-setphase), a 3,732 B hole;
+       on UNDERTALE New its E' size (9,720 B), so nothing moves (a 7,828 B hole); elsewhere 0, no pad. Relative, not an
+       absolute end: E' dev builds have 0x600 B more late code ahead of it than release builds, so one fixed end
+       cannot give both the same move. A longer section (a test profile) pads nothing; release builds ASSERT it is
+       not (H1UTASGORE_TEXT_CAP). The packscreen and battletouch holes below take the same form and put everything
+       after them back where it was. */
+    __h1utasgore_sec_start = ABSOLUTE(ALIGN(4));
     *(.text.late.utasgore)
+    *(.text.h1hole.utasgore)
+    __h1utasgore_text_gap_start = ABSOLUTE(.);
+    . += (__h1utasgore_text_gap_start > __h1utasgore_sec_start && __h1utasgore_text_gap_start <= __h1utasgore_sec_start + /* H1UTASGORE_TEXT_SIZE */ 0) ? (__h1utasgore_sec_start + /* H1UTASGORE_TEXT_SIZE */ 0 - __h1utasgore_text_gap_start) : 0;
+    __h1utasgore_text_gap_end = ABSOLUTE(.);
     /* Any other late text (round 14 dropped the wildcard ahead of the host table: it placed nothing). Not
        ctr_renderer.c's or z_itemverdict.c's, whose smartcut sections come last (round 17). */
     *(SORT_BY_NAME(EXCLUDE_FILE (*z_bottomframe*.o *ctr_optmenu.o *z_bottompaint.o *z_boxcache.o *ctr_screens.o *ctr_rosalina.o *z_rosabl.o *z_dimlight.o *z_utlife.o *z_hitcheck.o *z_utlife_collision.o *z_utlife_collision_membership.o *z_roomload.o *z_upd1_options.o *z_upd1_audio.o *z_upd1_text.o *z_rngexact* *z_thinart.o *z_dlghold.o *z_redpix.o *z_labcut.o *ctr_fpsbox.o *ctr_legal.o *ctr_legal_romfs.o *z_colexact.o *z_utwindow.o *z_asrtext* *z_adpcm* *ctr_adpcm_probe.o *ctr_audio_system.o *z_knightnew_history.o *z_flowcode.o *ctr_data_version.o *z_gogut* *ctr_pixgrid* *z_builderx_review* *z_builderx_new* *z_builderx_old* *z_builderx_receipt* *runner.o *z_loadscreen.o *z_symverdict* *z_smalltext_dr* *z_utstall* *z_sdmigrate* *ctr_renderer.o *z_itemverdict.o *z_phaseplan* *z_utold_scalar* *ctr_benchmark.o *z_sdlat* *vm_builtins.o *z_gamedir* *ctr_flowervramg_promotion.o *ctr_memory.o *ctr_flowervramg_palette.o *ctr_textures.o *z_hashmenu.o *state_hash.o *random.o *z_saveaudit.o *z_saveaudit_format.o *z_saveaudit_scan.o *libswkbd_late.a:* *ctr_input.o *ctr_frame_pacer.o *z_shopsplit.o *z_vramtop.o) .text.late.*))
@@ -527,7 +543,15 @@ SECTIONS
     /* packscreen (integrate round 16, after drstep, merge order; both games): the first time setup's texture
        preparation inside the loading screen (z_loadscreen.c's end), then its constants. z_loadscreen.o is out of
        the catch-all above (its other late sections have their own lines). */
+    __h1packscreen_sec_start = ABSOLUTE(ALIGN(8));
     *(.text.late.packscreen)
+    /* codediet B: UNDERTALE's lsPackRun (1,844 B, the section's end; firstboot's CtrFirstboot_packRun took its call) went:
+       an H1 hole that pads the section back to its E' size, H1PACKSCREEN_TEXT_SIZE (3,860 B, UNDERTALE; 0 elsewhere),
+       counted from its own start (ALIGN(8), the input's alignment), as utasgore's above. */
+    *(.text.h1hole.packscreen)
+    __h1packscreen_text_gap_start = ABSOLUTE(.);
+    . += (__h1packscreen_text_gap_start > __h1packscreen_sec_start && __h1packscreen_text_gap_start <= __h1packscreen_sec_start + /* H1PACKSCREEN_TEXT_SIZE */ 0) ? (__h1packscreen_sec_start + /* H1PACKSCREEN_TEXT_SIZE */ 0 - __h1packscreen_text_gap_start) : 0;
+    __h1packscreen_text_gap_end = ABSOLUTE(.);
     *(.rodata.packscreen_in_text)
     /* symverdict (UNDERTALE only, DELTARUNE New's has its own lines last;
        after packscreen, merge order): symmetric halving's first look from the build (z_symverdict.c, all late
@@ -1958,7 +1982,20 @@ SECTIONS
        battles (z_battletouch.c), its constants, and libctru's hidTouchRead, first linked by it (CMakeLists.txt drops that
        line for DELTARUNE, whose Old pin keeps it in the library tail). Named outside .text.late.* and no file wildcard
        above matches z_battletouch.o; appended, so no earlier late code moves. */
+    __h1battletouch_sec_start = ABSOLUTE(ALIGN(8));
     *(.text.battletouch_late)
+    /* codediet B: the Battles page code never wrapped in (bmPageDraw, bmPageKeys, the three CtrCtrlui wraps) and the
+       CtrInput_take wrap's pad to its old size (3,432 B, the section's end) left the link: an H1 hole that pads the
+       section back to its old size, H1BATTLETOUCH_TEXT_SIZE (9,080 B, UNDERTALE; 0 elsewhere), counted from its own
+       start (ALIGN(8), the input's own alignment, read without moving the location counter: DELTARUNE New's is 4 mod 8
+       here, and this input is empty there). It sits after GOG's block, where GOG builds put
+       it G bytes later than Steam builds, so it can't end on a fixed address (test_gogut_late_order): relative to the
+       section's start, it puts its constants and everything after it back in Steam and GOG builds alike. A section
+       already longer (a test profile) pads nothing; release builds ASSERT it is not (H1BATTLETOUCH_TEXT_CAP). */
+    *(.text.h1hole.battletouch)
+    __h1battletouch_text_gap_start = ABSOLUTE(.);
+    . += (__h1battletouch_text_gap_start > __h1battletouch_sec_start && __h1battletouch_text_gap_start <= __h1battletouch_sec_start + /* H1BATTLETOUCH_TEXT_SIZE */ 0) ? (__h1battletouch_sec_start + /* H1BATTLETOUCH_TEXT_SIZE */ 0 - __h1battletouch_text_gap_start) : 0;
+    __h1battletouch_text_gap_end = ABSOLUTE(.);
     *(.rodata.battletouch_in_text)
     *z_battletouch.o(.text .text.* .rodata .rodata.*)
     *libctru.a:hid.o(.text.hidTouchRead)
@@ -2137,6 +2174,15 @@ SECTIONS
        __bt4_text_gap_* marks. */
     __bt4_late_start = .;
     *(.text_battletouch4)
+    /* r2-drop (battletouch, 11-13): the menus' recolour left this text; its 536 B stay here, and unit M's
+       drag-off rule's 160 B with them (z_battletouch.c's __bt_paintgap4, 696; 0 where that isn't defined: DELTARUNE,
+       touch-test builds), so the constants below and everything after keep their addresses. Unit M (lead 11-14, the
+       pad lever): battletouch's menu code and runner.c's default-draw forwarder (drawSelfLook, the menus' look) in
+       .text_battletouchfill (not in touch-test builds) fill them, the rest is zero fill; more than 696 B moves the
+       location counter back, which fails the link. */
+    __bt4_fill_start = .;
+    *(.text_battletouchfill)
+    . = __bt4_fill_start + (DEFINED(__bt_paintgap4) ? __bt_paintgap4 : 0);
     *(.rodata_battletouch4)
     __bt4_text_gap_start = ABSOLUTE(.);
     . = . > __bt4_late_start ? __bt4_late_start + 0x1d53 : .;
@@ -2213,6 +2259,9 @@ SECTIONS
        empty in DELTARUNE): code moved out of the pinned fourth pair (the pad, the cursor put-back, the menu leave)
        and code added after the pin (z_battletouch.c's .text_battletouch5 and .rodata_battletouch5). */
     *(.text_battletouch5)
+    /* The removed code's fill (z_battletouch.c's __bt_paintgap5): unit M's drag-off rule's 92 B in public builds;
+       in touch-test builds, where BT_CODE4 is this pair, r2-drop's and the drag-off rule's. */
+    . += DEFINED(__bt_paintgap5) ? __bt_paintgap5 : 0;
     *(.rodata_battletouch5)
     /* gpuburst F1 (UNDERTALE Old): CtrMemory_vramAllocTop by VRAM bank (z_vramtop.c), appended after dv8s. */
     *(.text.late.gpuburst)
@@ -2328,6 +2377,14 @@ SECTIONS
        diag/ctr_repack_test.c's code and constants, last, so adding them moves no other late address of that test
        build (its late addresses still differ from release). Keep these last; new appends go above this comment. */
     *(.text_sfxboost)
+    /* Game-over N: append after every dev-line shipping input. */
+    *(.text_gameoverscreen .rodata_gameoverscreen)
+    /* battletouch r2 (11-13): the menus' look (no menu SOUL after a touch, all orange after a re-tap) and ITEM's
+       edges; take2's view call, the take wrap and the swap's second names; append only. */
+    *(.text_battletouchmenu .rodata_battletouchmenu)
+    /* Dialogue return: append after every existing production tenant. */
+    *(.text_dlgretire_late)
+    *(.text_fpsghost_hintpage)
     *(.repack_test)
     *(.repack_test_ro)
   }
@@ -2389,6 +2446,12 @@ SECTIONS
          "freebytes H1: hole utoldreg overfilled (see platform/3ds/late_reserve.ld)")
   ASSERT(__asgborder_text_gap_end <= /* ASGBORDER_TEXT_STRICT */ __asgborder_text_gap_end,
          "freebytes H1: hole asgborder overfilled (see platform/3ds/late_reserve.ld)")
+  ASSERT(__h1utasgore_text_gap_end <= __h1utasgore_sec_start || __h1utasgore_text_gap_end - __h1utasgore_sec_start <= /* H1UTASGORE_TEXT_CAP */ 0x7fffffff,
+         "codediet H1: hole utasgore overfilled (see platform/3ds/late_reserve.ld)")
+  ASSERT(__h1packscreen_text_gap_end <= __h1packscreen_sec_start || __h1packscreen_text_gap_end - __h1packscreen_sec_start <= /* H1PACKSCREEN_TEXT_CAP */ 0x7fffffff,
+         "codediet H1: hole packscreen overfilled (see platform/3ds/late_reserve.ld)")
+  ASSERT(__h1battletouch_text_gap_end <= __h1battletouch_sec_start || __h1battletouch_text_gap_end - __h1battletouch_sec_start <= /* H1BATTLETOUCH_TEXT_CAP */ 0x7fffffff,
+         "codediet H1: hole battletouch overfilled (see platform/3ds/late_reserve.ld)")
 }
 INSERT AFTER .text;
 
@@ -3439,6 +3502,11 @@ SECTIONS
     *(.bss_exitfiles_late)
     /* bootbar: the setup bar's span and the hash's added time (UNDERTALE only). */
     *(.bss_bootbar_late)
+    /* Game-over N: 48 B NOBITS, before test-only ballast. */
+    *(.bss_gameoverscreen)
+    /* battletouch r2 (11-13): the menus' look and the draw hook's byte (CtrBattletouch_menuHide). */
+    *(.bss_battletouchmenu)
+    *(.bss_fpsghost_hintpage)
     /* ballast (build.sh ballast test builds only, empty in every release build): z_ballast.c's state, last, so a
        ballast build keeps every late static's address of the release build. Keep this line last in late .bss; new
        appends go above this comment. Its code and constants are in the AAC slots (aacout.cmake). */

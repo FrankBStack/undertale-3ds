@@ -16,7 +16,8 @@ from touchquiz_compile import inventory
 
 MARKER = '--touchname-compiler'
 ROUTES = {
-    'z_battletouch.c': ('Battletouch_take2', '.text_battletouch2', 'To_buttons', 'Nn_buttons'),
+    # take2's real CtrInput_take call is made through btRawTake (battletouch r2, BT2-1).
+    'z_battletouch.c': ('btRawTake', '.text_battletouchmenu', 'To_buttons', 'Nn_buttons'),
     'z_touchquiz.c': ('CtrTouchQuiz_claim', '.aacout.text.touchquiz', 'To_sample', 'Nn_sample'),
 }
 

@@ -371,7 +371,15 @@ static void releaseReady(bool atFrameEnd) {
             if (go) {
                 // GX_DisplayTransfer(in, out, ...): the screen's back buffer now.
                 gateStep = "reading the back buffer from the pacer";
+#if defined(ENABLE_WAD16)
+                extern u8* CtrTap_destination(gfxScreen_t, gfx3dSide_t);
+                u32* out = (u32*) CtrTap_destination(was[i].screen, was[i].side);
+#else
+#line 374
                 u32* out = (u32*) CtrPacer_backFramebuffer(was[i].screen, was[i].side);
+#endif
+#line 374
+
                 e->data[2] = (u32) out;
                 gateStep = "reading the LCD registers";
                 ScreenRegs regs;

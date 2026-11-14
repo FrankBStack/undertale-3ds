@@ -25131,7 +25131,7 @@ static __attribute__((noinline, section(".text.late.utkill"))) void utkDrawSprit
     // Before the full way, which keeps its tail call: a kept draw that goes it then never proves plain (utkRun.used).
     if (utkRun.state != 0) utkRun.used = r->vertexUsed;
     if (full) ctrDrawSprite(renderer, tpagIndex, x, y, originX, originY, xscale, yscale, angleDeg, color, alpha);
-} static __attribute__((noinline, used, section(".text.late.utasgore"))) void utaFineSprite(Renderer* renderer, int32_t tpagIndex, float x, float y, float originX, float originY, float xscale, float yscale, float angleDeg, uint32_t color, float alpha); static __attribute__((noinline, section(".text_asgorelong"))) void aslFineSprite(Renderer* renderer, int32_t tpagIndex, float x, float y, float originX, float originY, float xscale, float yscale, float angleDeg, uint32_t color, float alpha);
+} static __attribute__((noinline, used, section(".text.utasgore_unused"))) void utaFineSprite(Renderer* renderer, int32_t tpagIndex, float x, float y, float originX, float originY, float xscale, float yscale, float angleDeg, uint32_t color, float alpha); static __attribute__((noinline, section(".text_asgorelong"))) void aslFineSprite(Renderer* renderer, int32_t tpagIndex, float x, float y, float originX, float originY, float xscale, float yscale, float angleDeg, uint32_t color, float alpha);
 // (change utasgore) Whether a fine sprite goes to utaFineSprite rather than straight to ctrDrawSprite: a held run of fine
 // draws open in this frame (utaHeldSteady's first tests; nothing utaFineDraw does before them changes anything), in a
 // frame after one with at least UTA_GATE_CALLS such calls. On Old a call into utaFineSprite's late page costs about
@@ -25166,7 +25166,7 @@ static inline __attribute__((always_inline)) bool utaTakes(const CtrRenderer* r)
     return utaGateOn;
 }
 #else
-// The forced split's builds (ASG_FORCE_SPLIT, tests): utaFineSprite is the full path.
+// The forced split's builds (ASG_FORCE_SPLIT, tests): aslFineSprite is the full path.
 static inline __attribute__((always_inline)) bool utaTakes(const CtrRenderer* r) {
     (void) r;
     return true;
@@ -26036,7 +26036,7 @@ static UTA_LATE bool utaFill(UtaKey* k, CtrPage* page, CtrColor c, int32_t ax0, 
 // emitPageRegionVisible's draw of the fine sprite px/py (a data page's item tpagIndex, in the colour c) continuing the
 // held run, worked out without changing anything: false where the full path would do anything else, or anything this
 // can't tell for sure.
-static UTA_LATE bool utaPlan(CtrRenderer* r, CtrPage* page, int32_t tpagIndex, const TexturePageItem* tpag, const float* px, const float* py,
+static __attribute__((noinline, section(".text.utasgore_unused"))) bool utaPlan(CtrRenderer* r, CtrPage* page, int32_t tpagIndex, const TexturePageItem* tpag, const float* px, const float* py,
                              CtrColor c, UtaPlan* plan, bool* turnedDown) {
     if (0 > r->boundSurface || drawingBothEyes(r) || r->palNextB != nullptr || !r->inFrame || r->boundTarget == nullptr || r->spillLoadPending) {
         return UTA_NO(1);
@@ -26234,7 +26234,7 @@ static inline __attribute__((always_inline)) void utaCommit(CtrRenderer* r, cons
 // (reciprocals of the sizes, products rounded before each add). False where the full path would do anything else.
 // A copy: tests/test_utasgore_drift.py holds the source of what it follows, and a change there needs the UTA_SHADOW
 // check rerun.
-static UTA_LATE bool utaLinear(CtrRenderer* r, CtrPage* page, const TexturePageItem* tpag, CtrColor c, UtaPlan* plan) {
+static __attribute__((noinline, section(".text.utasgore_unused"))) bool utaLinear(CtrRenderer* r, CtrPage* page, const TexturePageItem* tpag, CtrColor c, UtaPlan* plan) {
     // gridActive would update the map; emitQuad leaves out a draw of alpha 0.
     if (r->gridMap.surface != r->boundSurface || c.a == 0) return UTA_NO(20);
     float px[4], py[4];
@@ -26326,7 +26326,7 @@ static CtrVertex utaShadowV[54] __attribute__((section(".bss.late.utasgore")));
 // ctrDrawSprite's draw of a sprite smart smoothing knows is fine, when it is nothing (out of view) or continues the held
 // run with the quads utaPlan works out: true when done. Before either answer it has stamped only the page's use (as
 // acquireTpagPage does first).
-static UTA_LATE bool utaFineDraw(CtrRenderer* r, int32_t tpagIndex, float x, float y, float originX, float originY, float xscale, float yscale,
+static __attribute__((noinline, section(".text.utasgore_unused"))) bool utaFineDraw(CtrRenderer* r, int32_t tpagIndex, float x, float y, float originX, float originY, float xscale, float yscale,
                                  float angleDeg, uint32_t color, float alpha) {
     DataWin* dw = r->base.dataWin;
     UTA_STAMP(0);
@@ -26421,15 +26421,15 @@ static UTA_LATE bool utaFineDraw(CtrRenderer* r, int32_t tpagIndex, float x, flo
 #endif
 }
 
-// The renderer's draw of a fine sprite in a held run of a gated frame (utkDrawSprite's utaTakes said so).
-static UTA_LATE void utaFineSprite(Renderer* renderer, int32_t tpagIndex, float x, float y, float originX, float originY, float xscale,
+// The renderer's draw of a fine sprite in a held run of a gated frame. Unused since aslFineSprite took its place.
+static __attribute__((noinline, section(".text.utasgore_unused"))) void utaFineSprite(Renderer* renderer, int32_t tpagIndex, float x, float y, float originX, float originY, float xscale,
                                    float yscale, float angleDeg, uint32_t color, float alpha) {
     if (utaFineDraw((CtrRenderer*) renderer, tpagIndex, x, y, originX, originY, xscale, yscale, angleDeg, color, alpha)) return;
     ctrDrawSprite(renderer, tpagIndex, x, y, originX, originY, xscale, yscale, angleDeg, color, alpha);
 }
 #elif !defined(ENABLE_WAD17) && !defined(CTRPORT_RENDER_TIMING)
-// utkDrawSprite's builds with the forced split (ASG_FORCE_SPLIT, tests): the full path.
-static __attribute__((noinline, section(".text.late.utasgore"))) void utaFineSprite(Renderer* renderer, int32_t tpagIndex, float x, float y,
+// The forced split's builds (ASG_FORCE_SPLIT, tests): unused too (aslFineSprite is their full path).
+static __attribute__((noinline, section(".text.utasgore_unused"))) void utaFineSprite(Renderer* renderer, int32_t tpagIndex, float x, float y,
                                                                                    float originX, float originY, float xscale, float yscale,
                                                                                    float angleDeg, uint32_t color, float alpha) {
     ctrDrawSprite(renderer, tpagIndex, x, y, originX, originY, xscale, yscale, angleDeg, color, alpha);
@@ -30990,8 +30990,8 @@ void CtrDimlight_topBacklight(void* renderer, bool off) {
 // path. Here aslPlan and aslLinear plan that switch as the full path makes it (aslSwitch). aslFineSprite takes
 // utaFineSprite's place in utkDrawSprite: these are utasgore's utaPlan, utaCommit, utaLinear, utaFineDraw and
 // utaFineSprite with the switch added, appended here so that no earlier late code moves (growing them where they sit
-// would shift every later change's late code: review D2). The originals stay where they were, unchanged
-// and unused (utaFineSprite is kept by its declaration's `used`); the helpers, the plan keys and the shadow check's
+// would shift every later change's late code: review D2). The originals stay, unused, in a section that
+// gc-sections drops (.text.utasgore_unused; codediet B: the utasgore hole); the helpers, the plan keys and the shadow check's
 // statics are theirs. Exact by construction; the UTA_SHADOW build checks every planned draw against the full path.
 #if !defined(ENABLE_WAD17) && !defined(CTRPORT_RENDER_TIMING)
 #if ASG_FORCE_SPLIT == 0
@@ -32643,4 +32643,9 @@ void __wrap_CtrRenderer_bsStripCopy14(Renderer* renderer, int32_t rows, int32_t 
 void __wrap_CtrRenderer_bsStripCopy14(Renderer* renderer, int32_t rows, int32_t topDy) {
     __real_CtrRenderer_bsStripCopy14(renderer, rows, topDy);
 }
+#endif
+
+// Game-over presentation unit: separate helper pass only, after the ordinary tail.
+#if defined(ENABLE_WAD16) && defined(CTRPORT_GAMEOVERSCREEN_HELPER)
+#include "ctr_gameoverscreen.inc"
 #endif
