@@ -184,7 +184,7 @@
     "*(.text.late.bootlog)",
     "*(.rodata.bootlog_in_text)",
     "*(.text.late.utasgore)",
-    "*(SORT_BY_NAME(EXCLUDE_FILE (*z_bottomframe*.o *ctr_optmenu.o *z_bottompaint.o *z_boxcache.o *ctr_screens.o *ctr_rosalina.o *z_rosabl.o *z_dimlight.o *z_utlife.o *z_hitcheck.o *z_roomload.o *z_upd1_options.o *z_upd1_audio.o *z_upd1_text.o *z_rngexact* *z_thinart.o *z_dlghold.o *z_redpix.o *z_labcut.o *ctr_fpsbox.o *ctr_legal.o *ctr_legal_romfs.o *z_colexact.o *z_utwindow.o *z_asrtext* *z_adpcm* *ctr_adpcm_probe.o *ctr_audio_system.o *z_knightnew_history.o *z_flowcode.o *ctr_data_version.o *z_gogut* *ctr_pixgrid* *z_builderx_review* *z_builderx_new* *z_builderx_old* *z_builderx_receipt* *runner.o *z_loadscreen.o *z_symverdict* *z_smalltext_dr* *z_utstall* *z_sdmigrate* *ctr_renderer.o *z_itemverdict.o *z_phaseplan* *z_utold_scalar* *ctr_benchmark.o *z_sdlat* *vm_builtins.o *z_gamedir* *ctr_flowervramg_promotion.o *ctr_memory.o *ctr_flowervramg_palette.o *ctr_textures.o *z_hashmenu.o *state_hash.o *random.o *z_saveaudit.o *z_saveaudit_format.o *z_saveaudit_scan.o *libswkbd_late.a:* *ctr_input.o *ctr_frame_pacer.o *z_shopsplit.o *z_vramtop.o) .text.late.*))",
+    "*(SORT_BY_NAME(EXCLUDE_FILE (*z_bottomframe*.o *ctr_optmenu.o *z_bottompaint.o *z_boxcache.o *ctr_screens.o *ctr_rosalina.o *z_rosabl.o *z_dimlight.o *z_utlife.o *z_hitcheck.o *z_utlife_collision.o *z_utlife_collision_membership.o *z_roomload.o *z_upd1_options.o *z_upd1_audio.o *z_upd1_text.o *z_rngexact* *z_thinart.o *z_dlghold.o *z_redpix.o *z_labcut.o *ctr_fpsbox.o *ctr_legal.o *ctr_legal_romfs.o *z_colexact.o *z_utwindow.o *z_asrtext* *z_adpcm* *ctr_adpcm_probe.o *ctr_audio_system.o *z_knightnew_history.o *z_flowcode.o *ctr_data_version.o *z_gogut* *ctr_pixgrid* *z_builderx_review* *z_builderx_new* *z_builderx_old* *z_builderx_receipt* *runner.o *z_loadscreen.o *z_symverdict* *z_smalltext_dr* *z_utstall* *z_sdmigrate* *ctr_renderer.o *z_itemverdict.o *z_phaseplan* *z_utold_scalar* *ctr_benchmark.o *z_sdlat* *vm_builtins.o *z_gamedir* *ctr_flowervramg_promotion.o *ctr_memory.o *ctr_flowervramg_palette.o *ctr_textures.o *z_hashmenu.o *state_hash.o *random.o *z_saveaudit.o *z_saveaudit_format.o *z_saveaudit_scan.o *libswkbd_late.a:* *ctr_input.o *ctr_frame_pacer.o *z_shopsplit.o *z_vramtop.o) .text.late.*))",
     "*z_builderx_review*(.text .text.* .rodata .rodata.*)",
     "*(.text.h1hole.bxreview)",
     "*(.text.late.builderxnew)",
@@ -821,7 +821,6 @@
     "*(.touchname_ro)",
     "*(.touchqueue_text)",
     "*(.touchqueue_ro)",
-
     "*(.text.late.alphabyte)",
     "*(.rodata.late.alphabyte)",
     "*(.text_dlgflash)",
@@ -846,6 +845,12 @@
     "*(.text_bsgroup)",
     "*(.text_bsmex .rodata_bsmex)",
     "*(.text_stalecarry .rodata_stalecarry)",
+    "*(.text.late.parity_collision)",
+    "*(.text.late.parity_collision_membership)",
+    "*(.text_battletouchtap .rodata_battletouchtap)",
+    "*(.text_exitfiles_late)",
+    "*(.text_bootbar_late)",
+    "*(.text_sfxboost)",
     "*(.repack_test)",
     "*(.repack_test_ro)"
   ],
@@ -941,7 +946,8 @@
     "*(.rodata.paintchg_idle_late)",
     "*(.rodata.late.noticescroll_pack)",
     "*(.rodata.late.fpsghost)",
-    "*(.rodata_sfxlate)"
+    "*(.rodata_sfxlate)",
+    "*(.rodata_sfxboost)"
   ],
   "data": [
     "*(.data.late.benchromfs)",
@@ -1312,6 +1318,8 @@
     "*(.bss_bsgroup_late)",
     "*(.bss_bsmex_late)",
     "*(.bss.stalecarry_late)",
+    "*(.bss_exitfiles_late)",
+    "*(.bss_bootbar_late)",
     "*(.bss.ballast_late)"
   ],
   "aac_text": [

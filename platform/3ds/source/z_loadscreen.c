@@ -2044,6 +2044,83 @@ __attribute__((noipa)) LS_HALT_TEXT static void lsSwapTop(gfxScreen_t screen, bo
 #include "ctr_firstboot_fill.h"
 void CtrPackWorker_firstbootWork(CtrPackWorker* worker, uint32_t slack, uint64_t* done, uint64_t* inHand); // ctr_texture_pack.c's end
 
+// bootbar (change toolfix, fix-bootbar-setup-restart-1114; UNDERTALE): the bar never goes back when the first time
+// setup starts. The setup's bar used to start from empty, wherever the load's bar stood: after a first boot's version
+// hash (no builder receipt) the load's bar was at 141 px of 150 and the setup's began at 0. Now:
+// 1. A whole data.win hash (bbHashProgress, a link of CtrDataVersion_check's chain) means a first boot, whose setup
+//    follows: its expected time (FB_FIRST_MS, scaled by the load's speed like every phase) joins the load's
+//    expectation while the hash and the parse run, so their time no longer takes the bar near full.
+// 2. The setup's bar goes on from where the load's bar stands (bbRange), to a point between there and LS_CAP by
+//    expected time (the setup's against the load's rest after it), and is drawn there (bbDraw); a skipped setup's load
+//    bar goes on from what was drawn (bbStats). CtrFirstboot_packRun keeps its size and code: only three call targets
+//    change. Own sections (.text_bootbar_late, .bss_bootbar_late), appended in late_reserve.ld.
+#define BB_TEXT __attribute__((noinline, section(".text_bootbar_late")))
+static struct {
+    void (*progress)(void); // the chain's progress callback, called on
+    uint32_t held;          // ms added to base[P_PACK] by a whole-file hash
+    uint32_t from, to;      // the setup bar's span, per mille of the load's bar
+    uint32_t drawn;         // the setup bar's last fill, per mille
+} bb __attribute__((section(".bss_bootbar_late,\"aw\",%nobits @")));
+
+BB_TEXT static void bbHashProgress(void) {
+    if (bb.held == 0) {
+        LightLock_Lock(&ls.lock);
+        ls.base[P_PACK] += FB_FIRST_MS;
+        bb.held = FB_FIRST_MS;
+        LightLock_Unlock(&ls.lock);
+    }
+    bb.progress();
+}
+
+BB_TEXT CtrDataVersionResult CTR_DATAVERSION_BOOTBAR(const char* path, const char* game, const char* part,
+                                                     const char* cachePath, void (*progress)(void), bool* cached,
+                                                     char digest[65]) {
+    if (!ls.running || progress == nullptr)
+        return CTR_DATAVERSION_AFTER_BOOTBAR(path, game, part, cachePath, progress, cached, digest);
+    bb.progress = progress;
+    bb.held = 0;
+    return CTR_DATAVERSION_AFTER_BOOTBAR(path, game, part, cachePath, bbHashProgress, cached, digest);
+}
+
+// packRun's lsTarget, under ls.lock: the setup's bar's end, per mille. It starts at ls.shown.
+BB_TEXT static uint32_t bbRange(uint64_t now) {
+    uint32_t held = bb.held;
+    if (held > ls.base[P_PACK]) held = ls.base[P_PACK];
+    ls.base[P_PACK] -= held; // the setup's time is its own bar's again
+    bb.held = 0;
+    uint32_t to = lsTarget(now); // where the load's bar stands after the setup, if the setup took no time
+    if (to > LS_CAP) to = LS_CAP;
+    uint32_t from = ls.shown < LS_CAP ? ls.shown : LS_CAP;
+    uint64_t setup = (uint64_t) FB_FIRST_MS * ls.ratio / 1000u;
+    uint64_t rest = to > 0 ? (uint64_t) lsMs(ls.loadStart, now) * (1000u - to) / to : 0; // the load's time after it
+    uint32_t end = from + (uint32_t) ((uint64_t) (LS_CAP - from) * setup / (setup + rest));
+    if (end < to) end = to;
+    bb.from = from;
+    bb.to = end;
+    bb.drawn = from;
+    return end;
+}
+
+// packRun's psDraw: its fill (0..px, px standing for bb.to) drawn from bb.from on.
+BB_TEXT static void bbDraw(int32_t fillW, int32_t frame) {
+    uint32_t px = (uint32_t) ls.fillMax * bb.to / 1000u;
+    uint32_t f = px > 0 ? (uint32_t) fillW * 1000u / px : 1000u; // per mille of the setup's span
+    if (f > 1000u) f = 1000u;
+    uint32_t start = (uint32_t) ls.fillMax * bb.from / 1000u;
+    uint32_t w = start + (px - start) * f / 1000u;
+    if (ls.fillMax > 0) bb.drawn = (w * 1000u + (uint32_t) ls.fillMax - 1u) / (uint32_t) ls.fillMax; // >= w px again
+    psDraw((int32_t) w, frame);
+}
+
+// packRun's CtrPackWorker_memoryStats, right after it hands the load's bar on: a skipped setup's bar goes on from what
+// was drawn, never below.
+BB_TEXT static void bbStats(CtrPackWorker* worker, uint32_t* waits, uint32_t* deferred) {
+    LightLock_Lock(&ls.lock);
+    if (ls.shown < bb.drawn) ls.shown = bb.drawn;
+    LightLock_Unlock(&ls.lock);
+    CtrPackWorker_memoryStats(worker, waits, deferred);
+}
+
 __attribute__((noinline, noipa, section(".text_firstboot"))) void CtrFirstboot_packRun(const DataWin* dataWin) {
     if (!ls.running) {
         Loadgame_packFallback(dataWin);
@@ -2074,7 +2151,7 @@ __attribute__((noinline, noipa, section(".text_firstboot"))) void CtrFirstboot_p
     // B: the first boot's files phase, then where the load's bar will stand once the setup is done (its own phase,
     // the textures, counts only its short expected time there). The setup's bar ends at that point.
     ls.base[P_FS] += (uint32_t) ((uint64_t) FB_COLD_FILES_PER_MB10 * ls.sizeBytes / (10u << 20));
-    uint32_t range = lsTarget(svcGetSystemTick());
+    uint32_t range = bbRange(svcGetSystemTick()); // bootbar: from the load's bar on
     if (range > LS_CAP) range = LS_CAP;
     LightLock_Unlock(&ls.lock);
     uint32_t px = (uint32_t) ls.fillMax * range / 1000u;
@@ -2121,7 +2198,7 @@ __attribute__((noinline, noipa, section(".text_firstboot"))) void CtrFirstboot_p
             uint32_t fillW = FbFill_step(&fill, doneWork, inHand, totalWork, total, px, ms, last);
             LightLock_Lock(&ls.lock);
             int32_t frame = psDogKey((uint32_t) ((tick - ls.loadStart) / LS_TICKS_PER_MS));
-            psDraw((int32_t) fillW, frame);
+            bbDraw((int32_t) fillW, frame);
             LightLock_Unlock(&ls.lock);
             lastDisplay = tick;
         }
@@ -2133,7 +2210,7 @@ __attribute__((noinline, noipa, section(".text_firstboot"))) void CtrFirstboot_p
     ls.shown = px > 0 ? range * fill.px / px : range;
     LightLock_Unlock(&ls.lock);
     uint32_t memoryWaits = 0, deferred = 0;
-    CtrPackWorker_memoryStats(worker, &memoryWaits, &deferred);
+    bbStats(worker, &memoryWaits, &deferred);
     CtrPackWorker_stop(worker);
     CtrQoi_releaseWorkspace();
     psLine = nullptr;

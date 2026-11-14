@@ -8,6 +8,7 @@ from unittest import mock
 
 sys.path.insert(0,str(Path(__file__).resolve().parent/'builder'))
 import gui
+from gui_test_support import show_without_desktop_input
 
 
 class FirstPaintTests(unittest.TestCase):
@@ -62,7 +63,7 @@ class FirstPaintTests(unittest.TestCase):
                 for page in app.pages:
                     self.assertIs(page.frame._ut_theme,app.theme)
                     self.assertEqual(str(page.box.cget('highlightthickness')),'0' if value else '3')
-            self.root.deiconify()
+            show_without_desktop_input(self,self.root)
             self.root.update_idletasks()
             self.assertEqual(bool(str(app.heading.cget('image'))),not boring)
 

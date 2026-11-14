@@ -8,6 +8,7 @@
 #include "json_writer.h"
 #include "collision.h"
 #include "z_utlife.h"
+#include "z_utlife_collision.h"
 #include "video.h"
 #include "load_trace.h"
 #include "aot/vm_aot_hooks.h"
@@ -3728,6 +3729,11 @@ static int32_t mostSpecificCollisionTarget(Runner* runner, Instance* self, Insta
     return -1;
 }
 
+#if defined(ENABLE_WAD16) && defined(__GNUC__)
+// Preserve the baseline callback helper and its warm slot.
+__attribute__((noinline))
+#endif
+#line 3678
 static void executeCollisionEvent(Runner* runner, Instance* self, Instance* other, int32_t targetObjectIndex, int32_t codeId, int32_t ownerObjectIndex) {
     if (isEventBlockedByPendingRoom(runner, self, EVENT_COLLISION))
         return;
@@ -4167,6 +4173,11 @@ static int sortInstancesByObjectIndexThenInstanceIdAscending(const void* element
 // The sorted target list of dispatchCollisionEvents, kept across self instances (see there).
 static Instance** collisionTargets = nullptr;
 
+#if defined(ENABLE_WAD16) && defined(__GNUC__)
+// Keep the moved post-callback guard within the retained warm slot.
+__attribute__((optimize("no-thread-jumps")))
+#endif
+#line 4117
 static void dispatchCollisionEvents(Runner* runner) {
     DataWin* dataWin = runner->dataWin;
     // Iterate only the objects that have any collision event in their parent chain.
@@ -4193,11 +4204,26 @@ static void dispatchCollisionEvents(Runner* runner) {
         int32_t selfBucketCount = (int32_t) arrlen(selfBucket);
         if (selfBucketCount == 0) continue;
 
-        // Snapshot the self bucket: collision handlers can spawn/destroy/instance_change. Iterating a snapshot also keeps newly-created instances from firing collisions in this same phase.
+        // Snapshot the self bucket: callbacks can spawn/destroy/change. UT compatibility refreshes membership at each target event; its current event excludes newborns.
         int32_t selfSnapBase = (int32_t) arrlen(runner->instanceSnapshots);
         arrsetlen(runner->instanceSnapshots, selfSnapBase + selfBucketCount);
         memcpy(&runner->instanceSnapshots[selfSnapBase], selfBucket, (size_t) selfBucketCount * sizeof(Instance*));
 
+#if defined(ENABLE_WAD16)
+        UtlifeCollisionCursor cursor = {
+            .base = selfSnapBase, .count = selfBucketCount, .object = selfObjIdx,
+            .list = &runner->flattenedCollisionEvents[selfObjIdx],
+            .eventFirst = IS_WAD16_OR_BELOW(runner) && runner->collisionCompatibilityMode
+        };
+        while (Utlife_nextCollision(runner, &cursor)) {
+            Instance* self = cursor.self;
+            InstanceBBox bboxSelf;
+            Sprite* sprSelf;
+            bool selfDirty = true;
+            FlattenedCollisionEvent* evt = cursor.evt;
+            int32_t targetObjIndex = (int32_t) evt->targetObjectIndex;
+#else
+#line 4148
         repeat(selfBucketCount, si) {
             Instance* self = runner->instanceSnapshots[selfSnapBase + si];
             if (!self->active || self->physicsBody) continue;
@@ -4214,9 +4240,16 @@ static void dispatchCollisionEvents(Runner* runner) {
                 if (0 > evt->codeId)
                     continue;
 
+#endif
+#line 4164
                 // Iterate only the descendant-inclusive list for the target object via a private copy, so nested user code (collision handlers calling instance_exists, with (...), etc.) can push/pop their own snapshots without corrupting this iteration.
                 // The copy is only remade at the start of a list walk, never during one.
+#if defined(ENABLE_WAD16)
+                if (Utlife_collisionTargetsNeedSnapshot(&cursor, targetsObj, targetObjIndex, targetsEpoch, hitEpoch)) {
+#else
                 if (targetsObj != targetObjIndex || targetsEpoch != hitEpoch) {
+#endif
+#line 4167
                     int32_t snapBase = Runner_pushInstancesOfObject(runner, targetObjIndex);
                     int32_t count = (int32_t) arrlen(runner->instanceSnapshots) - snapBase;
                     arrsetlen(collisionTargets, count);
@@ -4231,6 +4264,7 @@ static void dispatchCollisionEvents(Runner* runner) {
                 int32_t targetCount = (int32_t) arrlen(collisionTargets);
 
                 repeat(targetCount, targetIdx) {
+#line 4181
                     Instance* other = collisionTargets[targetIdx];
                     if (!other->active) continue;
                     if (other == self) continue;
@@ -4384,14 +4418,28 @@ static void dispatchCollisionEvents(Runner* runner) {
                     selfDirty = true;
                     // ...and it may have moved, made, destroyed or changed any instance: later lists and boxes are made again.
                     hitEpoch++;
+#if defined(ENABLE_WAD16)
+                    if (cursor.eventFirst && (!self->active || self->objectIndex != cursor.object)) break;
+#endif
+#line 4334
                 }
+#if !defined(ENABLE_WAD16)
             }
+#endif
         }
 
         arrsetlen(runner->instanceSnapshots, selfSnapBase);
     }
 }
 
+// parity: retain the original collision slot after outlining traversal (utlife B).
+// Subsection 1 follows the function's return and literal pool; no execution
+// reaches the tail. DR keeps its original body and needs no padding.
+#if defined(ENABLE_WAD16) && defined(CTRPORT_LAYERFIX_RELEASE_LAYOUT) && defined(__3DS__) && defined(__GNUC__)
+__asm__(".pushsection .text.dispatchCollisionEvents,\"ax\",%progbits\n.subsection 1\n.org 3112, 0\n.popsection\n");
+#endif
+
+#line 4342
 // ===[ View Following + Clamping ]===
 // Single-axis follow with border-based scrolling, room clamping, and speed limit.
 static int32_t followAxis(int32_t viewPos, int32_t viewSize, int32_t targetPos, uint32_t border, int32_t speed, int32_t roomSize) {

@@ -8,7 +8,7 @@ import unittest
 import test_builder as fixtures
 import gui
 import toolchain
-from gui_test_support import isolated_builder_host
+from gui_test_support import isolated_builder_host, show_without_desktop_input
 
 
 class PolishGuiTests(unittest.TestCase):
@@ -207,7 +207,7 @@ class PolishGuiTests(unittest.TestCase):
     def test_sd_review_summary_fits_both_looks_at_100_and_200_percent(self):
         app = self.wizard()
         app.theme.runtime_loaded = True
-        self.root.deiconify()
+        show_without_desktop_input(self, self.root)
         for scale in (1, 2):
             self.root.tk.call('tk', 'scaling', scale * 96 / 72)
             width = min(680 * scale, self.root.winfo_screenwidth() - 40)
@@ -240,7 +240,7 @@ class PolishGuiTests(unittest.TestCase):
         # The built-in font is the look before the game is found; the About's OK must not sit under the box's edge.
         app = self.wizard()
         app.theme.runtime_loaded = True
-        self.root.deiconify()
+        show_without_desktop_input(self, self.root)
         for scale in (1, 2):
             self.root.tk.call('tk', 'scaling', scale * 96 / 72)
             width = min(680 * scale, self.root.winfo_screenwidth() - 40)

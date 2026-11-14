@@ -196,7 +196,7 @@ void Instance_computeSpeedFromComponents(Instance* inst) {
     }
 }
 
-// Compute hspeed/vspeed from speed and direction (HTML5: Compute_Speed2)
+// Compute hspeed/vspeed from speed/direction; UT 3DS release replaces this body via parity_motion_compile.py (parity_motion_body.inc).
 void Instance_computeComponentsFromSpeed(Instance* inst) {
     inst->hspeed = (float) (inst->speed * clampFloat(GMLReal_cos(inst->direction * (M_PI / 180.0))));
     inst->vspeed = (float) (-inst->speed * clampFloat(GMLReal_sin(inst->direction * (M_PI / 180.0))));

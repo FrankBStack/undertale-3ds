@@ -2437,7 +2437,8 @@ class GuiTest(unittest.TestCase):
         delivery.addr.icursor(4)
         delivery.addr.selection_range(0, 4)
         # Focus and keyboard traversal targets are properties of the original widgets.
-        self.root.deiconify()
+        from gui_test_support import show_without_desktop_input
+        show_without_desktop_input(self, self.root)
         self.root.update()
         delivery.addr.focus_force()
         self.root.update()
@@ -2935,7 +2936,8 @@ class BuilderUiTest(unittest.TestCase):
         # Notices and logs now start collapsed. Force overflow with fixture
         # content instead of depending on the prerequisite page's prose height.
         self.gui.label(wiz.page.frame, "\n".join(["Fixture overflow"] * 45))
-        self.root.deiconify()
+        from gui_test_support import show_without_desktop_input
+        show_without_desktop_input(self, self.root)
         w, h = self.root.minsize()
         self.root.geometry("%dx%d" % (w, h))
         for _ in range(3):
@@ -2975,7 +2977,8 @@ class BuilderUiTest(unittest.TestCase):
                                       list(toolchain.RECOMMENDED_PACKAGES), None, None, None, 'win32')
         wiz.state.build_ok = wiz.state.delivered = True
         wiz.theme.runtime_loaded = True  # synthetic fallback bitmap font
-        self.root.deiconify()
+        from gui_test_support import show_without_desktop_input
+        show_without_desktop_input(self, self.root)
         with mock.patch.object(self.gui.deliver, "list_sd_cards", return_value=[]), \
                 mock.patch.object(wiz.pages[5], "start"):
             for grow in (1, 2):

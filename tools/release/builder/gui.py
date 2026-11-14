@@ -2659,6 +2659,8 @@ class BuildPage(Page):
         self.input_key = None
         # A confirmed Cancel stops the whole run, including a model whose build has not started yet (AUD-14).
         self.stop = threading.Event()
+        self.worker_done = threading.Event()    # no worker is running: quitting waits on it (TK-D9)
+        self.worker_done.set()
 
     def on_show(self):
         if self.st.build_ok and self.st.build_key is not None and self.st.build_key != self.st.build_input_key():
@@ -2687,6 +2689,8 @@ class BuildPage(Page):
         self.app.show(self.app.PAGES.index(FindPage))
 
     def start(self):
+        if getattr(self.app, '_quitting', False):
+            return      # Quit is stopping the build: Try again must not start a worker it would not wait for (TK-ST2)
         self.failed = None
         self.build = None
         self.stop.clear()
@@ -2702,9 +2706,11 @@ class BuildPage(Page):
         self.bar.config(value=0)
         self.buttons()
         self.app.update_nav()
+        self.worker_done = threading.Event()     # this worker's own; it sets it when it ends (TK-D9)
         threading.Thread(target=self.worker, daemon=True).start()
 
     def worker(self):
+        done = getattr(self, 'worker_done', None)   # taken now: a later start() makes the next worker its own
         try:
             for i, target in enumerate(self.st.targets):
                 self.target_index = i
@@ -2744,6 +2750,9 @@ class BuildPage(Page):
                 self.app.call(self.line, line)
             self.app.call(self.finished, pipeline.BuildFailed("The build stopped unexpectedly. Choose Try again.",
                                                               self.log_path))
+        finally:
+            if done is not None:
+                done.set()
 
     def line(self, s):
         self.log.insert("end", s + "\n")
@@ -2809,6 +2818,20 @@ class BuildPage(Page):
                     build.cancel()
         if self.running:
             self.app.ask("Cancel build", "Stop the build?", stop)
+
+    def stop_for_quit(self, worker_seconds=None):
+        """Quit (TK-D5, D9): stop the whole run, not one Build, and confirm it. Blocks, so never on the Tk thread.
+        Returns why the build is not known to have stopped, or None. The stop is set before the current Build is
+        read, as in Cancel (AUD-14), so the worker either starts no further Build or this sees the one it made;
+        that Build's stop_and_confirm() then either keeps it from starting a process or waits for its release.
+        No process of the build running is not the worker being done: it can still be copying sources or
+        collecting outputs in the work folder. None is returned only once the worker has ended (TK-ST2)."""
+        self.stop.set()
+        build = self.build
+        failure = build.stop_and_confirm() if build is not None else None
+        if not self.worker_done.wait(WORKER_EXIT_SECONDS if worker_seconds is None else worker_seconds):
+            return failure or "it was still finishing a step"
+        return failure
 
     def copy_log(self):
         if not self.log_path:
@@ -4050,6 +4073,7 @@ class App:
         self.keys = KeyWatch(root)  # a held Space or Enter never carries into a button that appears under it
         self.overlay = None         # the Prompt shown in place of the page, if any
         self._prompts = []          # prompts waiting for the one shown to close
+        self._quitting = False      # Quit is stopping the build; the window closes when it is done (TK-D9)
         self._focus_before = None   # what had the keyboard before the first prompt opened
         nav = ttk.Frame(root, padding=(16, 8, 16, 12))
         nav.pack(side="bottom", fill="x")
@@ -4295,14 +4319,36 @@ class App:
             self.inform('Please wait', 'This step is still running. Wait for it to finish before closing the builder.')
             return
         b = self.pages[5]
+        if self._quitting:
+            return                      # already stopping the build to quit
         if b.running:
-            def quit_build():
-                if b.build:
-                    b.build.cancel()
-                self.root.destroy()
-            self.ask("Quit", "Stop the build and quit?", quit_build)
+            self.ask("Quit", "Stop the build and quit?", lambda: self.quit_build(b))
             return
         self.root.destroy()
+
+    def quit_build(self, page):
+        """Stop the build and confirm it before the window goes (TK-D5, D9). The confirmation can take up to the
+        stop bound, so it runs on its own thread and the window keeps drawing; a stop that could not be confirmed
+        is said in the window before it closes."""
+        self._quitting = True
+        result = []
+        stopper = threading.Thread(target=lambda: result.append(stop_build_for_exit(page)), name='quit-stop',
+                                   daemon=True)
+        stopper.start()
+        page.intro.config(text="Stopping the build...")
+
+        def wait():
+            if stopper.is_alive():
+                self.root.after(100, wait)
+                return
+            failure = result[0] if result else "stopping it failed"
+            if failure:
+                self.prompt("Quit", "The build could not be stopped (%s).\n"
+                            "Some build tools may still be running." % failure,
+                            [("OK", self.root.destroy, True)], cancel="OK")
+                return
+            self.root.destroy()
+        wait()
 
     # Worker threads hand results to the Tk thread through this queue.
     def call(self, fn, *args):
@@ -4385,6 +4431,22 @@ def _bring_to_front(root):
         root.after_idle(lambda: root.attributes("-topmost", False))
 
 
+WORKER_EXIT_SECONDS = 30    # how long an exit waits for a stopped build's worker to end its current step (TK-ST2)
+
+
+def _hard_exit(code):
+    os._exit(code)
+
+
+def stop_build_for_exit(page):
+    """Stop a build page's worker for any exit. Returns a warning, or None when nothing can still be running."""
+    try:
+        return page.stop_for_quit()
+    except Exception as e:  # noqa: BLE001 (an error while stopping is not a confirmation)
+        traceback.print_exc()
+        return "stopping it failed (%s: %s)" % (type(e).__name__, e)
+
+
 def run(opts: Options):
     # One builder window per work folder (AUD-15): a second one would replace the first one's sources and outputs.
     try:
@@ -4398,10 +4460,34 @@ def run(opts: Options):
             messagebox.showerror(title, exc.window, parent=root)
             root.destroy()
         return 1
+    app = None
     try:
         root = tk.Tk()
         app = App(root, opts)
         root.mainloop()
         return app.exit_code
     finally:
-        lease.release()
+        # Every exit, including one that skips close() (autopilot, a direct destroy) or an error out of the main
+        # loop, stops a running build before the work folder's lease goes (TK-D9): a second builder must not take
+        # the folder while ours still writes. While the worker is alive the lease is never released (TK-ST2): the
+        # process ends instead, and the OS drops the lock only when the worker has gone with it.
+        if _worker_ended_for_exit(app):
+            lease.release()
+        else:
+            print("The builder is closing while the build is still finishing a step; it will be stopped with the "
+                  "builder.", file=sys.stderr, flush=True)
+            _hard_exit(1)
+
+
+def _worker_ended_for_exit(app):
+    """Stop the build page's worker, if one is running, and say whether it has ended (TK-D9, TK-ST2)."""
+    pages = getattr(app, 'pages', None)
+    page = pages[5] if isinstance(pages, list) and len(pages) > 5 else None
+    done = getattr(page, 'worker_done', None)
+    if done is None or done.is_set():
+        return True
+    failure = stop_build_for_exit(page)
+    if failure:
+        print("The build could not be stopped (%s). Some build tools may still be running." % failure,
+              file=sys.stderr, flush=True)
+    return done.is_set()

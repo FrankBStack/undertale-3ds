@@ -172,4 +172,19 @@ void CtrBench_paceFrames(int32_t* now, int32_t* first);
 #define BENCH_PACE_SWEEP_END logInfo
 #endif
 
+// Dev status updates show only the newest result; public builds keep their existing display.
+#ifndef CTRPORT_BENCH_STATUS_ROWS
+#define CTRPORT_BENCH_STATUS_ROWS 12
+#endif
+
+// Keep dev base 6029d6789's 1064 B drawStatus slot. Emit after its code and literal
+// pool via the existing benchRomfsSlot helper; no new helper or late bytes.
+// Release expands this to nothing, preserving its existing C tokens and lines.
+#if defined(__3DS__) && defined(NDEBUG) && CTRPORT_BENCH_STATUS_ROWS == 1
+#define CTRPORT_BENCH_STATUS_RETAIN_SLOT \
+    __asm__(".pushsection .text.drawStatus, 1\n.space 1064-(.-drawStatus),0\n.size drawStatus,1064\n.popsection");
+#else
+#define CTRPORT_BENCH_STATUS_RETAIN_SLOT
+#endif
+
 #endif

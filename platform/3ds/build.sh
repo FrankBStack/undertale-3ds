@@ -87,6 +87,9 @@
 #                              [ballast] (UNDERTALE: --ini ballast_* keys hold the second-screen features' heap, linear,
 #                              CPU and GPU budget; source/z_ballast.c, dsplan B10.2; separate build directory, test builds
 #                              only, never a release)
+#                              [stalecarry] (UNDERTALE: the screen-move line's carry fields and the death flash watch,
+#                              battle_probe 32; source/z_stalecarry.c; separate build directory, diagnostic builds only,
+#                              never a release)
 #                              [nowriterfront|writerfront-fallback|writerfront-count] (UNDERTALE Old: the dialogue writer's
 #                              hand front off, every Draw through its fallback, or front/fallback counts in the log;
 #                              source/z_writerfront.c; separate build directories, test builds only)
@@ -276,6 +279,7 @@ flowdiag=OFF
 titandiag=OFF
 exittrail=OFF
 ballast=OFF
+stalecarry=OFF
 writerfront=ON
 repack_test= # test builds: a folder of <data.win folder>/ repack files for the RomFS (ctr_repack.inc)
 repack_plans=OFF # repackplans: with repacktest, the plans leave out the tiles repack remaps (measured option A)
@@ -393,6 +397,7 @@ for arg in "$@"; do
         titandiag) titandiag=ON ;;
         exittrail) exittrail=ON ;;
         ballast) ballast=ON ;;
+        stalecarry) stalecarry=ON ;;
         nowriterfront) writerfront=OFF ;;
         writerfront-fallback) writerfront=FALLBACK ;;
         writerfront-count) writerfront=COUNT ;;
@@ -752,6 +757,13 @@ if [ "$ballast" = ON ]; then
         exit 2
     fi
     build="$build-ballast"
+fi
+if [ "$stalecarry" = ON ]; then
+    if [ "$game" != undertale ] || [ -n "${CTRPORT_RELEASE_SOURCE_URL:-}" ] || [ "$homeaudioprobe" != OFF ]; then
+        echo "ERROR: stalecarry is an UNDERTALE diagnostic build: never a release (CTRPORT_RELEASE_SOURCE_URL) or with the HOME audio probe" >&2
+        exit 2
+    fi
+    build="$build-stalecarry"
 fi
 if [ "$flowdiag" = ON ]; then
     build="$build-flowdiag"
@@ -1244,8 +1256,49 @@ export CTRPORT_LAUNCH_DISPATCH_LOG="$(native_path "$build")/launch_dispatch.log"
 # directory's setting, ON by default.
 prefix_map=()
 if [ -n "${CTRPORT_FILE_PREFIX_MAP:-}" ]; then prefix_map=(-DCTRPORT_FILE_PREFIX_MAP="$CTRPORT_FILE_PREFIX_MAP"); fi
-release_source=()
-if [ -n "${CTRPORT_RELEASE_SOURCE_URL:-}" ]; then release_source=(-DCTRPORT_RELEASE_SOURCE_URL="$CTRPORT_RELEASE_SOURCE_URL"); fi
+# Release or development build: CTRPORT_RELEASE_SOURCE_URL set or not. CMake keeps the URL in the build directory's
+# cache, so a directory configured once as a release stayed a release when a later run left the variable unset: that
+# "development" build was the release, byte for byte (battlesplit2, 11-14). The cache never decides the kind. A
+# directory configured as the other kind is refused (never silently rebuilt either way: a release run that lost its
+# variable must not quietly become a development build), and the URL is always passed, empty for development.
+release_source_url=${CTRPORT_RELEASE_SOURCE_URL:-}
+if [ -e "$build/CMakeCache.txt" ]; then
+    # The cache's kind comes only from one plain CTRPORT_RELEASE_SOURCE_URL:TYPE= entry (an empty value is
+    # development). A cache that is unreadable, holds NUL bytes, or has no such entry, two of them or another
+    # spelling of the key is refused, never taken as development: a damaged release cache must not become a
+    # development build either (c26rev8 RK-1).
+    release_cache=$build/CMakeCache.txt
+    cache_entries=
+    cache_bad=
+    if [ ! -f "$release_cache" ] || [ ! -r "$release_cache" ]; then
+        cache_bad="it cannot be read"
+    elif [ "$(tr -d '\000' < "$release_cache" | wc -c)" -ne "$(wc -c < "$release_cache")" ]; then
+        cache_bad="it holds NUL bytes"
+    elif ! cache_entries=$(LC_ALL=C grep -a -E '^[[:space:]]*"?CTRPORT_RELEASE_SOURCE_URL"?[[:space:]]*(:[^=]*)?=' "$release_cache"); then
+        cache_bad="it has no CTRPORT_RELEASE_SOURCE_URL entry"
+    elif [ "$(printf '%s\n' "$cache_entries" | wc -l)" -ne 1 ]; then
+        cache_bad="it has more than one CTRPORT_RELEASE_SOURCE_URL entry"
+    elif ! printf '%s\n' "$cache_entries" | LC_ALL=C grep -q -E '^CTRPORT_RELEASE_SOURCE_URL:[A-Z]+='; then
+        cache_bad="its CTRPORT_RELEASE_SOURCE_URL entry is not spelled CTRPORT_RELEASE_SOURCE_URL:TYPE="
+    fi
+    if [ -n "$cache_bad" ]; then
+        echo "ERROR: $build's CMakeCache.txt does not say whether it is a release or development build: $cache_bad." >&2
+        echo "Delete $build and build again." >&2
+        exit 2
+    fi
+    cached_release_url=${cache_entries#*=}
+    cached_release_url=${cached_release_url%$'\r'}
+    release_kind=development
+    if [ -n "$release_source_url" ]; then release_kind=release; fi
+    cached_kind=development
+    if [ -n "$cached_release_url" ]; then cached_kind=release; fi
+    if [ "$release_kind" != "$cached_kind" ]; then
+        echo "ERROR: $build holds a $cached_kind build${cached_release_url:+ ($cached_release_url)}, but this is a $release_kind build (CTRPORT_RELEASE_SOURCE_URL ${release_source_url:-unset})." >&2
+        echo "Build the other kind in a fresh directory: delete $build, or set CTRPORT_RELEASE_SOURCE_URL to match it." >&2
+        exit 2
+    fi
+fi
+release_source=(-DCTRPORT_RELEASE_SOURCE_URL="$release_source_url")
 gog_compat=OFF
 if [ "$game" = undertale ]; then
     gog_args=(--build-flag)
@@ -1330,7 +1383,7 @@ cmake -S "$here" -B "$build" -G "Unix Makefiles" \
     -DCTRPORT_HOMEAUDIO_PROBE="$homeaudioprobe" -DCTRPORT_SPIKEREC="$spikerec" -DCTRPORT_TITANDIAG="$titandiag" -DCTRPORT_FREEWINS="$freewins" \
     -DCTRPORT_UTTC_MODE="$uttc_mode" -DCTRPORT_DPRANK_MODE="$dprank_mode" -DCTRPORT_TEST_LATE_PAGE="$testpage" \
     -DCTRPORT_BENCHFIX_PROBE="$bfprobe" -DCTRPORT_PACER_ARENA_LOG="$arenalog" -DCTRPORT_FRAMETRACE="$frametrace" -DCTRPORT_ASG_PROBE="$asgprobe" -DCTRPORT_FLOWSTREAM_DIAG="$flowdiag" \
-    -DCTRPORT_EXITTRAIL="$exittrail" -DCTRPORT_BALLAST="$ballast" -DCTRPORT_WRITERFRONT_MODE="$writerfront" \
+    -DCTRPORT_EXITTRAIL="$exittrail" -DCTRPORT_BALLAST="$ballast" -DCTRPORT_STALECARRY_PROBE="$stalecarry" -DCTRPORT_WRITERFRONT_MODE="$writerfront" \
     -DCTRPORT_DIMLIGHT_DIAG="$dimlightdiag" \
     -DCTRPORT_FLOWERHW_TPROF="$towerprof" -DCTRPORT_FLOWERHW_FORCE="$towerforce" \
     -DCTRPORT_FLOWERHW_L2="$ppl2" -DCTRPORT_FLOWERHW_PPFORCE="$ppforce" \

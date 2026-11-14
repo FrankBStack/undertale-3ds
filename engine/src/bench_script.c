@@ -476,7 +476,62 @@ static bool resolveRefObject(BenchScript* script, const Op* op, Runner* runner, 
 
 // ===[ Variables ]===
 
+#ifdef CTRPORT_BENCH_GLOBAL_VARI
+// global.X's own slot (benchglobal, 11-14; UNDERTALE test builds only, CMake defines it without a release source
+// URL). A name can have several VARI entries: UNDERTALE's mercy is a monster's (self, varID 10) and then the global
+// (varID 11). varNameMap keeps a name's first entry, so set/waitvar global.mercy went to slot 10 while the game's
+// PUSHGLB and POP read and write slot 11 (chk-mercy-flee-divergence-1114). This is the id of the name's global entry
+// (instanceType INSTANCE_GLOBAL), as PUSHGLB resolves it, or -1 when the data file has none (the old path then).
+// UNDERTALE's VARI has 10,899 entries and the bench's globals sit up to index 10,528, and `keep` runs every frame, so
+// found entries are cached. A slot holds only an entry's index (plus 1; 0 is empty), hashed by the name's text: no
+// pointer into the data file or the script is kept. A hit is read from the live table and must be in range, global,
+// with an id and the same name, or the table is searched again. The cache is emptied each time a data file is loaded
+// (BenchScript_newDataFile, from CtrBench_sessionStarted), so an index is only ever used with the table it came from,
+// where it is the name's first global entry. Misses are not kept.
+#define BENCH_GLOBAL_CACHE 16
+static uint32_t benchGlobalCache[BENCH_GLOBAL_CACHE];
+
+void BenchScript_newDataFile(void) {
+    memset(benchGlobalCache, 0, sizeof(benchGlobalCache));
+}
+
+static int32_t benchGlobalVarId(VMContext* ctx, const char* name) {
+    uint32_t h = 0;
+    for (const char* c = name; *c != '\0'; c++) h = h * 31 + (uint8_t) *c;
+    h %= BENCH_GLOBAL_CACHE;
+    const DataWin* dataWin = ctx->dataWin;
+    uint32_t cached = benchGlobalCache[h];
+    if (cached != 0 && dataWin->vari.variableCount >= cached) {
+        const Variable* hit = &dataWin->vari.variables[cached - 1];
+        if (hit->instanceType == INSTANCE_GLOBAL && hit->varID >= 0 && hit->name != nullptr && strcmp(hit->name, name) == 0)
+            return hit->varID;
+    }
+    // A plain loop: forEach is two nested fors, so a break in it would not end the search.
+    for (uint32_t i = 0; dataWin->vari.variableCount > i; i++) {
+        const Variable* v = &dataWin->vari.variables[i];
+        if (v->instanceType == INSTANCE_GLOBAL && v->varID >= 0 && v->name != nullptr && strcmp(v->name, name) == 0) {
+            benchGlobalCache[h] = i + 1;
+            return v->varID;
+        }
+    }
+    return -1;
+}
+#endif
+#line 479
 static RValue readVariable(VMContext* ctx, Instance* inst, const char* name, int32_t arrayIndex) {
+#ifdef CTRPORT_BENCH_GLOBAL_VARI
+    // The global scope's slot by its global entry, as PUSHGLB reads it (vmScopeVarSlot).
+    int32_t globalId = inst == ctx->globalScopeInstance ? benchGlobalVarId(ctx, name) : -1;
+    if (globalId >= 0) {
+        RValue* slot = IntRValueHashMap_findSlot(&inst->selfVars, globalId);
+        if (slot == nullptr) return RValue_makeUndefined();
+        if (arrayIndex >= 0) return RValue_makeIndependent(GMLArray_getOnArrayRef(slot, arrayIndex));
+        RValue weak = *slot;
+        weak.ownsReference = false;
+        return RValue_makeIndependent(weak);
+    }
+#endif
+#line 480
     if (inst->objectIndex == STRUCT_OBJECT_INDEX) return RValue_makeIndependent(VM_structGetVariableByVarName(ctx, inst, name, arrayIndex));
     int16_t builtinId = VMBuiltins_resolveBuiltinVarId(name);
     if (builtinId != BUILTIN_VAR_UNKNOWN) return VMBuiltins_getVariable(ctx, inst, builtinId, name, arrayIndex);
@@ -491,6 +546,20 @@ static RValue readVariable(VMContext* ctx, Instance* inst, const char* name, int
 }
 
 static void writeVariable(VMContext* ctx, Instance* inst, const char* name, int32_t arrayIndex, RValue val) {
+#ifdef CTRPORT_BENCH_GLOBAL_VARI
+    // The global scope's slot by its global entry, as POP global writes it (vmScopeVarWriteSlot; structSetById's
+    // two cases).
+    int32_t globalId = inst == ctx->globalScopeInstance ? benchGlobalVarId(ctx, name) : -1;
+    if (globalId >= 0) {
+        if (arrayIndex >= 0) {
+            VM_setArrayElementInSlot(ctx, IntRValueHashMap_getOrInsertUndefined(&inst->selfVars, globalId), arrayIndex, val);
+        } else {
+            Instance_setSelfVar(inst, globalId, val);
+        }
+        return;
+    }
+#endif
+#line 494
     if (inst->objectIndex == STRUCT_OBJECT_INDEX) {
         VM_structSet(ctx, inst, name, val, arrayIndex);
         return;

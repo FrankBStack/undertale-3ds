@@ -412,6 +412,10 @@ struct CtrAudioSystem {
     // file, or NULL when that group can't be read in the background.
     char* dataWinPath;
     char** groupPaths; // stb_ds array, parallel to base.audioGroups
+#ifdef CTRPORT_AUDIOBOOST
+    void* audioBoostState; // existing alignment hole, Old only
+#endif
+#line 409
     LoadRequest loads[LOAD_SLOTS];
     PrepJob preps[PREP_SLOTS]; // loadLock, like loads
     LightLock loadLock;
@@ -11677,6 +11681,8 @@ LCSTOP_CODE bool lcstopIsPlaying(AudioSystem* audio, int32_t soundOrInstance) {
 }
 #endif
 
+#include "sfxlate_boost_contract.inc"
+#line 10879
 // bootahead (first update, changes bootmask and bootahead2): the menu song named to the spare, at the end so nothing above
 // moves; its note link starts flowend's chain (FLOWHITCH_NOTE_NEXT).
 // Compile this unit separately: original audio bodies keep their optimizer inputs and slots.

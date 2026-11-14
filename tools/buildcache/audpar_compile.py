@@ -327,6 +327,14 @@ def main(args):
         text, receipt = restore_offsets(raw, diagnostic)
     else:
         text, receipt = restore_tables(raw)
+    if not roomload and '-DCTRPORT_AUDIOBOOST' in command:
+        import importlib.util
+        helper = Path(__file__).with_name('sfxlate_boost_destroy.py')
+        spec = importlib.util.spec_from_file_location('sfxlate_boost_destroy', helper)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        text = module.retarget_system_free(text)
+        receipt['boost_destroy_target'] = 'CtrAudioBoost_free'
     with restored.open('w', encoding='utf-8', newline='\n') as stream:
         stream.write(text)
     assemble, index = [command[0]], 1

@@ -9,6 +9,9 @@ LICENSE
 README.md
 THIRD_PARTY_NOTICES
 VERSION
+platform/3ds/sfxlate_boost.cmake
+platform/3ds/source/sfxlate_boost_contract.inc
+platform/3ds/source/z_audioboost.c
 pytest.ini
 docs/release/build-contract.json
 docs/release/credits-port.txt
@@ -39,6 +42,7 @@ engine/src/colexact_bbox.h
 engine/src/z_colexact.c
 engine/src/z_room_name_bounds.c
 tools/buildcache/colexact_compile.py
+tools/buildcache/sfxlate_boost_destroy.py
 tools/buildcache/test_colexact_compile.py
 # Native RNG mappings and retained release entry slots
 engine/src/rngexact.h
@@ -1070,6 +1074,17 @@ tools/analysis/test_devonly_aac.py
 # First-update parity: saved-room reinsertion order, included by engine/src/runner.c.
 engine/src/z_parity_restore.h
 
+# Parity frozen-stage correction and its source gates.
+engine/src/z_utlife_collision.c
+engine/src/z_utlife_collision.h
+engine/src/z_utlife_collision_membership.c
+tools/analysis/check_parity_collision_layout.py
+tools/analysis/test_parity_collision_layout.py
+tools/analysis/check_benchfid_layout.py
+tools/analysis/check_bench_prewindow_layout.py
+tools/analysis/check_parity_collision_cursor.py
+tools/analysis/test_parity_collision_cursor.c
+
 # noticescroll: retained Legal/Credits clear calls, UNDERTALE only.
 tools/buildcache/noticescroll_compile.py
 tools/buildcache/gmlstubs_compile.py
@@ -1205,3 +1220,11 @@ tools/analysis/check_knsurf_layout.py
 tools/analysis/layout_objects.py
 tools/release/export_lazy_loads.py
 tools/release/test_export_lazy_loads.py
+
+# Parity frozen-stage correction and its source gates.
+engine/src/parity_motion_body.inc
+tools/buildcache/parity_motion_compile.py
+tools/buildcache/parity_motion_verify.py
+tools/buildcache/test_parity_motion_compile.py
+tools/buildcache/test_parity_motion_verify.py
+tools/analysis/check_parity_motion_layout.py

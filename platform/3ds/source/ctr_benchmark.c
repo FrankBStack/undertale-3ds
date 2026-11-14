@@ -547,7 +547,7 @@ static void drawStatus(void) {
     printf("\x1b[K\n");
     // The last few results so far.
     int32_t n = (int32_t) arrlen(bench.results);
-    int32_t first = n > 12 ? n - 12 : 0;
+    int32_t first = n > CTRPORT_BENCH_STATUS_ROWS ? n - CTRPORT_BENCH_STATUS_ROWS : 0;
     for (int32_t i = first; n > i; i++) {
         const SceneResult* r = &bench.results[i];
         if (r->measured) printf(" %-20.20s %5.1f fps, 1%% low %5.1f\x1b[K\n", r->title, r->fpsAvg, r->fpsLow1);
@@ -2073,6 +2073,13 @@ static void sweepEndFrame(bool skipped) {
 // ===[ API ]===
 
 void CtrBench_sessionStarted(const CtrBenchSession* session) {
+#ifdef CTRPORT_BENCH_GLOBAL_VARI
+    // benchglobal: a data file was just loaded (each start, and again after game_change), so the bench script's cached
+    // global ids are dropped (bench_script.c). The block-scope declaration keeps every other line where it was.
+    void BenchScript_newDataFile(void);
+    BenchScript_newDataFile();
+#endif
+#line 2056
     CtrDisplaySettings display = bench.session.display;
     bench.session = *session;
     // A chapter loaded for the test reads the same settings file, but keep what the test started with.
@@ -2463,7 +2470,7 @@ const char* CtrBench_lateSceneId(void) {
 #include "ctr_benchmark_benchromfs_layout.inc"
 #if defined(__3DS__) && defined(NDEBUG)
 static void __attribute__((used, noinline, section(".text.late.benchromfs"))) benchRomfsSlot(void) {
-    __asm__(".pushsection .text.loadScenes, 1\n.space 576-(.-loadScenes),0\n.size loadScenes,576\n.popsection");
+    __asm__(".pushsection .text.loadScenes, 1\n.space 576-(.-loadScenes),0\n.size loadScenes,576\n.popsection"); CTRPORT_BENCH_STATUS_RETAIN_SLOT
 }
 #endif
 

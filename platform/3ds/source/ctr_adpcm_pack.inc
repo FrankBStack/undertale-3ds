@@ -82,7 +82,7 @@ static const char msInstalled[] MM_RO = "ADPCM MONO sound %ld: %lu -> %lu B cach
 static const char msFlush[] MM_RO = "ADPCM SFX pieces flushed through %s\n";
 static const char msBad[] MM_RO = "ADPCM SFX pack: sound %lu failed its payload check (%lu so far); original PCM\n";
 static const char msFlushHow[3][32] MM_RO = { "the kernel", "the dsp service", "the dsp service (svc failed)" };
-static const char msCost[] MM_RO = "[adpcm-mono] installed %lu; raw dropped %lu; bad checks %lu; ring failures %lu, peak %lu B, extra %lu B, base %lu B; %lu updates; pieces %llu, %llu frames, %.3f ms decode, %.3f ms max; cores 0x%lX/%u\n";
+static const char msCost[] MM_RO = "[adpcm-mono] installed %lu; packed hits %lu; bad checks %lu; ring failures %lu, peak %lu B, extra %lu B, base %lu B; %lu updates; pieces %llu, %llu frames, %.3f ms decode, %.3f ms max; cores 0x%lX/%u\n";
 
 // Preserve original callgraph/data references: this table is resolved by the
 // assembler and checked by the layout gate, not GCC's varpool walk.

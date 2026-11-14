@@ -4,6 +4,7 @@ import functools
 import inspect
 import os
 from pathlib import Path
+import sys
 import tempfile
 import unittest
 from unittest import mock
@@ -53,3 +54,25 @@ def tk_unavailable(error):
     if os.environ.get('REQUIRE_BUILDER_TK')=='1':
         raise AssertionError('Tk startup is required for this release gate. '+message) from error
     raise unittest.SkipTest(message) from error
+
+
+def show_without_desktop_input(test, window):
+    """Deiconify a test window for real geometry, but keep the desktop's keyboard and mouse away from it.
+
+    Release suites run on a desktop that someone may be using. App schedules _bring_to_front (lift, topmost,
+    focus -force) for its first idle pass, and on Windows a newly shown window can take the foreground by itself.
+    Then an Escape, Alt+F4, wheel or click meant for another window acted on the test's window inside its
+    root.update() calls: integrate21's polish flake was a prompt closed that way (TclError 'bad window path name' on
+    the next fit, 11-09 and 11-12), more likely under load because each step keeps the window up for longer. This
+    makes _bring_to_front a no-op for the rest of the test and, on Windows, disables the window before it maps
+    (wm attributes -disabled: EnableWindow FALSE on Tk's wrapper, so it gets no keyboard or mouse input and cannot be
+    activated by a click). Tk's own focus still works: focus_set, focus_force, focus_get and FocusIn behave as
+    before, so tests of Tk focus and traversal keep checking them. Synthetic event_generate input is unaffected.
+    """
+    import gui
+    bring = mock.patch.object(gui, '_bring_to_front', lambda root: None)
+    bring.start()
+    test.addCleanup(bring.stop)
+    if sys.platform == 'win32':
+        window.attributes('-disabled', True)
+    window.deiconify()

@@ -11,8 +11,17 @@
 
 #define FILES_TEXT __attribute__((noipa, section(".text.late.exithang.files")))
 #define FILES_BSS __attribute__((section(".bss.late.exithang.files")))
+// Appended late text and statics (late_reserve.ld, after every fixed H1
+// hole): the prepare mark grows no fixed-phase section on UNDERTALE Old.
+#define FILES_TAIL __attribute__((noipa, section(".text_exitfiles_late")))
+// A section name outside .bss.* is PROGBITS unless typed (ld then warns
+// ".late.bss type changed to PROGBITS"), as z_bsmex.c's BSM_BSS.
+#define FILES_TAIL_BSS __attribute__((section(".bss_exitfiles_late,\"aw\",%nobits @")))
 // Old 2DS: 288,054 B / 2,113 ms; a default 16 MiB batch needs about
 // 123 s before SD/CRC/log costs. Progress renews idle time, never this cap.
+// Idle time counts only after CtrLinkFiles_prepare: its stats send nothing
+// (one New 3DS, 11-13: about 0.62 s a file, 54-57 files past 25 s). The cap
+// from the batch's start still ends a prepare that never returns.
 #define FILES_IDLE_MS 25000u
 #define FILES_LIMIT_MS 300000u
 #define FILES_CANCEL_MS 5000u
@@ -24,9 +33,22 @@ FILES_BSS static u32 filesActive, filesFinished, filesCancel, filesExitExpired, 
 FILES_BSS static Thread filesGuardThread;
 FILES_BSS static Handle filesMainThread;
 FILES_BSS static LightEvent filesEvent;
+FILES_TAIL_BSS static u32 filesPrepared, filesHeld;
 
 static FILES_TEXT u32 filesNowMs(void) {
     return (u32) (svcGetSystemTick() / CPU_TICKS_PER_MSEC);
+}
+
+// The guard's progress. Until prepare returns, every read is new, so the idle
+// clock stands still (see FILES_IDLE_MS); only the guard thread calls it.
+static FILES_TAIL u32 filesProgress(void) {
+    if (!__atomic_load_n(&filesPrepared, __ATOMIC_ACQUIRE)) return ++filesHeld;
+    return CtrLinkFiles_progress();
+}
+
+static FILES_TAIL void filesPrepare(void (*report)(void*, bool, const char*), void* ctx) {
+    CtrLinkFiles_prepare(report, ctx);
+    __atomic_store_n(&filesPrepared, true, __ATOMIC_RELEASE);
 }
 
 static FILES_TEXT void filesCancelSocket(void) {
@@ -73,7 +95,7 @@ static FILES_TEXT void filesGuard(void* arg) {
     u32 moved = CtrLinkFiles_progress(), movedAt = filesNowMs(), cancelledAt = 0;
     bool cancelled = false;
     while (!__atomic_load_n(&filesFinished, __ATOMIC_ACQUIRE)) {
-        u32 now = filesNowMs(), progress = CtrLinkFiles_progress();
+        u32 now = filesNowMs(), progress = filesProgress();
         bool batch = __atomic_load_n(&filesActive, __ATOMIC_ACQUIRE);
         if (progress != moved) { moved = progress; movedAt = now; }
         // The batch has its own limit. Lab's 40 s and the raw guard's 65 s
@@ -162,7 +184,7 @@ FILES_TEXT void CtrExit_closeFilesLog(void) {
     filesStartedMs = filesNowMs();
     __atomic_store_n(&filesActive, true, __ATOMIC_RELEASE);
     LightEvent_Signal(&filesEvent);
-    CtrLinkFiles_prepare(CtrExit_filesLinkState.report, NULL);
+    filesPrepare(CtrExit_filesLinkState.report, NULL);
     CtrExit_flush();
     // Finish the writer before allowing the sender to see an empty log ring.
     // Its last log line must precede the files header on the same connection.

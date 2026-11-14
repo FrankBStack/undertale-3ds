@@ -510,7 +510,7 @@ SECTIONS
     *(.text.late.utasgore)
     /* Any other late text (round 14 dropped the wildcard ahead of the host table: it placed nothing). Not
        ctr_renderer.c's or z_itemverdict.c's, whose smartcut sections come last (round 17). */
-    *(SORT_BY_NAME(EXCLUDE_FILE (*z_bottomframe*.o *ctr_optmenu.o *z_bottompaint.o *z_boxcache.o *ctr_screens.o *ctr_rosalina.o *z_rosabl.o *z_dimlight.o *z_utlife.o *z_hitcheck.o *z_roomload.o *z_upd1_options.o *z_upd1_audio.o *z_upd1_text.o *z_rngexact* *z_thinart.o *z_dlghold.o *z_redpix.o *z_labcut.o *ctr_fpsbox.o *ctr_legal.o *ctr_legal_romfs.o *z_colexact.o *z_utwindow.o *z_asrtext* *z_adpcm* *ctr_adpcm_probe.o *ctr_audio_system.o *z_knightnew_history.o *z_flowcode.o *ctr_data_version.o *z_gogut* *ctr_pixgrid* *z_builderx_review* *z_builderx_new* *z_builderx_old* *z_builderx_receipt* *runner.o *z_loadscreen.o *z_symverdict* *z_smalltext_dr* *z_utstall* *z_sdmigrate* *ctr_renderer.o *z_itemverdict.o *z_phaseplan* *z_utold_scalar* *ctr_benchmark.o *z_sdlat* *vm_builtins.o *z_gamedir* *ctr_flowervramg_promotion.o *ctr_memory.o *ctr_flowervramg_palette.o *ctr_textures.o *z_hashmenu.o *state_hash.o *random.o *z_saveaudit.o *z_saveaudit_format.o *z_saveaudit_scan.o *libswkbd_late.a:* *ctr_input.o *ctr_frame_pacer.o *z_shopsplit.o *z_vramtop.o) .text.late.*))
+    *(SORT_BY_NAME(EXCLUDE_FILE (*z_bottomframe*.o *ctr_optmenu.o *z_bottompaint.o *z_boxcache.o *ctr_screens.o *ctr_rosalina.o *z_rosabl.o *z_dimlight.o *z_utlife.o *z_hitcheck.o *z_utlife_collision.o *z_utlife_collision_membership.o *z_roomload.o *z_upd1_options.o *z_upd1_audio.o *z_upd1_text.o *z_rngexact* *z_thinart.o *z_dlghold.o *z_redpix.o *z_labcut.o *ctr_fpsbox.o *ctr_legal.o *ctr_legal_romfs.o *z_colexact.o *z_utwindow.o *z_asrtext* *z_adpcm* *ctr_adpcm_probe.o *ctr_audio_system.o *z_knightnew_history.o *z_flowcode.o *ctr_data_version.o *z_gogut* *ctr_pixgrid* *z_builderx_review* *z_builderx_new* *z_builderx_old* *z_builderx_receipt* *runner.o *z_loadscreen.o *z_symverdict* *z_smalltext_dr* *z_utstall* *z_sdmigrate* *ctr_renderer.o *z_itemverdict.o *z_phaseplan* *z_utold_scalar* *ctr_benchmark.o *z_sdlat* *vm_builtins.o *z_gamedir* *ctr_flowervramg_promotion.o *ctr_memory.o *ctr_flowervramg_palette.o *ctr_textures.o *z_hashmenu.o *state_hash.o *random.o *z_saveaudit.o *z_saveaudit_format.o *z_saveaudit_scan.o *libswkbd_late.a:* *ctr_input.o *ctr_frame_pacer.o *z_shopsplit.o *z_vramtop.o) .text.late.*))
     /* builderx UT-only adapters, after every round-14 fixed section. DR excludes this object. */
     *z_builderx_review*(.text .text.* .rodata .rodata.*)
     *(.text.h1hole.bxreview)
@@ -2309,9 +2309,25 @@ SECTIONS
     /* stalecarry (battlesplit, 11-13; UNDERTALE development builds only, empty in every release build): the
        screen-move probe at ctr_frame_pacer.c's end, code and constants. */
     *(.text_stalecarry .rodata_stalecarry)
+    /* parity collision: append after every frozen-stage late input. */
+    *(.text.late.parity_collision)
+    *(.text.late.parity_collision_membership)
+    /* battletouchtap (11-12): take2's view call first (btViewT: speech X+Z while typing, a text tap held into a
+       defence follows, the game-over Z); append only. */
+    *(.text_battletouchtap .rodata_battletouchtap)
+    /* exitfiles tail (toolfix, chg-exitfiles-guard-prepare; all builds): the exit files guard's prepare mark and
+       its progress read (ctr_exit_files.c's filesPrepare and filesProgress). Appended after every fixed H1 hole and
+       after parity's and battletouchtap's appends, so .text.late.exithang.files keeps its size and nothing before
+       this moves. */
+    *(.text_exitfiles_late)
+    /* bootbar (toolfix, fix-bootbar-setup-restart-1114; UNDERTALE only, empty in DELTARUNE): the first time
+       setup's bar goes on from the load's (z_loadscreen.c's bb* functions and its data.win version chain link).
+       After the exitfiles tail; appended, so no earlier late code moves. */
+    *(.text_bootbar_late)
     /* repack test install (repacka, 11-02; build.sh repacktest= test builds only, empty in every release build):
        diag/ctr_repack_test.c's code and constants, last, so adding them moves no other late address of that test
        build (its late addresses still differ from release). Keep these last; new appends go above this comment. */
+    *(.text_sfxboost)
     *(.repack_test)
     *(.repack_test_ro)
   }
@@ -2577,6 +2593,7 @@ SECTIONS
     *(.rodata.late.noticescroll_pack)
     *(.rodata.late.fpsghost)
     *(.rodata_sfxlate)
+    *(.rodata_sfxboost)
     __late_rodata_end = ABSOLUTE(.);
   }
   /* 8 KiB (at first 4 KiB): late code's constants are mostly log formats; heapfrag's are 472 B, and
@@ -3418,6 +3435,10 @@ SECTIONS
     *(.bss_bsmex_late)
     /* stalecarry: the screen-move probe's state (UNDERTALE development builds only, empty in every release build). */
     *(.bss.stalecarry_late)
+    /* exitfiles tail: the prepare mark and the held progress count (ctr_exit_files.c), appended. */
+    *(.bss_exitfiles_late)
+    /* bootbar: the setup bar's span and the hash's added time (UNDERTALE only). */
+    *(.bss_bootbar_late)
     /* ballast (build.sh ballast test builds only, empty in every release build): z_ballast.c's state, last, so a
        ballast build keeps every late static's address of the release build. Keep this line last in late .bss; new
        appends go above this comment. Its code and constants are in the AAC slots (aacout.cmake). */

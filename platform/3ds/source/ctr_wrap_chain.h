@@ -54,9 +54,11 @@ int CtrAudioSystem_chainFlame(int32_t soundIndex, uint32_t bytes, uint32_t floor
 #define CTR_LAUNCHARGS_AFTER_ARGCRASH __real_CtrLaunchArgs_parse
 #endif
 
-// CtrDataVersion_check: loadscreen -> nativemac -> roomplan -> crispart (DELTARUNE) or utsfx (UNDERTALE) -> credfix
+// CtrDataVersion_check: loadscreen -> bootbar (UNDERTALE only) -> nativemac -> roomplan -> crispart (DELTARUNE) or utsfx (UNDERTALE) -> credfix
 // -> real.
 //   loadscreen (z_loadscreen.c): while the loading screen runs, passes on its own progress callback.
+//   bootbar (z_loadscreen.c, UNDERTALE only): a whole-file hash adds the first time setup's time to the bar's
+//   expectation, so the setup's bar can go on from the load's.
 //   nativemac (ctr_data_version.c): UNDERTALE's later known files (the macOS data) for an unknown result.
 //   roomplan (z_roomplan.c): keeps the digest for the room plan (DELTARUNE: and the chapter folder).
 //   utsfx (z_utsfx.c, UNDERTALE only): keeps the digest for the sound plan.
@@ -66,7 +68,13 @@ int CtrAudioSystem_chainFlame(int32_t soundIndex, uint32_t bytes, uint32_t floor
 //   lang/lang_en.json) is missing next to data.win.
 #define CTR_DATAVERSION_LOADSCREEN __wrap_CtrDataVersion_check
 #define CTR_DATAVERSION_NATIVEMAC CtrDataVersion_chainNativemac
+#ifdef ENABLE_WAD16
+#define CTR_DATAVERSION_BOOTBAR CtrDataVersion_chainBootbar
+#define CTR_DATAVERSION_AFTER_LOADSCREEN CTR_DATAVERSION_BOOTBAR
+#define CTR_DATAVERSION_AFTER_BOOTBAR CTR_DATAVERSION_NATIVEMAC
+#else
 #define CTR_DATAVERSION_AFTER_LOADSCREEN CTR_DATAVERSION_NATIVEMAC
+#endif
 #define CTR_DATAVERSION_ROOMPLAN CtrDataVersion_chainRoomplan
 #define CTR_DATAVERSION_GOGUT CtrDataVersion_chainGogut
 #ifdef CTRPORT_GOG_COMPAT
@@ -101,6 +109,9 @@ CtrDataVersionResult CtrDataVersion_chainFlowcode(CTR_DATAVERSION_CHAIN_PARAMS);
 #endif
 CtrDataVersionResult CTR_DATAVERSION_LOADSCREEN(CTR_DATAVERSION_CHAIN_PARAMS);
 CtrDataVersionResult CTR_DATAVERSION_NATIVEMAC(CTR_DATAVERSION_CHAIN_PARAMS);
+#ifdef ENABLE_WAD16
+CtrDataVersionResult CTR_DATAVERSION_BOOTBAR(CTR_DATAVERSION_CHAIN_PARAMS);
+#endif
 CtrDataVersionResult CTR_DATAVERSION_ROOMPLAN(CTR_DATAVERSION_CHAIN_PARAMS);
 CtrDataVersionResult CTR_DATAVERSION_GOGUT(CTR_DATAVERSION_CHAIN_PARAMS);
 #if defined(ENABLE_WAD17) || defined(ENABLE_WAD16)

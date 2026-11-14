@@ -2188,8 +2188,9 @@ static BT_CODE4 bool btTyping(Runner* runner) {
     for (const char* c = v[1]->string; *c != '\0'; c++) n += ((uint8_t) *c & 0xc0u) != 0x80u;
     return n > btInt(v[0], n, false);
 }
-// Only the flavour box accepts X to finish typing. Enemy/scripted speech keeps native Z;
-// its own timer/writer decides whether that Z is permitted. Control ownership is unchanged.
+// Only the flavour box accepts X to finish typing. Enemy/scripted speech gets the core's Z here; while it types,
+// btViewT (battletouchtap, 11-12) makes that X and Z, and the game's own readers decide. Control ownership is
+// unchanged.
 static __attribute__((noinline, section(".text_battletouchbubble"))) bool btFlavourTyping(Runner* runner) {
     return btGet(runner->vmContext, G_MNFIGHT, -1, -1) == 0 && btTyping(runner);
 }
@@ -2424,8 +2425,8 @@ static BT_CODE4 __attribute__((used)) bool btView(Runner* runner, CtrBottomView*
     if (shown) btMenuFix(runner, out);
     return shown;
 }
-// take2's view call reaches btView through btPad (the pad's view, the file's end): Battletouch_menus is btView's name.
-__asm__(".global Battletouch_menus\n.set Battletouch_menus, btView\n");
+// take2's view call reaches btView through btPad (the pad's view, the file's end) and btViewT (battletouchtap,
+// below): Battletouch_menus is btViewT's name, Battletouch_menus0 btView's.
 
 #ifdef CTRPORT_TOUCH_TEST
 static const char btTapLog[] BT_RO4 = "[touch] f=%lu tap held=%03lx pressed=%03lx\n";
@@ -2635,6 +2636,79 @@ static BT_CODE5 __attribute__((used)) bool btPad(Runner* runner, CtrBottomView* 
     return true;
 }
 __asm__(".global Battletouch_view\n.set Battletouch_view, btPad\n");
+
+// ===[ Taps on speech, a stroke held into a defence, the game over (battletouchtap, 11-12) ]===
+//
+// maintainer 11-12: "if you are in a battle, and there is dialogue before you go into tehj soul arena, on console, if u hit
+// b it skips/plays out the dialogue, just like it does when you are seeing dialogue normally. so when you tap, and
+// then tap when their dialogue is playing, it should skip like it would in the real game"; "also tapping the dialogue
+// with the stylus in the game over screen should work, but in the default game you cant skip it so the users taps in
+// between dialogue should behave like the real game"; and the purple SOUL left behind when the pen was down before
+// Muffet's box moved. Four rules, each on take2's view call, after btMenuFix and before the core's step:
+// (a) A pen-down on battle text still typing outside the flavour box (mnfight neither 0, btMenuFix's X, nor 2, the
+//     defence) presses X and Z together on that frame, as a player pressing both keys. The game's readers decide.
+//     The base text writer reads Z only, and only once its page is typed (Other_10: halt 1 the next page, 2 and 4
+//     the end; at halt 0 Z does nothing). The X skips write the string position only, never a ready halt (1, 2 or
+//     4) for the typing writer before its Z is read (c26rev4), so the pair never turns a page that is still typing.
+//     X finishes the line where the game has an X skip for that speech (Muffet's own Step, not gated by mnfight;
+//     the shared text-skip script's callers; Mettaton's third form), and Z ends it where the enemy's own timer
+//     reads Z (Undyne's alarm 5 gate and the bosses built the same way), as before. Once typed, the core's Z alone.
+// (b) The skip zone's tap (btMenuFix's, a defence with text up) while the text types: X and Z, for the same reason.
+// (c) A text tap held into a defence: the core gave that stroke up (TOUCH_DEAD) and the SOUL waited for a lift; it
+//     follows the pen from the defence's first frame now, as a pen put down then (lead 11-12: while the pen is held
+//     the SOUL is driven toward the point under the pen every frame, within the game's limits). Only a text tap's
+//     stroke (ctx TAP): a defence's own stroke the defence's end gave up stays given up, and the skip zone keeps its
+//     strokes until they enter the box.
+// (d) The game-over room (no battle controller): a pen-down is one Z, the key its writer and the defeated SOUL
+//     read there (nothing reads X), so a tap does what Z does: nothing while a line types, the next
+//     page once it is typed, the screen's end after the last. One press a pen-down. The whole panel, as touchui's
+//     text taps (the game may be on either screen).
+// A tap goes through btTake as btMenuFix's do: in place of the core's Z, never with a key of the player's held. No
+// existing byte changes: btPad's call of Battletouch_menus reaches btViewT, which calls btView by its second name
+// (Battletouch_menus0). Own sections (.text_battletouchtap, .rodata_battletouchtap), appended after every older late
+// tenant; no state of its own.
+#define BT_CODET __attribute__((noipa, used, section(".text_battletouchtap")))
+#define BT_ROT __attribute__((section(".rodata_battletouchtap")))
+bool Battletouch_menus0(Runner* runner, CtrBottomView* out);
+static const char btOverRoom[] BT_ROT = "room_gameover";
+static BT_CODET bool btViewT(Runner* runner, CtrBottomView* out) {
+    BtLive* L = bt.live;
+    TouchState* s = &L->s;
+    bool down = L->pen.pen && !s->pen && s->mode == TOUCH_IDLE; // the core's pen-down this frame
+    bool shown = Battletouch_menus0(runner, out);
+    uint32_t key = 0;
+    if (btFirst(runner, bt.names->obj[O_BC]) == nullptr) {
+        // (d) The game over: Z, once a pen-down (what its writer and the defeated SOUL read).
+        const Room* room = runner->currentRoom;
+        if (down && room != nullptr && room->name != nullptr && strcmp(room->name, btOverRoom) == 0) key = TOUCH_KEY_Z;
+    } else if (runner->vmContext->globalScopeInstance != nullptr) {
+        int32_t mnfight = btGet(runner->vmContext, G_MNFIGHT, -1, -1);
+        if (mnfight == 2) {
+            // (b) The skip zone's Z while the page types: X and Z.
+            if (L->tap != 0 && L->tapZone && L->tapKey == TOUCH_KEY_Z && btTyping(runner))
+                L->tapKey = (uint8_t) (TOUCH_KEY_X | TOUCH_KEY_Z);
+            if (btMode() == 2 && L->pen.pen && s->pen && s->mode == TOUCH_DEAD && s->ctx == TOUCH_CTX_TAP && !L->zone) {
+                // (c) As btMenuFix's zone stroke into the box: a new SOUL kind, so the core's law reads the pen next frame.
+                s->mode = TOUCH_FOLLOW;
+                s->ctx = TOUCH_CTX_DEFENCE;
+                s->soul = 0xff;
+                s->locked = 0;
+                s->face = 0;
+                s->lineKey = false;
+            }
+        } else if (mnfight != 0 && down && L->tap == 0 && btTyping(runner)) {
+            key = TOUCH_KEY_X | TOUCH_KEY_Z; // (a) speech while it types
+        }
+    }
+    if (key != 0) {
+        L->tap = 1;
+        L->tapKey = (uint8_t) key;
+        L->tapZone = false;
+    }
+    return shown;
+}
+__asm__(".global Battletouch_menus0\n.set Battletouch_menus0, btView\n"
+        ".global Battletouch_menus\n.set Battletouch_menus, btViewT\n");
 
 // ===[ Battle layout: Original, 3DS Mode, Top screen, with the game on either screen (battletouch18, 11-10) ]===
 //

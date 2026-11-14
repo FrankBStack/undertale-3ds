@@ -189,6 +189,8 @@ list(REMOVE_ITEM ENGINE_SOURCES "${ENGINE_DIR}/src/z_drhitbox.c")
 list(REMOVE_ITEM ENGINE_SOURCES "${ENGINE_DIR}/src/z_colexact.c")
 list(REMOVE_ITEM ENGINE_SOURCES "${ENGINE_DIR}/src/z_hitcheck.c")
 list(REMOVE_ITEM ENGINE_SOURCES "${ENGINE_DIR}/src/z_utlife.c")
+list(REMOVE_ITEM ENGINE_SOURCES "${ENGINE_DIR}/src/z_utlife_collision.c")
+list(REMOVE_ITEM ENGINE_SOURCES "${ENGINE_DIR}/src/z_utlife_collision_membership.c")
 # loop.c is the desktop main loop; source/main.c replaces it.
 list(REMOVE_ITEM ENGINE_SOURCES "${ENGINE_DIR}/src/loop.c")
 # Allocation helpers are cold; link them last to keep new code out of the
@@ -385,8 +387,9 @@ endif()
 
 # ===[ 3DS platform layer ]===
 file(GLOB PLATFORM_SOURCES CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/source/*.c")
+list(REMOVE_ITEM PLATFORM_SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/source/z_audioboost.c") # Explicit Old-only unit below.
 list(REMOVE_ITEM PLATFORM_SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/source/z_bootline_console.c") # Added explicitly for UT below.
-list(REMOVE_ITEM PLATFORM_SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/source/z_stalecarry.c") # UT development builds add it below.
+list(REMOVE_ITEM PLATFORM_SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/source/z_stalecarry.c") # Only stalecarry builds add it below.
 # Frame was withdrawn from 1.0 by the owner; keep its recoverable sources out of every link.
 list(FILTER PLATFORM_SOURCES EXCLUDE REGEX "/z_bottomframe(_core|_assets|_settings)?\\.c$")
 if(NOT CTRPORT_GAME STREQUAL "undertale" OR NOT CTRPORT_TARGET STREQUAL "o3ds")
@@ -4429,6 +4432,19 @@ if(CTRPORT_GAME STREQUAL "undertale" AND NOT CTRPORT_RELEASE_SOURCE_URL)
                  "${CMAKE_CURRENT_SOURCE_DIR}/source/z_battlesplit.c"
                  APPEND PROPERTY COMPILE_DEFINITIONS CTRPORT_PEN_LOG)
 endif()
+# warmup (UNDERTALE dev only): keep status-print work bounded independently of completed benchmark windows. Its own
+# block, under the same guard: shotpure_build.py patches the pen-log block above as one exact anchor.
+if(CTRPORT_GAME STREQUAL "undertale" AND NOT CTRPORT_RELEASE_SOURCE_URL)
+    set_property(SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/source/ctr_benchmark.c"
+                 APPEND PROPERTY COMPILE_DEFINITIONS CTRPORT_BENCH_STATUS_ROWS=1)
+endif()
+# benchglobal (lead 11-14): the bench's global.X reaches the name's global VARI entry, as PUSHGLB does, not the first
+# entry of that name (UNDERTALE's mercy: a monster's first, then the global). ctr_benchmark.c empties its id cache each
+# time a data file is loaded. Release objects unchanged.
+if(CTRPORT_GAME STREQUAL "undertale" AND NOT CTRPORT_RELEASE_SOURCE_URL)
+    set_property(SOURCE "${ENGINE_DIR}/src/bench_script.c" "${CMAKE_CURRENT_SOURCE_DIR}/source/ctr_benchmark.c"
+                 APPEND PROPERTY COMPILE_DEFINITIONS CTRPORT_BENCH_GLOBAL_VARI)
+endif()
 # menutime (change scanout, ethanlog5 row 13; UNDERTALE only): the options menu's open and close timed for the log, and
 # its glyphs read in the game's load behind the loading bar so that its first open never reads the card, and the press
 # that closes it no longer redraws its page (z_menutime.c). main.c's open, update, save, close, display caps, display
@@ -4698,7 +4714,16 @@ endif()
 # and z_screenmovestamp.c's log calls go to the probe. Its death flash watch (battle_probe 32, off otherwise) adds
 # bottomflip's call of the bottom painter's vblank lock, the GPU queue's frame flips (ctr_gpu_queue.c's
 # gfxScreenSwapBuffers calls) and z_battlesplit.c's switch accessor (CTRPORT_STALECARRY).
-if(GAME_WAD_DEFINE STREQUAL "ENABLE_WAD16" AND NOT CTRPORT_HOMEAUDIO_PROBE AND NOT CTRPORT_RELEASE_SOURCE_URL)
+# A diagnostic build only (build.sh ... stalecarry), off in every default development build and never a release: without
+# the word nothing here is compiled, nothing is retargeted, the screen-move line goes to the normal log and battle_probe
+# takes 0 to 31. Rows that read the carry fields or the death flash watch (battle_probe 32) need a stalecarry build.
+option(CTRPORT_STALECARRY_PROBE "stalecarry: screen-move carry fields and the death flash watch (UNDERTALE diagnostics)" OFF)
+if(CTRPORT_STALECARRY_PROBE AND (NOT GAME_WAD_DEFINE STREQUAL "ENABLE_WAD16" OR CTRPORT_HOMEAUDIO_PROBE
+        OR CTRPORT_RELEASE_SOURCE_URL))
+    message(FATAL_ERROR "CTRPORT_STALECARRY_PROBE is an UNDERTALE diagnostic build: never a release "
+        "(no CTRPORT_RELEASE_SOURCE_URL) and not with the HOME audio probe (it needs bottomflip)")
+endif()
+if(CTRPORT_STALECARRY_PROBE)
     target_sources(ctrport PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/source/z_stalecarry.c")
     set_source_files_properties("${CMAKE_CURRENT_SOURCE_DIR}/source/z_stalecarry.c" PROPERTIES
         COMPILE_OPTIONS "-Os;-fno-merge-constants")
@@ -4713,7 +4738,7 @@ if(GAME_WAD_DEFINE STREQUAL "ENABLE_WAD16" AND NOT CTRPORT_HOMEAUDIO_PROBE AND N
         "CtrPacer_setGameScreen=CtrStale_setGameScreen" "CtrLog_endConsole=CtrStale_endConsole")
     set_property(SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/source/z_screenmovestamp.c" APPEND PROPERTY COMPILE_DEFINITIONS
         "logInfo=CtrStale_log")
-endif()
+endif() # stalecarry
 
 # touchui step 1: battletouch's weak sample extension supplies the pen/keys and owns the merge; no HID wrapper.
 # All new code/constants append after battletouch in the text reserve, with state allocated on the heap.
@@ -4927,6 +4952,28 @@ if(CTRPORT_GAME STREQUAL "undertale")
         "${CMAKE_CURRENT_SOURCE_DIR}/../../tools/buildcache/fpsghost_return_compile.py")
 endif()
 
+# parity: reviewed R409b retained forward body and mandatory package gate.
+if(CTRPORT_GAME STREQUAL "undertale")
+    get_target_property(parity_motion_delegate ctrport C_COMPILER_LAUNCHER)
+    set_property(TARGET ctrport PROPERTY C_COMPILER_LAUNCHER
+        "${CTRPORT_PYTHON_EXECUTABLE};-X;utf8;-I;${CMAKE_CURRENT_SOURCE_DIR}/../../tools/buildcache/parity_motion_compile.py;${parity_motion_delegate};--parity-motion-compiler")
+    set_property(SOURCE "${ENGINE_DIR}/src/instance.c" APPEND PROPERTY OBJECT_DEPENDS
+        "${CMAKE_CURRENT_SOURCE_DIR}/../../tools/buildcache/parity_motion_compile.py"
+        "${CMAKE_CURRENT_SOURCE_DIR}/../../tools/buildcache/parity_motion_verify.py"
+        "${ENGINE_DIR}/src/parity_motion_body.inc")
+    # Always verify before packaging, including incremental builds with no relink.
+    # The receipt binds source, adapter and object; the verifier checks linked bytes.
+    add_custom_target(parity_motion_release_check ALL
+        COMMAND "${CTRPORT_PYTHON_EXECUTABLE}" -X utf8 -I
+            "${CMAKE_CURRENT_SOURCE_DIR}/../../tools/buildcache/parity_motion_verify.py"
+            --elf "$<TARGET_FILE:ctrport>"
+            --receipt-root "${CMAKE_CURRENT_BINARY_DIR}/CMakeFiles/ctrport.dir"
+            --report "${CMAKE_CURRENT_BINARY_DIR}/parity-motion-verification.json"
+        DEPENDS ctrport VERBATIM)
+    add_dependencies(ctrport_3dsx parity_motion_release_check)
+    add_dependencies(cia parity_motion_release_check)
+endif()
+
 # Third reviewed outer launcher: dlgflash, fpsghost_return, then sfxlate.
 # sfxlate intentionally retargets one main.o call after both passthroughs.
 # sfxlate: room-258 fan PCM must be ready before its first pitch-3 play. The
@@ -4944,6 +4991,18 @@ if(CTRPORT_GAME STREQUAL "undertale" AND CTRPORT_TARGET STREQUAL "o3ds"
         "${CMAKE_CURRENT_SOURCE_DIR}/source/main.c" APPEND PROPERTY OBJECT_DEPENDS
         "${CMAKE_CURRENT_SOURCE_DIR}/../../tools/buildcache/sfxlate_compile.py;${CMAKE_CURRENT_SOURCE_DIR}/../../tools/buildcache/sfxlate_object.py;${CMAKE_CURRENT_SOURCE_DIR}/../../tools/buildcache/portmenu_compile.py;${CMAKE_CURRENT_SOURCE_DIR}/source/ctr_sfxlate_cooler.inc")
 endif()
+
+# parity: recovered e94e1a7ca traversal, appended on the frozen stage.
+if(CTRPORT_GAME STREQUAL "undertale")
+    target_sources(ctrport PRIVATE "${ENGINE_DIR}/src/z_utlife_collision.c"
+        "${ENGINE_DIR}/src/z_utlife_collision_membership.c")
+    set_source_files_properties("${ENGINE_DIR}/src/z_utlife_collision.c"
+        "${ENGINE_DIR}/src/z_utlife_collision_membership.c" PROPERTIES
+        COMPILE_OPTIONS "-Os")
+endif()
+
+# sfxboost: configure the Old-only audio ceiling before the final dispatcher.
+include("${CMAKE_CURRENT_SOURCE_DIR}/sfxlate_boost.cmake")
 
 # Last: the launcher dispatcher wraps the finished C_COMPILER_LAUNCHER chain.
 include("${CMAKE_CURRENT_SOURCE_DIR}/launch_dispatch.cmake")

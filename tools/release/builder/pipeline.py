@@ -12,9 +12,9 @@ import json
 import os
 from pathlib import Path
 import re
+import queue
 import shlex
 import shutil
-import signal
 import stat
 import subprocess
 import sys
@@ -29,7 +29,7 @@ import library_pins
 import home_art
 import sfx_encoder
 import path_hygiene
-from processes import hidden_options
+from processes import IDLE, ProcessGroup, StopFailed, hidden_options
 
 CIA_NOT_MADE = "The .cia was not made.\nUntick .cia on Options or set up the .cia tools."
 
@@ -956,6 +956,11 @@ class GameFilesRefused(BuildFailed):
     """The game files changed after verification; return to file selection, not build retry."""
 
 
+class BuildNotStopped(BuildFailed):
+    """A build error whose message already says the build could not be stopped, and why. Build.run() adds that
+    warning to any other error, and knows not to add it twice by this type, never by the message (TK-D7)."""
+
+
 def game_files_problem(title, kind):
     """Player guidance shared by the window and CLI (cli_text translates the final action)."""
     messages = {
@@ -1068,24 +1073,18 @@ def prepare_sfx_pack(job, data_dir):
         sfx_encoder.validate(library, Path(job.work) / 'src')
         argv += ['--dsp-library', str(library)]
     env = dict(os.environ, PYTHONDONTWRITEBYTECODE='1')
-    options = hidden_options(group=True)
-    if sys.platform != 'win32':
-        options['start_new_session'] = True
     try:
         with open(job.log_path, 'a', encoding='utf-8', newline='\n') as log:
             log.write('builder: preparing UNDERTALE sound pack\n')
-            with job._lock:
-                if job.cancelled:
-                    raise BuildFailed('The build was cancelled.', job.log_path)
-                job.proc = subprocess.Popen(argv, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
-                    stderr=subprocess.STDOUT, text=True, encoding='utf-8', errors='replace',
-                    env=env, **options)
-            for line in job.proc.stdout:
+
+            def output(line):
                 log.write(line)
                 job.on_line(line.rstrip('\r\n'))
-            code = job.proc.wait()
-            if code or job.cancelled or not temporary.is_file() or not temporary.stat().st_size:
-                log.write('builder: sfxpack exit code %d\n' % code)
+            # Its own job or process group, stopped and confirmed like build.sh's (TK-1); never a PID tree.
+            code = job.run_contained(argv, log, output, popen=subprocess.Popen, text=True, encoding='utf-8',
+                                     errors='replace', env=env)
+            if code is None or code or job.cancelled or not temporary.is_file() or not temporary.stat().st_size:
+                log.write('builder: sfxpack exit code %s\n' % code)
                 raise BuildFailed(FAILED, job.log_path)
         os.replace(temporary, out)
     except OSError as error:
@@ -1102,20 +1101,6 @@ def sha256_file(path):
         for chunk in iter(lambda: f.read(1 << 20), b""):
             h.update(chunk)
     return h.hexdigest()
-
-
-def kill_tree(proc):
-    """Stops the build: the PID the builder started and everything under it."""
-    if proc.poll() is not None:
-        return
-    if sys.platform == "win32":
-        subprocess.run(["taskkill", "/PID", str(proc.pid), "/T", "/F"], stdin=subprocess.DEVNULL,
-                       capture_output=True, timeout=30, **hidden_options())
-    else:
-        try:
-            os.killpg(proc.pid, signal.SIGTERM)
-        except OSError:
-            pass
 
 
 # Both-model compiler cache was about 82 MB; old versions can accumulate without reuse.
@@ -1189,19 +1174,163 @@ class Build:
         self.notices = []
         self.progress = Progress(product, target, clock)
         self.progress.cia_wanted = "cia" in self.outputs
-        self.proc = None
         self.cleanup_roots = [os.path.join(work, name) for name in cleanup.WORK_AREAS['build']]
-        self.cancelled = False
-        self._lock = threading.Lock()
+        self._init_stops()
         os.makedirs(os.path.join(work, "logs"), exist_ok=True)
         self.log_path = os.path.join(work, "logs", "build-%s-%s-%s.log" % (product.key, target,
                                                                            time.strftime("%Y%m%d-%H%M%S")))
 
+    def _init_stops(self):
+        self.proc = None
+        self.cancelled = False
+        # What cancel() may stop: the running step's own job or process group, nothing else (TK-1). build.sh uses
+        # this one; a later step (the sound pack's packer) gets a fresh one from run_contained().
+        self.group = ProcessGroup()
+        self.stop_failure = None                # the first release outcome that did not confirm a stop (TK-D5)
+        self._idle = threading.Event()          # set while no step of this build is started and unreleased
+        self._idle.set()
+        self._lock = threading.Lock()
+
     def cancel(self):
+        """Never blocks (a Tk callback calls it): asks the running step's group to stop; release() confirms."""
         with self._lock:
             self.cancelled = True
             if self.proc is not None:
-                kill_tree(self.proc)
+                self.group.stop()       # a released group does nothing and returns False (TK-D6)
+
+    def stop_and_confirm(self):
+        """For quitting: cancel, then wait (bounded) until no step of this build can still be running. Returns
+        why the build is not known to have stopped, or None (TK-D5). cancel() and every start share self._lock,
+        so once it returns no further step starts, and a started one is confirmed by its own release (TK-D6)."""
+        self.cancel()
+        with self._lock:
+            bound = self.group.stop_bound() + 10
+        if not self._idle.wait(bound):
+            return "it had not finished stopping"
+        return self.stop_failure
+
+    def _publish(self, outcome):
+        """Store a release outcome before anything that can fail (TK-D7). A failed stop is never dropped."""
+        if outcome is not None and self.stop_failure is None:
+            self.stop_failure = outcome
+        self._idle.set()
+
+    def _log_close_error(self, log, group):
+        """A job handle that would not close: the step had ended, so it is a note in the log, never an error
+        (TK-N1). A failure to write the note is ignored: the release outcome is already published."""
+        error = getattr(group, 'close_error', None)
+        if error is not None:
+            try:
+                log.write("builder: closing the build's job handle failed: %s\n" % error)
+            except Exception:
+                pass
+
+    def _release(self, group):
+        try:
+            return group.release(self.proc)
+        except BaseException as exc:     # release() never raises; a replacement that does is not a confirmation
+            return 'releasing the build failed (%s: %s)' % (type(exc).__name__, exc)
+
+    def run_contained(self, argv, log, on_output, popen=None, **popen_kwargs):
+        """Run one build step in its own job (Windows) or session (POSIX), reading its output on a thread.
+        Returns its exit code, or None when it was stopped before exiting on its own. Raises BuildNotStopped when
+        a stop could not be confirmed, BuildFailed when it could not be started safely or its output could not be
+        read, or the error that ended it. TK-D5..D8: from the start every exit leaves through group.release(),
+        which stops anything of the step still alive, confirms it (job empty within STOP_SECONDS) or says why
+        not, and only then lets the job go. The outcome is published before any logging."""
+        popen = popen or self.popen
+        # Made before the step starts, so nothing between its start and the cleanup below can fail (TK-D8).
+        read_error = failure = rc = None
+        abandoned = threading.Event()
+        lines = queue.Queue()
+        fresh = ProcessGroup()
+        with self._lock:
+            if self.cancelled:
+                raise BuildFailed("The build was cancelled.", self.log_path)
+            if self.group.state != IDLE:
+                self.group = fresh      # the earlier step's group is spent; it is never reused
+            group = self.group
+            kw = dict(popen_kwargs)
+            kw.update(group.popen_kwargs())
+            self._idle.clear()
+            try:
+                child = popen(argv, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                              **kw)
+            except BaseException:
+                self._idle.set()        # nothing started
+                raise
+            try:
+                self.proc = group.started(child)
+            except BaseException as exc:   # no job, so no safe way to stop it: the suspended step was killed
+                self._publish(group.outcome)   # or why it could not be (TK-D7)
+                self._log_close_error(log, group)
+                if not isinstance(exc, OSError):
+                    raise
+                log.write("builder: could not contain the build: %s\n" % exc)
+                raise BuildFailed("The build could not be started safely.\n"
+                                  "Click Copy log to report the error.", self.log_path) from exc
+        # The output is read on its own thread, so a stop that fails, or never finishes, is reported (TK-R2)
+        # instead of leaving this loop waiting on a pipe that a surviving process still holds. The stop state is
+        # checked on every turn, so a step that keeps writing cannot outrun it (TK-D1), and a read error reaches
+        # this thread as an error, never as the end of the output (TK-D2).
+        try:
+            def pump(out=self.proc.stdout):
+                try:
+                    for line in out:
+                        if abandoned.is_set():
+                            return      # this step has been given up on: keep none of its output
+                        lines.put(("line", line))
+                except BaseException as exc:
+                    lines.put(("error", exc))
+                else:
+                    lines.put(("eof", None))
+            threading.Thread(target=pump, name="build-output", daemon=True).start()
+            while True:
+                group.check()
+                try:
+                    kind, line = lines.get(timeout=0.25)
+                except queue.Empty:
+                    continue
+                if kind == "eof":
+                    break
+                if kind == "error":
+                    log.write("builder: reading the build output failed: %r\n" % (line,))
+                    read_error = line
+                    with self._lock:
+                        group.stop()
+                    break
+                on_output(line)
+            if read_error is None:
+                rc = group.wait(self.proc)     # the root only; release() confirms the rest of the job
+        except BaseException as exc:    # StopFailed, or any other exit after the step started (TK-D8)
+            failure = exc
+        finally:
+            abandoned.set()
+            outcome = self._release(group)
+            self._publish(outcome)
+        self._log_close_error(log, group)
+        if failure is not None:
+            log.write("builder: the build ended with %r\n" % (failure,))
+        if outcome is not None:
+            log.write("builder: the build could not be stopped: %s\n" % outcome)
+            if read_error is not None:
+                raise BuildNotStopped("The build output could not be read (%s), and the build could not be stopped "
+                                      "(%s).\nSome build tools may still be running. Click Copy log to report the "
+                                      "error." % (read_error, outcome), self.log_path) from failure
+            if failure is not None and not isinstance(failure, StopFailed):
+                raise BuildNotStopped("The build failed (%s: %s), and it could not be stopped (%s).\n"
+                                      "Some build tools may still be running. Click Copy log to report the error."
+                                      % (type(failure).__name__, failure, outcome), self.log_path) from failure
+            raise BuildNotStopped("The build could not be stopped (%s).\n"
+                                  "Some build tools may still be running. Click Copy log to report the error."
+                                  % outcome, self.log_path) from failure
+        if failure is not None and not isinstance(failure, StopFailed):
+            raise failure               # the step is confirmed ended; the original error stands
+        if read_error is not None:
+            raise BuildFailed("The build output could not be read (%s).\n"
+                              "Click Try again, or click Copy log to report the error." % read_error,
+                              self.log_path) from read_error
+        return rc
 
     def refuse_game_files(self, error):
         if self.product.key == 'undertale':
@@ -1360,11 +1489,28 @@ class Build:
         return env
 
     def run(self):
+        """Build one target. Any error, including one from recording file ownership, still carries the survivor
+        warning when a release could not confirm a stop (TK-D7): the warning wraps the ownership step, not the
+        other way round, so nothing after the release can lose it."""
         try:
-            return self._run()
-        finally:
-            self.finish_ownership()
-            self._running = False
+            try:
+                result = self._run()
+            finally:
+                self.finish_ownership()
+                self._running = False
+            # A published unconfirmed stop is authoritative (TK-ST1): no path that went on past it, such as the
+            # optional sound pack's fallback, may deliver the build as a success.
+            if self.stop_failure is not None:
+                raise BuildNotStopped("The build could not be stopped (%s).\n"
+                                      "Some build tools may still be running. Click Copy log to report the error."
+                                      % self.stop_failure, self.log_path)
+            return result
+        except BaseException as exc:
+            if self.stop_failure is not None and not isinstance(exc, BuildNotStopped):
+                raise BuildNotStopped("The build failed (%s: %s), and it could not be stopped (%s).\n"
+                                      "Some build tools may still be running. Click Copy log to report the error."
+                                      % (type(exc).__name__, exc, self.stop_failure), self.log_path) from exc
+            raise
 
     def _run(self):
         release_version(self.source_root)
@@ -1403,9 +1549,6 @@ class Build:
             'Tested with devkitARM GCC %s (%s); found %s (%s), so layout pins are off and performance may differ slightly.' %
             (tested['version'], tested['target'], compiler['version'] or 'not readable',
              compiler['target'] or 'not readable'))
-        kw = hidden_options(group=True)
-        if sys.platform != "win32":
-            kw["start_new_session"] = True
         # Line-buffered, so the log on disk follows the build (support, and a crash leaves the lines so far).
         with open(self.log_path, "w", encoding="utf-8", newline="\n", buffering=1) as log:
             products.log_ignored_music(self.product, self.data_dir, lambda message: log.write(message + '\n'))
@@ -1447,13 +1590,8 @@ class Build:
                                   self.log_path) from exc
             log.write("HOME Menu art: " + json.dumps(art, sort_keys=True) + "\n")
             log.flush()
-            with self._lock:
-                if self.cancelled:
-                    raise BuildFailed("The build was cancelled.", self.log_path)
-                self.proc = self.popen(argv, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
-                                       stderr=subprocess.STDOUT, env=env, text=True, encoding="utf-8",
-                                       errors="replace", bufsize=1, **kw)
-            for line in self.proc.stdout:
+
+            def output(line):
                 log.write(line)
                 self.progress.feed(line)
                 self.on_line(line.rstrip("\r\n"))
@@ -1462,7 +1600,8 @@ class Build:
                     # relsimple: the easy path promises a recognised AOT build, never a quiet interpreter build.
                     log.write("builder: stopping, the build would go on without AOT\n")
                     self.cancel()
-            rc = self.proc.wait()
+            rc = self.run_contained(argv, log, output, env=env, text=True, encoding="utf-8", errors="replace",
+                                    bufsize=1)
         if self.cancelled and not self.progress.no_aot:
             raise BuildFailed("The build was cancelled.\nClick Try again when ready.", self.log_path)
         refusal = game_files_refusal(self.log_path, self.product.title) if rc != 0 or self.progress.no_aot else None
@@ -1478,6 +1617,8 @@ class Build:
                     raise BuildFailed('The required 3DS files did not pass the final check, so the game was not built. '
                                       'Choose Try again, or Copy log for support.', self.log_path,
                                       '\n'.join(lines[index:]))
+        if rc is None:
+            raise BuildFailed("The build was stopped.\nClick Try again when ready.", self.log_path)
         if rc != 0:
             raise BuildFailed("The build stopped (exit code %d).\n"
                               "Click Try again, or click Copy log to report the error." % rc, self.log_path)
@@ -1498,7 +1639,16 @@ class Build:
         if self.product.key == 'undertale' and self.target == 'o3ds':
             try:
                 pack = self.sfx_builder(self, data_dir)
+            except BuildNotStopped:
+                raise                   # never a notice: its processes may still be running (TK-1)
             except Exception as error:
+                if self.stop_failure is not None:
+                    # Whatever replaced the typed error on the way out (a failed log write, the temporary file's
+                    # cleanup), the pack's stop was not confirmed: never the missing-pack notice (TK-ST1).
+                    raise BuildNotStopped("The build failed (%s: %s), and it could not be stopped (%s).\n"
+                                          "Some build tools may still be running. Click Copy log to report the "
+                                          "error." % (type(error).__name__, error, self.stop_failure),
+                                          self.log_path) from error
                 if self.cancelled:
                     raise BuildFailed('The build was cancelled.', self.log_path) from error
                 reason = sfx_pack_problem(self.source_root) or 'its sound step failed (the build log says why)'
