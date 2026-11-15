@@ -2657,6 +2657,7 @@ SECTIONS
     *(.rodata.late.fpsghost)
     *(.rodata_sfxlate)
     *(.rodata_sfxboost)
+    *(.rodata_reclaim_menutime)
     __late_rodata_end = ABSOLUTE(.);
   }
   /* 8 KiB (at first 4 KiB): late code's constants are mostly log formats; heapfrag's are 472 B, and

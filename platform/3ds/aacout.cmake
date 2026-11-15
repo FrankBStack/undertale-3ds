@@ -47,7 +47,15 @@ set(aacout_rodata_inputs
     .aacout.rodata.touchmenus
     .aacout.rodata.touchoverworld
     .aacout.rodata.btgrey
+    .aacout.rodata.n8a_optmenu
+    .aacout.rodata.n8a_utfadea
 )
+# N8a: only UT Old release moves these two immutable inputs; all other targets retain their late inputs.
+if(CTRPORT_GAME STREQUAL "undertale" AND CTRPORT_TARGET STREQUAL "o3ds" AND CTRPORT_RELEASE_SOURCE_URL)
+    set_property(SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/source/ctr_optmenu.c"
+        "${CMAKE_CURRENT_SOURCE_DIR}/source/z_btlentry.c" APPEND PROPERTY
+        COMPILE_DEFINITIONS CTRPORT_N8A_RODATA)
+endif()
 # Development-only inputs (lead 11-11, devdiet decision 2; CTRPORT_DEVONLY_AAC, UNDERTALE builds without the release
 # source URL): labguard (z_labguard.o, every code and constant section), the pen log's own pairs (z_battletouch.c's
 # .text_/.rodata_battletouchpen, z_battlesplit.c's .text_/.rodata_battlesplitpen) and bsrdev (z_battlesplitbsr.c's

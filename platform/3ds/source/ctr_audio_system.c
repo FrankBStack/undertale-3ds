@@ -3902,15 +3902,34 @@ UTA_LATE static void utaChnWaveBufClear(int id) {
 }
 
 // Whether a cached sound's loop seam is smoothed, per channel; measured once per cached copy. Game thread.
+#define UTA_SEAM_WAVCOPY 0x8000u // audiomain U1: in an entry's format, measured on a copy of the sound's AUDO WAV
+#line 3683
 UTA_LATE static const UtaSeamSound* utaSeamSound(const Voice* v) {
     const CachedSfx* s = v->sfx;
 #line 3685
     int chans = s->format & 3;
     if (((s->format >> 2) & 3) != 1 || chans < 1 || chans > 2 || s->frames < 4 * UTA_TAIL_MAX) return NULL;
     if (v->soundIndex < 0 || (uint32_t) v->soundIndex >= utaCa->soundCount) return NULL;
+    // audiomain U1: a copy of the sound's AUDO WAV (buildSfx, or usfast's worker copy, which is byte-identical) is the
+    // same samples every time it is made: both copy the blob's PCM16 frames word for word, and the blob is data.win's,
+    // read-only for the session. Its entry is keyed with UTA_SEAM_WAVCOPY, so a later copy of the sound at another
+    // address takes the entry (re-pointed there) instead of reading every frame again. Every other copy (a file or
+    // memory decode from a prep job, flowendSeamCollect's entries, anything whose size is not its PCM16 frames) keeps
+    // the old rule: a hit only at its own address. An entry at the copy's own address wins over a re-point. The table
+    // is cleared at each audio start (utaSetCallback), so no entry outlives its audio system. e->pcm is an address
+    // tag, compared and never read through; the samples are the voice's own.
+    uint16_t key = s->format;
+    if (s->reload == SFX_RELOAD_AUDO_WAV && s->bytes == s->frames * (uint32_t) chans * 2u) key |= UTA_SEAM_WAVCOPY;
+    UtaSeamSound* same = NULL;
     for (int i = 0; i < UTA_SEAM_SOUNDS; i++) {
         UtaSeamSound* e = &utaSeamSounds[i];
-        if (e->sound == v->soundIndex && e->pcm == s->pcm && e->frames == s->frames && e->format == s->format) return e;
+        if (e->sound != v->soundIndex || e->frames != s->frames || e->format != key) continue;
+        if (e->pcm == s->pcm) return e;
+        if (same == NULL && (key & UTA_SEAM_WAVCOPY)) same = e;
+    }
+    if (same != NULL) {
+        same->pcm = s->pcm;
+        return same;
     }
     const int16_t* x = (const int16_t*) s->pcm;
     int32_t maxStep[2] = { 0, 0 }, step[2] = { 0, 0 };
@@ -3918,7 +3937,7 @@ UTA_LATE static const UtaSeamSound* utaSeamSound(const Voice* v) {
     e->sound = v->soundIndex;
     e->pcm = s->pcm;
     e->frames = s->frames;
-    e->format = s->format;
+    e->format = key;
     bool any = false;
     for (int c = 0; c < 2; c++) {
         e->trigger[c] = 0;
@@ -3941,6 +3960,7 @@ UTA_LATE static const UtaSeamSound* utaSeamSound(const Voice* v) {
     }
     return e;
 }
+#line 3721
 
 UTA_LATE static void utaChnWaveBufAdd(int id, ndspWaveBuf* buf) {
     int p = utaPhys(id);
@@ -4203,7 +4223,7 @@ UTA_LATE static void utaSetCallback(ndspCallback callback, void* data) {
     }
     LightLock_Init(&utaLock);
     memset(utaChan, 0, sizeof(utaChan));
-    memset(utaWb, 0, sizeof(utaWb));
+    memset(utaWb, 0, sizeof(utaWb)); memset(utaSeamSounds, 0, sizeof(utaSeamSounds)); // audiomain U1: a new owner
     if (utaTailPcm == NULL) utaTailPcm = (uint8_t*) UTA_FAULT_ALLOC(1, UTA_CHANNELS * UTA_TAIL_MAX * 4);
     if (utaSeamPcm == NULL) utaSeamPcm = (uint8_t*) UTA_FAULT_ALLOC(2, UTA_CHANNELS * UTA_SEAM_MAX * 4);
     utaEngineCallback = callback;

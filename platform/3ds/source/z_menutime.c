@@ -69,11 +69,19 @@
 #include "ctr_textures.h"
 #include "data_win.h"
 #include "log.h"
+#include "ctr_log.h"
 #include "runner.h"
 #include "stb_ds.h"
 
 #define MT_CODE __attribute__((noinline, noipa, optimize("Os"), section(".text_menutime")))
+#ifdef CTRPORT_RECLAIM_MENUTIME
+#define MT_FIRST_CODE __attribute__((noinline, noipa, optimize("Os"), \
+    section(CTR_H1_SEC(".text_menutime", ".text.h1hole.relprep"))))
+#define MT_RO __attribute__((section(".rodata_reclaim_menutime")))
+#else
+#define MT_FIRST_CODE MT_CODE
 #define MT_RO __attribute__((section(".rodata.menutime_in_text")))
+#endif
 #define MT_DATA __attribute__((section(".data.menutime_late")))
 
 // argui's state (ctr_argui.c, a global): the same layout (as ctr_optmenu.c and z_argbind.c declare it).
@@ -415,7 +423,7 @@ MT_CODE static bool mtGlyphFits(CtrTextureCache* cache, const DataWin* dw, int32
 // then the glyph pass, once a session. Each of the heart and 32..126 (the table's 96 slots) is drawn into the scratch
 // column if mtGlyphFits says its tiles can be had without evicting; the others are left for the first open.
 void CtrMenutime_initFirstRoom(Runner* runner);
-MT_CODE void CtrMenutime_initFirstRoom(Runner* runner) {
+MT_FIRST_CODE void CtrMenutime_initFirstRoom(Runner* runner) {
     __real_Runner_initFirstRoom(runner);
     if (mtg.tried) return;
     mtg.tried = true; // never again this session, whatever happens below

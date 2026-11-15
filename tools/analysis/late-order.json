@@ -955,7 +955,8 @@
     "*(.rodata.late.noticescroll_pack)",
     "*(.rodata.late.fpsghost)",
     "*(.rodata_sfxlate)",
-    "*(.rodata_sfxboost)"
+    "*(.rodata_sfxboost)",
+    "*(.rodata_reclaim_menutime)"
   ],
   "data": [
     "*(.data.late.benchromfs)",
@@ -1357,7 +1358,9 @@
     ".aacout.rodata.touchquiz",
     ".aacout.rodata.touchmenus",
     ".aacout.rodata.touchoverworld",
-    ".aacout.rodata.btgrey"
+    ".aacout.rodata.btgrey",
+    ".aacout.rodata.n8a_optmenu",
+    ".aacout.rodata.n8a_utfadea"
   ],
   "devonly": {
     "aac_text": [

@@ -2906,3 +2906,108 @@ def test_build_system_diffs_can_go_to_a_file(tmp_path):
                                 tmp_path / 'b', out)
     assert bad == 0 and not any(l.startswith('+X') for l in report), report
     assert out.read_text().splitlines()[0] == '=== CMakeCache.txt' and '+X:BOOL=ON' in out.read_text()
+
+
+# ------------------------------------------------------------------------------------------- testproc() loading
+# testproc() loads tools/testproc.py inside the first probe, after the source snapshot: it must write no bytecode
+# there (N5 suite 11-14), and must not do it through the process-wide sys.dont_write_bytecode, which concurrent first
+# callers saved and restored across each other (c26rev4 N6-N1).
+
+def stub_testproc(tmp_path, monkeypatch, check, body='VALUE = 1\n'):
+    (tmp_path / 'tools').mkdir()
+    (tmp_path / 'tools' / 'testproc.py').write_text(body, encoding='utf-8')
+    monkeypatch.setattr(check, 'ROOT', tmp_path)
+    monkeypatch.setattr(check, '_TESTPROC', [])
+    monkeypatch.setattr(sys, 'dont_write_bytecode', False)
+
+
+def test_testproc_load_writes_no_bytecode_even_when_the_process_allows_it(tmp_path, monkeypatch):
+    check = load_check()
+    stub_testproc(tmp_path, monkeypatch, check)
+    module = check.testproc()
+    assert module.VALUE == 1 and check.testproc() is module
+    assert not (tmp_path / 'tools' / '__pycache__').exists()
+    assert sys.dont_write_bytecode is False
+
+
+def test_concurrent_first_testproc_calls_load_once_and_leave_the_process_flag_alone(tmp_path, monkeypatch):
+    """Thread A's load waits (inside the module) for B to call testproc() too. Loads are serialized and the flag
+    is never touched: one load, one module, the flag False throughout and after."""
+    import threading
+    import types
+    check = load_check()
+    b_calling = threading.Event()
+    second_load = threading.Event()
+    gate = types.SimpleNamespace(loads=[], b_calling=b_calling, second_load=second_load)
+
+    def entered():
+        gate.loads.append(sys.dont_write_bytecode)
+        if len(gate.loads) == 1:
+            assert b_calling.wait(30)
+            second_load.wait(1.0)  # an unserialized B loads now; a serialized one waits on the lock
+        else:
+            second_load.set()
+    gate.entered = entered
+    monkeypatch.setitem(sys.modules, 'ldc_testproc_gate', gate)
+    stub_testproc(tmp_path, monkeypatch, check, 'import ldc_testproc_gate\nldc_testproc_gate.entered()\n')
+    got = {}
+
+    def call(name):
+        if name == 'b':
+            b_calling.set()
+        got[name] = check.testproc()
+    a = threading.Thread(target=call, args=('a',))
+    a.start()
+    for _ in range(3000):
+        if gate.loads:
+            break
+        time.sleep(0.01)
+    b = threading.Thread(target=call, args=('b',))
+    b.start()
+    a.join(60)
+    b.join(60)
+    assert not a.is_alive() and not b.is_alive()
+    assert gate.loads == [False], gate.loads  # loaded once, with the process flag as the process had it
+    assert got['a'] is got['b'] and check._TESTPROC == [got['a']]
+    assert sys.dont_write_bytecode is False
+    assert not (tmp_path / 'tools' / '__pycache__').exists()
+
+
+def test_testproc_reentered_by_its_own_load_raises_instead_of_deadlocking(tmp_path, monkeypatch):
+    """testproc.py's load calls testproc() again from the loading thread (a callback or audit hook inside it). The
+    lock is not re-entrant, so the old loader waited on itself forever; it must raise, release the lock, cache
+    nothing, and leave a later good load working (c26rev4 N6-N2)."""
+    import threading
+    import types
+    check = load_check()
+    gate = types.SimpleNamespace(inner=[])
+
+    def entered():
+        try:
+            check.testproc()
+        except BaseException as error:
+            gate.inner.append(error)
+            raise
+    gate.entered = entered
+    monkeypatch.setitem(sys.modules, 'ldc_testproc_gate', gate)
+    stub_testproc(tmp_path, monkeypatch, check, 'import ldc_testproc_gate\nldc_testproc_gate.entered()\n')
+    got = {}
+
+    def call():
+        try:
+            got['module'] = check.testproc()
+        except BaseException as error:
+            got['error'] = error
+    outer = threading.Thread(target=call, daemon=True)  # daemon: a deadlocked red run must not hold up pytest
+    outer.start()
+    outer.join(10)
+    assert not outer.is_alive(), 'testproc() deadlocked on its own lock when its load re-entered it'
+    assert isinstance(got.get('error'), RuntimeError) and 're-entered' in str(got['error']), got
+    assert len(gate.inner) == 1 and gate.inner[0] is got['error']
+    assert check._TESTPROC == [] and check._TESTPROC_LOADING == []
+    assert not check._TESTPROC_LOCK.locked()
+    (tmp_path / 'tools' / 'testproc.py').write_text('VALUE = 2\n', encoding='utf-8')
+    module = check.testproc()
+    assert module.VALUE == 2 and check._TESTPROC == [module]
+    assert sys.dont_write_bytecode is False
+    assert not (tmp_path / 'tools' / '__pycache__').exists()

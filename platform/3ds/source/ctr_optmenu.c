@@ -82,6 +82,13 @@
 #define OPT_BSS
 #endif
 #define OPT_STR(name, text) static const char name[(sizeof(text) + 3u) & ~3u] OPT_RO = text
+#ifdef ENABLE_WAD16
+#ifdef CTRPORT_N8A_RODATA
+#undef OPT_RO
+#define OPT_RO __attribute__((section(".aacout.rodata.n8a_optmenu")))
+#endif
+#endif
+#line 52
 
 // argui's state (ctr_argui.c, a global): the same layout.
 typedef struct {

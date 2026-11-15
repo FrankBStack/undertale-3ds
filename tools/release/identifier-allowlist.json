@@ -147,7 +147,7 @@
     {
       "member": "platform/3ds/source/ctr_audio_system.c",
       "class": "engine-lookups",
-      "sha256": "2102ef7951a90fdd8e9f2afbb0497948010bc01b2112ab0aa774790a98088db4",
+      "sha256": "eeed509956668fa501ccf41dea3d1a61c7fe1525afea23203f1fa4bcbf90a48a",
       "justification": "One sound lookup name: the game-over music fence recognises this stream by its name at runtime.",
       "evidence_sha256": [
         "9b7906afa34fd7378c77b13fc0e94b5b9afac4944fce6a70064bf387c8751674"
@@ -309,7 +309,7 @@
     {
       "member": "platform/3ds/source/z_btlentry.c",
       "class": "engine-lookups",
-      "sha256": "c22d33bddd3087744465c6a783ed0fa38d9a7e477d1ffdff2ec03c108a6bdece",
+      "sha256": "dffe1129fd268ecfce2a3fd171cd9ee161e6f85ac034411128a22f7d04033e58",
       "justification": "Two object names tell that a battle is starting, one that its soul is still flying to its place (no tile installs or code copies while it moves), two object names and one room name that a story battle is starting (its room's own planned tiles are read instead of a battle group's), and eight door object names that a door is fading out, so the planned tiles and code of the battle or of the door's destination can be read before the room change (textures and code only).",
       "evidence_sha256": [
         "fe3633cd79e49914f03da92f7758c5dbce0eba1f6e9e18512ae1aadd4d361396"
@@ -924,7 +924,7 @@
     {
       "member": "tools/buildcache/launch_dispatch_check.py",
       "class": "engine-symbols",
-      "sha256": "69c7c8eaa901949114a2694fbabfe5137326d17723fc393b336425e13b3fe4e6",
+      "sha256": "1ee01cf45ebf15fa8195f6ac0aad0af39d18fef658069f05408d7aa7243233fc",
       "justification": "buildfast identity checker: the flagged name is the ELF section-header type field it reads; prefix overlap is not a game asset.",
       "evidence_sha256": [
         "18ecdaf31888c2de321b900dbf2eb3f15e093af15594d8c087ac84fa527fb11e"
@@ -1185,7 +1185,7 @@
     {
       "member": "platform/3ds/source/z_battletouch.c",
       "class": "engine-lookups",
-      "sha256": "5595360ee51b99d8e36edbd95b052e21c0e0e83a39e5ab91243ffcbdb33382bf",
+      "sha256": "623d7abb6db08f5a1195bab29a33d48b16cc2fcb750fd94607092a44362270f4",
       "justification": "battletouch (lead approved 2026-11-08; the game-over room lookup added for r1c, lead approved 2026-11-14): battle object names used only as runtime lookups for stylus hit areas and the SOUL's position, and the game-over room's name, compared with the current room's so that a tap there presses Z; no game text or art. The battle menu's and the SOUL's variables are read by name the same way; UNDERTALE only, compiled empty for DELTARUNE.",
       "evidence_sha256": [
         "8c5cb50df32297c7e1e8d74d46f64c55fdab20849486f35f4a60d5c959c6821c"

@@ -1061,6 +1061,14 @@ else()
     if(CTRPORT_TEST_LATE_PAGE)
         math(EXPR ctrport_ut_late "${ctrport_ut_late} + 0x1000" OUTPUT_FORMAT HEXADECIMAL)
     endif()
+    # UNDERTALE Old dev builds (no CTRPORT_RELEASE_SOURCE_URL; integrate21 N7, GO 11-14): one more 4 KiB page,
+    # so the dev line keeps the late floor while release Old holds 1,180 B over it. Dev and test code (touch test,
+    # benchmark slot, diagnostics) lands there; release Old is byte-identical. Only .rodata, .data, .bss and TLS move,
+    # by one whole page; the heap stays 20 MiB, so linear memory is 4 KiB less (dev memcap 58,756 -> 58,752 KB). The
+    # touch-test page (build turn #13) is this page now, not a second one. check_devonly_aac declares this compose.
+    if(CTRPORT_TARGET STREQUAL "o3ds" AND NOT CTRPORT_RELEASE_SOURCE_URL)
+        math(EXPR ctrport_ut_late "${ctrport_ut_late} + 0x1000" OUTPUT_FORMAT HEXADECIMAL)
+    endif()
     string(REPLACE "/* LATE_TEXT_RESERVE */ 0x30000" "${ctrport_ut_late}"
            CTRPORT_LATE_LD_TEXT "${CTRPORT_LATE_LD_TEXT}")
 endif()
@@ -1437,13 +1445,6 @@ endif()
 # release; .rodata, .data and .bss move by two pages in those builds alone.
 if(CTRPORT_TITANDIAG)
     string(REPLACE "__late_text_limit = ALIGN(__late_text_start, 0x1000) +" "__late_text_limit = ALIGN(__late_text_start, 0x1000) + 0x2000 +"
-           CTRPORT_LATE_LD_TEXT "${CTRPORT_LATE_LD_TEXT}")
-endif()
-# Touch-test builds (CTRPORT_TOUCH_TEST, never a release) on UNDERTALE Old: one more 4 KiB page of late code for the
-# test's own (about 3.5 KB), which overflowed the reserve by 129 B. Text keeps
-# its addresses; .rodata, .data and .bss move by one page in those builds alone.
-if(CTRPORT_TOUCH_TEST AND CTRPORT_GAME STREQUAL "undertale" AND CTRPORT_TARGET STREQUAL "o3ds")
-    string(REPLACE "__late_text_limit = ALIGN(__late_text_start, 0x1000) +" "__late_text_limit = ALIGN(__late_text_start, 0x1000) + 0x1000 +"
            CTRPORT_LATE_LD_TEXT "${CTRPORT_LATE_LD_TEXT}")
 endif()
 # Screenshot (shots) builds on Old 3DS, both games (review decision, legalui round 21, 2026-10-26): one more 4 KiB page of
@@ -4467,6 +4468,11 @@ if(CTRPORT_GAME STREQUAL "undertale")
         "__real_CtrScreens_pacerSwap=Battletouch_pacerSwap")
 endif()
 option(CTRPORT_TOUCH_TEST "Test only: touchscript.txt drives the stylus in battles, and stylus frames are logged" OFF)
+# A touch-test build is a dev build: its late code fits only with the UNDERTALE Old dev page, which a release source
+# URL turns off (c26rev7, integrate21 N7). Refuse the combination instead of linking a touch test without that page.
+if(CTRPORT_TOUCH_TEST AND CTRPORT_RELEASE_SOURCE_URL)
+    message(FATAL_ERROR "CTRPORT_TOUCH_TEST is a test build and never a release (no CTRPORT_RELEASE_SOURCE_URL)")
+endif()
 if(CTRPORT_TOUCH_TEST)
     # runner.c: its default-draw forwarder (drawSelfLook) goes with the menus' code, as the pad is 0 in these builds.
     set_property(SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/source/z_battletouch.c" "${ENGINE_DIR}/src/runner.c" APPEND PROPERTY
@@ -4502,6 +4508,11 @@ endif()
 # ctr_optmenu.c's appended CtrOptmenu_pressResumes and CtrOptmenu_flushPage), constants and state (in the late data's
 # reserve) are appended last.
 if(CTRPORT_GAME STREQUAL "undertale")
+    # reclaim: move only Old release startup code/constants; dev keeps its placement.
+    if(CTRPORT_TARGET STREQUAL "o3ds" AND CTRPORT_RELEASE_SOURCE_URL)
+        set_property(SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/source/z_menutime.c" APPEND PROPERTY
+            COMPILE_DEFINITIONS CTRPORT_RECLAIM_MENUTIME)
+    endif()
     set_source_files_properties("${CMAKE_CURRENT_SOURCE_DIR}/source/z_menutime.c" PROPERTIES
         COMPILE_OPTIONS "-Os;-fno-merge-constants;-fno-tree-switch-conversion;-fno-jump-tables")
     set_property(SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/source/main.c" APPEND PROPERTY COMPILE_DEFINITIONS

@@ -152,14 +152,24 @@ def run(command: list[str]) -> str:
                           stdin=subprocess.DEVNULL).stdout
 
 
+def require_bss_nobits(sections: list[Section]) -> None:
+    """Loaded zero-state inputs/outputs must never become file-backed data."""
+    bad = [f'{s.name}: {s.kind}' for s in sections
+           if 'A' in s.flags and s.name.startswith(('.bss', '.late.bss')) and s.kind != 'NOBITS']
+    if bad:
+        raise ValueError('File-backed BSS: ' + ', '.join(bad))
+
+
 def load(path: Path, nm: str, readelf: str, map_path: Path | None = None) -> Layout:
     # This entry point is also used by change CLIs which do not catch ValueError.
     # Exit like a CLI tool error there too, never traceback or return an empty gate.
     try:
         symbols, plain = parse_symbols(run([nm, '-n', '-S', '--defined-only', str(path)]))
         sections = run([readelf, '-SW', str(path)])
-        return Layout(parse_sections(sections), symbols, plain, parse_segments(run([readelf, '-lW', str(path)])),
-                      parse_sections(sections, tls=True), read_objects(path, map_path))
+        allocated, tls = parse_sections(sections), parse_sections(sections, tls=True)
+        require_bss_nobits(allocated + tls)
+        return Layout(allocated, symbols, plain, parse_segments(run([readelf, '-lW', str(path)])),
+                      tls, read_objects(path, map_path))
     except (OSError, ValueError, subprocess.SubprocessError) as error:
         print(f'LAYOUT TOOL ERROR: {error}', file=sys.stderr)
         raise SystemExit(2) from None

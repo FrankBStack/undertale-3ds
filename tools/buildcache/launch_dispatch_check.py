@@ -1303,25 +1303,41 @@ PROBE_TIMEOUT = 3600  # seconds one control or probe may run before its whole pr
 EXIT_GRACE = 2  # seconds the group of a command that exited gets to empty before what is left counts as outliving it
 SETTLE = 30  # seconds a killed group gets to empty; past that, writers of the object may be alive
 _TESTPROC = []
+_TESTPROC_LOCK = threading.Lock()
+_TESTPROC_LOADING = []  # the thread id running testproc.py's first load, while it runs
 
 
 def testproc():
     """tools/testproc.py, whose kill group (_Group) the probes run in: on Windows a job object the command joins
     while still suspended, before it runs; elsewhere a new session. Loaded without writing bytecode: the first load
     happens inside the first probe, after the source snapshot, and a tools/__pycache__ file written then made the
-    checker report its own write as NOT CLEAN (N5 suite 11-14)."""
-    if not _TESTPROC:
-        import importlib.util
-        spec = importlib.util.spec_from_file_location('ctrport_testproc', ROOT / 'tools' / 'testproc.py')
-        module = importlib.util.module_from_spec(spec)
-        before = sys.dont_write_bytecode
-        sys.dont_write_bytecode = True
-        try:
-            spec.loader.exec_module(module)
-        finally:
-            sys.dont_write_bytecode = before
-        _TESTPROC.append(module)
-    return _TESTPROC[0]
+    checker report its own write as NOT CLEAN (N5 suite 11-14). The suppression is this loader's own (_NoBytecode),
+    never the process-wide sys.dont_write_bytecode, which another thread's load or import would see or restore
+    wrongly (c26rev4 N6-N1); the lock makes concurrent first calls load it once. Initialization is not re-entrant:
+    a call from the loading thread while the load runs (a callback or audit hook inside it) raises RuntimeError
+    instead of waiting on its own lock forever; other threads still wait (c26rev4 N6-N2)."""
+    if threading.get_ident() in _TESTPROC_LOADING:
+        raise RuntimeError('testproc() re-entered during its own first load of tools/testproc.py')
+    with _TESTPROC_LOCK:
+        if not _TESTPROC:
+            import importlib.machinery
+            import importlib.util
+
+            class _NoBytecode(importlib.machinery.SourceFileLoader):
+                def set_data(self, path, data, *, _mode=0o666):
+                    pass  # the only way a source loader writes its bytecode cache
+
+            path = str(ROOT / 'tools' / 'testproc.py')
+            spec = importlib.util.spec_from_file_location('ctrport_testproc', path,
+                                                          loader=_NoBytecode('ctrport_testproc', path))
+            module = importlib.util.module_from_spec(spec)
+            _TESTPROC_LOADING.append(threading.get_ident())
+            try:
+                spec.loader.exec_module(module)
+            finally:
+                _TESTPROC_LOADING.clear()
+            _TESTPROC.append(module)
+        return _TESTPROC[0]
 
 
 if os.name == 'nt':

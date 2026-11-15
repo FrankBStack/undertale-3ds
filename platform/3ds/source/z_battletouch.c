@@ -2784,6 +2784,7 @@ static BT_CODEM Runner* btLookOn(void) {
 static BT_CODEM void btLookReset(void) {
     CtrBattletouch_menuHide = 0;
     btLook.orange = btLook.shown = btLook.edge = 0;
+    btLook.spare = 0; // turned gravity's state (btTurned, below)
 }
 // The battle's menu as the touch reads it (btRead_menu, into *m and *slot), when the battle is in it (btRead_menu's
 // menu context: active 1, mnfight 0, myfight 0; or the two-way choice, its id's top bit, left out): bmenuno times 2,
@@ -2946,6 +2947,54 @@ static BT_CODEM void btBlue(BtLive* L, CtrInputEdges* e, uint32_t ePrev, uint32_
     L->tPrev &= ~u;
 }
 
+// ===[ Turned gravity (law v3, battletouch-g95-turned-gravity-design.md r4, c26rev8): the injector ]===
+//
+// Sans's turned gravity (obj_heart movement 11: gravity right, 12: up, 13: left; probe s95probe) moves the SOUL with
+// the arrows turned: the jump key is the arrow against gravity (11 Left, 12 Down, 13 Right), the walk keys run along
+// the wall, and the key toward gravity is never the stylus's. btRead_soul2 maps these movements to NONE, so the core
+// follows them holding nothing. Law v3 is law v2 rotated: walk toward the pen (the follow law's band), one jump per
+// stroke against gravity while the pen is beyond the 16 px line, and a turn of gravity spends the stroke's jump.
+// Every take (btTakeM, after btBlue) btTurned works the law out and merges the stylus's arrows into the take's edges as
+// Touch_merge would, with L->tPrev; a change to or from turned gravity spends L->jump. Its own state is btLook.spare,
+// a byte nothing else owns. Test builds log each admitted take. Host tests only: BT_TURNED_INJECT 0 builds step 1's
+// observer (shadow state only: the game's input as without btTurned), BT_TURNED_OFF leaves the call out (the A build).
+#ifndef BT_TURNED_OFF
+#define BT_TURNED 1
+#endif
+#ifndef BT_TURNED_INJECT
+#define BT_TURNED_INJECT 1
+#endif
+// btLook.spare: bits 0-2 the movement at the last take (0 unknown or no heart, 1 movement 1, 2 movement 2, 3-5
+// movements 11-13, 6 any other); bits 3-4 the stroke's turned jump (0 none or spent, BT_JUMP_CHANCE, BT_JUMP_UP);
+// bit 5 the last take was admitted. btLookReset clears it (the setting Off, no names, no BtLive, another battle).
+#define BT_TV_LAST 0x20u
+typedef struct {
+    uint32_t code, view, jump, c, s; // view: 0 none, 1 the bottom view, 2 the test view, 3 the pad's
+    uint32_t held, pressed, released, tPrev, ePrev; // the take's edges and L's holds, after the merge (if any)
+    int32_t i, x, y, cx, cy, js, step, d;
+    float hs, vs;
+    bool admitted, turn, live, ground, beyond, clear;
+} BtTurnedSeen;
+#if defined(CTRPORT_TOUCH_TEST) || defined(BT_TURNED_HOST)
+#define BT_TURNED_SEEN 1 // each take's record: test builds' log line, the host test's copy
+#ifdef BT_TURNED_HOST
+static void btTurnedReport(const BtTurnedSeen* w); // the host test's record
+#else
+static const char btTurnedLog[] BT_ROM = "[touch] f=%lu turned mv=%lu adm=%d turn=%d live=%d view=%lu i=%d x=%d y=%d "
+                                         "cx=%d cy=%d js=%d hs=%d vs=%d ground=%d beyond=%d c=%03lx s=%03lx jump=%lu "
+                                         "clear=%d e=%03lx/%03lx/%03lx tprev=%03lx eprev=%03lx\n";
+static BT_CODEM void btTurnedReport(const BtTurnedSeen* w) {
+    logInfo(btTurnedLog, (unsigned long) bt.frame, (unsigned long) w->code, (int) w->admitted, (int) w->turn,
+            (int) w->live, (unsigned long) w->view, (int) w->i, (int) w->x, (int) w->y, (int) w->cx, (int) w->cy,
+            (int) w->js, (int) (w->hs * 100.0f), (int) (w->vs * 100.0f), (int) w->ground, (int) w->beyond,
+            (unsigned long) w->c, (unsigned long) w->s, (unsigned long) w->jump, (int) w->clear, (unsigned long) w->held,
+            (unsigned long) w->pressed, (unsigned long) w->released, (unsigned long) w->tPrev, (unsigned long) w->ePrev);
+}
+#endif
+#endif
+// btTakeM's call. The body is after btTakeM in the source; GCC emits it before btTakeM in the menu pair.
+static BT_CODEM void btTurned(BtLive* L, CtrInputEdges* e, uint32_t ePrev, uint32_t tPrev);
+
 // The slot's CtrInput_take wrap (Battletouch_take): btTake (take2, the text taps), then the blue SOUL's jump
 // (btBlue), then the look's state from this take, then an edge's key, merged as btTake merges a tap.
 CtrInputEdges Battletouch_take0(const CtrInputMap* map, uint32_t held, uint32_t down, bool enabled, bool suppressHeld,
@@ -2971,6 +3020,9 @@ static BT_CODEM CtrInputEdges btTakeM(const CtrInputMap* map, uint32_t held, uin
         btLookReset();
         return e;
     }
+#ifdef BT_TURNED
+    btTurned(L, &e, ePrev, tPrev);
+#endif
     TouchState* s = &L->s;
     bool hide = CtrBattletouch_menuHide != 0;
     bool admitted = !live0 && s->pen && s->ctx == TOUCH_CTX_MENU
@@ -3042,6 +3094,133 @@ static BT_CODEM CtrInputEdges btTakeM(const CtrInputMap* map, uint32_t held, uin
     return e;
 }
 __asm__(".global Battletouch_take\n.set Battletouch_take, btTakeM\n");
+
+// After take2 and btBlue, past btTakeM's guard (the runner, the names bound to this data file, the setting on, a
+// BtLive). ePrev and tPrev: btTakeM's, the buttons' and the stylus's holds as the last take left them.
+static BT_CODEM void btTurned(BtLive* L, CtrInputEdges* e, uint32_t ePrev, uint32_t tPrev) {
+    BtTurnedSeen w = {0};
+    uint32_t spare = btLook.spare, was = spare & 7u, jump = spare >> 3 & 3u;
+    bool last = (spare & BT_TV_LAST) != 0;
+    if (btMode() != 2) {
+        btLook.spare = 0; // Menus only: no SOUL law; the next take under Menus and SOUL is a first observation
+        return;
+    }
+    Runner* runner = bt.runner; // btLookOn's: btTakeM's guard
+    const BtNames* names = bt.names;
+    VMContext* ctx = runner->vmContext;
+    Instance* h = btFirst(runner, names->obj[O_HEART]);
+    int32_t mv = h != nullptr ? btSelf(h, S_MOVEMENT, 0) : 0;
+    uint32_t code = h == nullptr ? 0u : (uint32_t) mv - 1u < 2u ? (uint32_t) mv
+                    : (uint32_t) mv - 11u < 3u ? (uint32_t) mv - 8u : 6u; // 1, 2; 11-13 as 3-5; any other 6
+    bool turned = 3u <= code && 5u >= code;
+    // A turn: another movement than the last take's, a first observation, no heart, or no turned gravity. L->jump
+    // (btBlue's) is spent by any change to or from turned gravity, admitted or not (a return to 2 never is).
+    w.code = code;
+    w.turn = code != was || !turned;
+    w.clear = code != was && (turned || (3u <= was && 5u >= was));
+    if (BT_TURNED_INJECT && w.clear) L->jump = 0;
+    // Admitted: the core followed the pen in a defence this take with nothing held (FOLLOW, NONE: take2 stepped it
+    // with the pen down; a cut, a claim, another scope, a lift or no view ends FOLLOW), no purple SOUL (take2 follows
+    // it first), the heart's sprite readable, not confused, and the view take2 used (below).
+    const TouchState* s = &L->s;
+    const TouchPen* p = &L->pen;
+    DataWin* dw = runner->dataWin;
+    bool adm = turned && s->mode == TOUCH_FOLLOW && s->ctx == TOUCH_CTX_DEFENCE && s->soul == TOUCH_SOUL_NONE && s->pen
+               && p->pen && btFirst(runner, BTX->obj2[P_PURPLE]) == nullptr && h->objectIndex == names->obj[O_HEART]
+               && 0 <= h->spriteIndex && (uint32_t) h->spriteIndex < dw->sprt.count
+               && btSelf(h, S_CONFUSE, 0) == 0;
+    // take2's view this take, without a second call of btPad (its state) or btMenuFix (its state; it changes the view
+    // only in a menu). The bottom view when it is shown (test builds: else the test view of a scripted run, as btView),
+    // else the pad's when btPad took it this take (it cleared padDown first). A green pad corner (the SOUL followed
+    // last take was green) is the first take of another movement: a turn, so it holds nothing anyway.
+    CtrBottomView v; // read only when a view filled it (w.view != 0)
+    bool asked = false;
+#ifdef CTRPORT_TOUCH_TEST
+    asked = BT_SCRIPTED && btPadTest();
+#endif
+    if (adm && !asked) {
+        if (CtrLayout_bottomView(runner, &v)) w.view = 1;
+#ifdef CTRPORT_TOUCH_TEST
+        else if (BT_SCRIPTED && btTestView(runner, &v)) w.view = 2;
+#endif
+    }
+    if (adm && w.view == 0 && (asked || !BT_SCRIPTED) && L->padDown && !L->padGreen) {
+        v = (CtrBottomView) {L->padX0, L->padY0, BT_PAD_GAIN};
+        w.view = 3;
+    }
+    adm = adm && w.view != 0;
+    // Live: admitted, not a turn, and the pen went down this take or the last take was admitted (a stroke admitted
+    // mid-way lets go one take, as the core does for a new SOUL kind). A take that is not live holds nothing and
+    // spends the stroke's jump, UP and CHANCE alike (c26rev8 G95-6): only a pen-down gives a chance again.
+    bool down = p->pen && p->n == 1;
+    w.admitted = adm;
+    w.live = adm && !w.turn && (down || last);
+    if (!w.live) jump = 0u;
+    if (w.live) {
+        // The pen as take2 mapped it (the sample Touch_pen chose while the pen is down), the SOUL's centre as
+        // btCentre makes it, sixteenths.
+        w.i = p->wait ? 1 : 0;
+        w.x = (int32_t) (v.roomX0 + ((float) p->x[w.i] + 0.5f) * v.roomPerPx);
+        w.y = (int32_t) (v.roomY0 + ((float) p->y[w.i] + 0.5f) * v.roomPerPx);
+        Sprite* sp = &dw->sprt.sprites[h->spriteIndex];
+        float fx = h->x + ((float) sp->width * 0.5f - (float) sp->originX) * h->imageXscale;
+        float fy = h->y + ((float) sp->height * 0.5f - (float) sp->originY) * h->imageYscale;
+        w.cx = (int32_t) (fx * 16.0f);
+        w.cy = (int32_t) (fy * 16.0f);
+        // The move (btSixteenths of sp, as the core's soulStep), halved by the buttons' X as the core halves it.
+        int32_t step = btSixteenths(btSlot4(&ctx->globalScopeInstance->selfVars, names->id[G_SP]));
+        if ((L->ePrev & TOUCH_KEY_X) != 0) step /= 2;
+        // Walk along the wall toward the pen, the jump key beyond the line against gravity; a button's arrow takes its
+        // axis until the lift (TouchState locked: 1 left/right, 2 up/down). Gravity up (12): walk on x, jump on y;
+        // right or left (11, 13): walk on y, jump on x, the distance from the wall's side.
+        int32_t wt = w.x * 16, wc = w.cx, jt = w.y * 16, jc = w.cy;
+        uint32_t less = TOUCH_KEY_LEFT, walk = 1u, key = TOUCH_KEY_DOWN;
+        if (code != 4u) {
+            wt = jt, jt = w.x * 16, wc = jc, jc = w.cx;
+            less = TOUCH_KEY_UP, walk = 2u;
+            key = code == 3u ? TOUCH_KEY_LEFT : TOUCH_KEY_RIGHT;
+        }
+        uint32_t unlocked = ~(uint32_t) s->locked; // the axes no button's arrow holds
+        if ((unlocked & walk) != 0) w.c = Touch_axis(wt, wc, step / 2, less, less << 1);
+        int32_t d = (unlocked & (walk ^ 3u)) == 0 ? 0 : code == 3u ? jc - jt : jt - jc;
+        if (0 >= step) w.c = 0u, d = 0; // the core holds nothing then
+        w.step = step, w.d = d;
+        w.beyond = d > TOUCH_BLUE_ABOVE;
+        // Grounded, the game's own test rotated: jumpstage 1 and no speed along gravity.
+        ptrdiff_t at = shgeti(ctx->varNameMap, (char*) btJumpVar);
+        w.js = 0 <= at ? btInt(btSlot4(&h->selfVars, ctx->varNameMap[at].value), 0, false) : -1;
+        w.hs = h->hspeed, w.vs = h->vspeed;
+        w.ground = w.js == 1 && *(code == 4u ? &h->vspeed : &h->hspeed) == 0.0f;
+        // Law v2's machine (btBlue), rotated: the chance at the pen-down, taken on the first grounded take when beyond;
+        // the jump held while beyond and airborne; a pad stroke keeps its chance while grounded.
+        bool hold = false;
+        if (down) jump = BT_JUMP_CHANCE;
+        if (jump == BT_JUMP_CHANCE && w.ground) {
+            if (w.beyond) jump = BT_JUMP_UP, hold = true;
+            else if (w.view != 3) jump = 0u;
+        } else if (jump == BT_JUMP_UP) {
+            if (w.beyond && !w.ground) hold = true;
+            else jump = 0u;
+        }
+        w.s = w.c | (hold ? key : 0u);
+    }
+    w.jump = jump;
+    // The merge, as Touch_merge would make it with the stylus holding w.s (take2's stylus side held no arrow): held,
+    // a press only for a key neither side held, no release under the stylus's hold; then the stylus's holds for the
+    // next take's merge. Nothing outside w.s changes: physical keys are never taken out.
+    if (BT_TURNED_INJECT) {
+        uint32_t fresh = w.s & ~tPrev & ~L->ePrev & ~ePrev;
+        e->held |= w.s;
+        e->pressed |= fresh;
+        e->released &= ~w.s;
+        L->tPrev |= w.s;
+    }
+    btLook.spare = (uint8_t) (code | jump << 3 | (adm ? BT_TV_LAST : 0u));
+#ifdef BT_TURNED_SEEN
+    w.held = e->held, w.pressed = e->pressed, w.released = e->released, w.tPrev = L->tPrev, w.ePrev = L->ePrev;
+    if (adm || code != was) btTurnedReport(&w);
+#endif
+}
 
 // ===[ Battle layout: Original, 3DS Mode, Top screen, with the game on either screen (battletouch18, 11-10) ]===
 //

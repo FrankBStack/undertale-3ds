@@ -1001,6 +1001,13 @@ CV_TEXT bool CtrCodeVerify_move(DataWin* dw, const char* cachePath) {
 // fixed slot), only its state and the external functions.
 #define UA_TEXT __attribute__((section(".text_utfadea")))
 #define UA_CONST __attribute__((aligned(4), section(".rodata.utfadea_in_text")))
+#ifdef ENABLE_WAD16
+#ifdef CTRPORT_N8A_RODATA
+#undef UA_CONST
+#define UA_CONST __attribute__((aligned(4), section(".aacout.rodata.n8a_utfadea")))
+#endif
+#endif
+#line 1004
 #define UA_DOORS 8u
 #define UA_FLOOR (BT_FLOOR + 364u * 1024u)
 #define UA_WAIT_MS 1000u           // the most the room load waits for the reads in flight
