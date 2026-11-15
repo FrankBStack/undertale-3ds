@@ -1819,7 +1819,7 @@ void CtrScreens_flushConsoles(void); Result CtrScreens_noteConsoles(const void* 
 // DELTARUNE keeps the menu on the unseen spare until the game moves up for it.
 #ifdef ENABLE_WAD16
 SCREENS_LATE CTR_COLD_OS void CtrScreens_moveConsoles(bool top) {
-    extern PrintConsole screensStats __asm__("statsConsole"); void* CtrLayout_restoreMenu18(void*, const void*, size_t);
+    extern PrintConsole screensStats __asm__("statsConsole"); void* CtrFpsbox_moveCopy(void*, const void*, size_t);
     extern PrintConsole screensLog __asm__("logConsole");
     extern PrintConsole screensMenu __asm__("menuConsole");
     gfxScreen_t screen = top ? GFX_TOP : GFX_BOTTOM;
@@ -1836,7 +1836,7 @@ SCREENS_LATE CTR_COLD_OS void CtrScreens_moveConsoles(bool top) {
 
     } else {
         size_t bytes = (size_t) GSP_SCREEN_WIDTH * GSP_SCREEN_HEIGHT_BOTTOM * 2u;
-        if (screensMenu.frameBuffer != shown) CtrLayout_restoreMenu18(shown, screensMenu.frameBuffer, bytes);
+        if (screensMenu.frameBuffer != shown) CtrFpsbox_moveCopy(shown, screensMenu.frameBuffer, bytes); // z_gofps.c
         screensMenu.frameBuffer = shown;
         GSPGPU_FlushDataCache(shown, (u32) bytes);
     }

@@ -28,7 +28,7 @@ DLGTOP_CODE void CtrDlgtop_display(Renderer* renderer, const CtrDisplaySettings*
 // presentation width. The recorder, popup anchors and classification are shared.
 DLGTOP_CODE static C3D_RenderTarget* dlgtopTarget(CtrRenderer* r) {
     if (!r->display.dialogueBottom || r->bottomYielded) return nullptr;
-    return dlgtopBorrowed(r);
+    return dlgtopSubmit(r);
 }
 
 DLGTOP_CODE void CtrDlgtop_begin(Renderer* renderer) {
@@ -181,9 +181,10 @@ DLGTOP_CODE static bool dlgtopReplay(CtrRenderer* r, C3D_RenderTarget* target, i
 }
 
 #include "ctr_dlgtop_birth.inc"
+#include "ctr_dlgtop_admit.inc"
 
 DLGTOP_CODE void CtrDlgtop_present(CtrRenderer* r, const CtrSurface* app, C3D_Tex* tex) {
-    C3D_RenderTarget* target = dlgtopTarget(r);
+    C3D_RenderTarget* target = dlgtopPresentTarget(r, app);
     if (target == nullptr) target = dlgtopDrawBirth(r);
     if (target == nullptr) {
         if (dlgtopWants(r)) return; // no loan: never paint over the bottom game target
@@ -220,7 +221,7 @@ DLGTOP_CODE void CtrDlgtop_end(Renderer* renderer) {
     __real_CtrRenderer_endFrame(renderer);
     // Keep the loan after the existing black submission. Blocking retirement
     // belongs to room/options/yield/destroy, outside ordinary play.
-    if (dlgtopLease.owner == r && (!r->dlg.shown || !dlgtopBoxOpen(r))) dlgtopClose();
+    if (dlgtopLease.owner == r && (!r->dlg.shown || !dlgtopBoxOpen(r))) dlgtopCloseBlack();
 }
 #undef dlgtopBorrowed
 #undef dlgtopReturn

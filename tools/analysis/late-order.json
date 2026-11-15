@@ -859,6 +859,13 @@
     "*(.text_battletouchmenu .rodata_battletouchmenu)",
     "*(.text_dlgretire_late)",
     "*(.text_fpsghost_hintpage)",
+    "*(.text_dlgcloseblack_late)",
+    "*(.text_asgsmart)",
+    "*(.text_arenaclr)",
+    "*(.text_noticegate_late)",
+    "*(.text_gofps_late)",
+    "*(.text_asgfuse)",
+    "*(.text_bschoice)",
     "*(.repack_test)",
     "*(.repack_test_ro)"
   ],
@@ -1116,6 +1123,8 @@
     "KEEP(*(.bss.bonegate_late))",
     "KEEP(*(.bss.late.paintchg))",
     "KEEP(*(.bss.late.paintchg_idle))",
+    "KEEP(*(.bss.msglock_late))",
+    "KEEP(*(.bss.soulahead_late))",
     "KEEP(*z_sdmigrate.o(.bss.sdmigrate_spare))",
     "*z_sdmigrate.o(.bss .bss.* COMMON)",
     "*(.bss.late.swkbd)",
@@ -1332,6 +1341,8 @@
     "*(.bss_gameoverscreen)",
     "*(.bss_battletouchmenu)",
     "*(.bss_fpsghost_hintpage)",
+    "*(.bss_bsflash_late)",
+    "*(.bss_bsnap_late)",
     "*(.bss.ballast_late)"
   ],
   "aac_text": [
@@ -1345,7 +1356,25 @@
     ".aacout.text.touchquiz",
     ".aacout.text.touchmenus",
     ".aacout.text.touchoverworld",
-    ".aacout.text.btgrey"
+    ".aacout.text.btgrey",
+    ".aacout.text.bsflash",
+    ".aacout.text.bsnap",
+    ".aacout.text.asgfuse",
+    ".aacout.text.btswitch",
+    ".aacout.text.latereclaim_dlg",
+    ".aacout.text.latereclaim_asg",
+    ".aacout.text.latereclaim_arena",
+    ".aacout.text.latereclaim_choice",
+    ".aacout.text.latereclaim_notice",
+    ".aacout.text.latereclaim_gofps",
+    ".aacout.text.btstory",
+    ".aacout.text.listfree",
+    ".aacout.text.soulahead",
+    ".aacout.text.msglock",
+    ".aacout.text.btomega",
+    ".aacout.text.bsexend",
+    ".aacout.text.bsgap",
+    ".aacout.text.bsg47"
   ],
   "aac_rodata": [
     ".aacout.rodata.dlgtop4",
@@ -1359,8 +1388,20 @@
     ".aacout.rodata.touchmenus",
     ".aacout.rodata.touchoverworld",
     ".aacout.rodata.btgrey",
+    ".aacout.rodata.bsflash",
+    ".aacout.rodata.bsnap",
     ".aacout.rodata.n8a_optmenu",
-    ".aacout.rodata.n8a_utfadea"
+    ".aacout.rodata.n8a_utfadea",
+    ".aacout.rodata.btswitch",
+    ".aacout.rodata.listfree",
+    ".aacout.rodata.soulahead",
+    ".aacout.rodata.msglock",
+    ".aacout.rodata.bsexend",
+    ".aacout.rodata.bsgap",
+    ".aacout.rodata.bsg47"
+  ],
+  "per_model": [
+    "asgfuse"
   ],
   "devonly": {
     "aac_text": [

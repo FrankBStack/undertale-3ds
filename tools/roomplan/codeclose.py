@@ -60,6 +60,21 @@ SCRIPT_REACH = 4096        # entries scripted_objects walks at most (a guard; UT
 WALK_VISITS = 8            # an address walked more often than this is left (loops converge well before)
 
 
+def stores_background(d, base, length, vars_):
+    """Scan store destinations, independently of the constant walk's values and reachable branches.
+    Array and stacktop stores count too: background_visible[slot] can be assigned a computed value."""
+    blob = d[base:base + length]
+    at = 0
+    while at < len(blob):
+        ins = g.Instr(blob, at)
+        if ins.op == g.OP_POP and ins.extra is not None:
+            v = ins.var_index()
+            if 0 <= v < len(vars_) and vars_[v] in ('background_visible', 'background_index'):
+                return True
+        at = ins.next
+    return False
+
+
 class CodeClosure:
     face_objects = {}      # {facechoice value: the objects the chooser creates for it}
     face_note = None       # why face_objects is empty: build_plan prints it
@@ -138,6 +153,8 @@ class CodeClosure:
         # Each entry's spawn targets and constant stores; the object that owns it.
         funcs = [f['name'] for f in dw.funcs]
         vars_ = [v['name'] for v in dw.vars]
+        self.background_store_codes = {i for i, c in enumerate(code) if c and c['length'] and
+                                       stores_background(d, c['abs'], c['length'], vars_)}
         self.spawns, self.var_spawns, self.stores, self.any_stores, self.draws = [], [], [], [], []
         self.sounds, self.var_sounds, self.cases, self.calls, self.script_ids, var_draws = [], [], [], [], [], []
         self.call_args, arg_stores, sprite_vars, self.sprite_names = [], [], set(), []
@@ -179,6 +196,20 @@ class CodeClosure:
         # variable some object's event takes its sprite from (sprite_index = global.bulletappearance).
         self.sprite_args = {(c, n) for c, kept in enumerate(arg_stores) if c not in self.owner
                             for name, n in kept if name in sprite_vars}
+
+    def writes_background(self, room):
+        """A placed object's own or inherited events can switch a room background, even to an unknown value.
+        No scripts, spawned objects, or room/instance creation code are followed by this gate."""
+        if not 0 <= room < len(self.insts_by_room):
+            return False
+        writers = getattr(self, 'background_store_codes', set())
+        return any(c in writers for obj, _ in self.insts_by_room[room] for c in self.object_codes(obj))
+
+    def stored_art_sprites(self, obj):
+        """Class-i own art only: constant *sprite* stores in this object's and its parents' events.
+        No default sprite, draw argument, script call or created object's art is followed."""
+        return {s for c in self.object_codes(obj) if c not in self.hubs and 0 <= c < len(self.any_stores)
+                for name, values in self.any_stores[c].items() if 'sprite' in name for s in values}
 
     def taken_sprites(self, obj):
         """The constants obj's events and its parents' store in a plain variable those events draw or take as the

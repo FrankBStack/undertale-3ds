@@ -59,6 +59,12 @@ LF_CODE int CtrLogfix_vsnprintf(char* buffer, size_t size, const char* format, v
 void CtrLogfix_postMessage(void* ca, const char* format, ...);
 // And its queue's way in for a record of several lines, appended there too: all of them or none, in one hold of its lock.
 bool CtrLogfix_postLines(void* ca, uint32_t count, void (*fill)(void* ctx, uint32_t i, char* slot, uint32_t size), void* ctx);
+#ifdef ENABLE_WAD16 // msglock (ctr_audio_system.c's end): the same posts, but the game thread never waits for the lock
+void CtrMsglock_post(void* ca, const char* format, ...);
+bool CtrMsglock_postLines(void* ca, uint32_t count, void (*fill)(void* ctx, uint32_t i, char* slot, uint32_t size), void* ctx);
+#define CtrLogfix_postMessage CtrMsglock_post
+#define CtrLogfix_postLines CtrMsglock_postLines
+#endif
 
 // A slot holds 191 characters and the NUL (ctr_audio_system.c's MESSAGE_LENGTH).
 #define LF_SLOT_TEXT 191u

@@ -1147,6 +1147,19 @@ void C3D_FrameEndHook(void (*hook)(void*), void* param) {
     frameEndCbData = param;
 }
 
+#if defined(ENABLE_WAD16)
+// battletouch's tap hold (change battletouch, 11-15, GO #51; ctr_renderer.c's CtrRenderer_tapHold): the same two
+// stores as C3D_FrameEndHook, in the AAC slot (aacout.cmake's btswitch). C3D_FrameEndHook stays unreferenced, so
+// gc-sections still drops it and nothing before the late reserve moves (calling it added 24 B there and overfilled
+// UNDERTALE Old's release H1 holes).
+void CtrGpu_frameEndHookBts(void (*hook)(void*), void* param);
+__attribute__((noinline, noipa, used, section(".aacout.text.btswitch"))) void CtrGpu_frameEndHookBts(void (*hook)(void*),
+                                                                                                    void* param) {
+    frameEndCb = hook;
+    frameEndCbData = param;
+}
+#endif
+
 // The GPU's time on the last frame it finished, without the time its
 // transfers waited for a flip.
 float C3D_GetDrawingTime(void) {

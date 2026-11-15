@@ -227,6 +227,7 @@ platform/3ds/source/ctr_aot_module.h
 platform/3ds/source/ctr_apt_trace.c
 platform/3ds/source/ctr_apt_trace.h
 platform/3ds/source/z_keeplit.c
+platform/3ds/source/z_listfree.c
 platform/3ds/source/z_dimlight.c
 platform/3ds/source/ctr_dimlight_logic.h
 platform/3ds/source/ctr_dimlight_diag.inc
@@ -300,6 +301,7 @@ platform/3ds/source/ctr_audio_selftest.c
 platform/3ds/source/ctr_audio_system.c
 platform/3ds/source/ctr_audio_system.h
 platform/3ds/source/ctr_bootahead.inc
+platform/3ds/source/ctr_soulahead.inc
 platform/3ds/source/ctr_loadaudio.inc
 platform/3ds/source/ctr_loadaudio_trace.inc
 platform/3ds/source/ctr_loadaudio_observer.inc
@@ -683,6 +685,7 @@ tools/release/test_builder_platforms.py
 tools/release/test_texcache.py
 tools/release/test_builder_texture_delivery.py
 tools/roomplan/build_plan.py
+tools/roomplan/observed_art.py
 tools/roomplan/closure.py
 tools/roomplan/codeclose.py
 tools/roomplan/build_sfxplan.py
@@ -1016,6 +1019,7 @@ tools/release/test_dlgtop_player.py
 tools/analysis/run_dlgtop_player_gates.py
 tools/analysis/check_dlgtop_ut_layout.py
 tools/analysis/check_layout.py
+tools/analysis/aac_capacity.py
 tools/analysis/arm_got_permutation.py
 
 # Public UT ignores leftover lab file triggers (empty in DR).
@@ -1191,6 +1195,9 @@ tools/analysis/check_dlgtop_layout.py
 platform/3ds/source/ctr_dlgtop.h
 platform/3ds/source/ctr_dlgtop_lease.inc
 platform/3ds/source/ctr_dlgtop_retire.inc
+platform/3ds/source/ctr_dlgtop_closeblack.inc
+platform/3ds/source/ctr_dlgtop_admit.inc
+platform/3ds/source/ctr_dlgtop_wake.inc
 platform/3ds/source/ctr_dlgtop_buffers.inc
 platform/3ds/source/ctr_dlgtop_birth.inc
 tools/analysis/capture_png.py
@@ -1252,3 +1259,9 @@ tools/analysis/fixtures/gameover_ecbcd6e1a/main.c.excerpt
 tools/analysis/test_gameoverscreen_lifecycle.py
 tools/analysis/test_gameoverscreen_entry_sequence.py
 tools/analysis/test_gameoverscreen_input.py
+platform/3ds/source/ctr_place.h
+tools/analysis/test_ctr_place.py
+
+# gofps: the move up's page copy without the FPS counter and its CMake include.
+platform/3ds/gofps.cmake
+platform/3ds/source/z_gofps.c

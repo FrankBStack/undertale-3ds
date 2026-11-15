@@ -58,3 +58,21 @@ int32_t CtrBattlesplit_seam(void);
 bool CtrRenderer_bsStripClear14(struct Renderer* renderer, float x0, float y0, float x1, float y1);
 void CtrRenderer_bsStripCopy14(struct Renderer* renderer, int32_t rows, int32_t topDy);
 bool CtrLayout_bottomSeam(int32_t* seamY, int32_t* lift);
+// The Split's flash (change battlesplit2, 11-14; z_battlesplit.c's and ctr_renderer.c's ends): a split frame's cover draws
+// that went on both layers, their colour (0xBBGGRR) and alpha as the game drew them, in draw order. Present
+// (CtrRenderer_bsPresentFlash) puts them, in that order, on the top screen's rows and columns outside the band.
+#define CTR_BS_FLASH_MAX 4
+typedef struct {
+    uint32_t color[CTR_BS_FLASH_MAX];
+    float alpha[CTR_BS_FLASH_MAX];
+    // Each draw's place in the renderer's ring (CtrRenderer_bsFlashMark before and after it): from and gen[0] before, to
+    // and gen[1] after (gen: vertexCount - vertexUsed, which changes only when the ring starts over). gen[0] != gen[1]:
+    // the ring started over during the draw, its vertices from from to the old part's end and from 0 to to.
+    uint32_t from[CTR_BS_FLASH_MAX], to[CTR_BS_FLASH_MAX], gen[CTR_BS_FLASH_MAX][2];
+    uint32_t n;
+} CtrBsFlash;
+void CtrRenderer_bsFlashMark(struct Renderer* renderer, uint32_t mark[2]);
+void CtrRenderer_bsPresentFlash(struct Renderer* renderer, int32_t band, int32_t topDy, int32_t bottomDy, CtrBsFlash* flash);
+// After it, the same notes on the bottom screen's rows that present drew nothing on (the lift's empty rows: change
+// battlesplit2, 11-15). z_battlesplit.c presents through this one.
+void CtrRenderer_bsPresentGap(struct Renderer* renderer, int32_t band, int32_t topDy, int32_t bottomDy, CtrBsFlash* flash);

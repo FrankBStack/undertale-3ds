@@ -16,7 +16,7 @@ import unittest
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from gameoverscreen_host_fixture import ROOT, SOURCE, body
 
-PIN = 'a0bb7c0111c4254f0eba541240dc671061091a5629e2820453d2132ba622d980'
+PIN = '62448c29dd2ad1b56d7b875b81dfb6e3ad8f7d480c0b95f40c731cd4caf59f3b'
 OUT = ROOT/'scratch/gameoverscreen-entry-sequence-r114'
 MUTANTS = {
     'shift': ('                x += go.dx;\n                y += go.dy;', '                /* shift omitted */'),

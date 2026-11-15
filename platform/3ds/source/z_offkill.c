@@ -97,9 +97,10 @@ void OffKill_doomed(Runner* runner) {
     for (int32_t k = 0; odCount > k; k++) {
         const OffDoomRule* rule = &odRules[k];
         // rule->object indexes this data.win's objects, the variables its VARI ids: the builder wrote only what it
-        // resolved there. A destroy changes no list (see OffKill_roomChange).
-        Instance** list = runner->instancesByExactObject[rule->object];
-        for (int32_t i = 0, n = (int32_t) arrlen(list); n > i; i++) {
+        // resolved there. The list is read again for each instance (see OffKill_roomChange).
+        for (int32_t i = 0, n = (int32_t) arrlen(runner->instancesByExactObject[rule->object]); n > i; i++) {
+            Instance** list = runner->instancesByExactObject[rule->object];
+            if ((int32_t) stbds_header(list)->length <= i) break;
             Instance* inst = list[i];
             if (inst->destroyed || !inst->active || inst->visible || !odZero(inst, rule->active)) continue;
             if (!odZero(inst, rule->saved) && !odZero(inst, rule->savedActive)) continue;
@@ -138,16 +139,20 @@ void OffKill_roomChange(Runner* runner) {
     }
     // Each rule walks only its object's instances (change pacer 10-31): every instance of runner->instances is in
     // instancesByExactObject under its current object until the cleanup after its destroy (runner.c, "Draw passes
-    // with no instance"), and a destroy changes no list. Position before speed: an instance in view reads no more.
-    // (the lists are read per rule: hoisted, the pointer is kept across Runner_destroyInstance on the stack)
+    // with no instance"). Position before speed: an instance in view reads no more.
+    // Runner_destroyInstance runs the instance's Cleanup event (runner.c), and that GML can create an instance of
+    // this object (arrput may move the list) or change one's object (the list shrinks). So the list is read again
+    // for each instance, never past its current length, and never into instances added after the walk began (n).
+    // Once n > 0 the list is never NULL in the walk (only a room change or Runner_free frees one): no NULL check.
     for (int32_t k = 0; okCount > k; k++) {
         const OffKillRule* rule = &okRules[k];
         // rule->object indexes this data.win's objects: tools/aot/offkill.py writes only those it resolved in its OBJT.
-        Instance** list = runner->instancesByExactObject[rule->object];
         int a = rule->axis != 0;
         float s = (float) rule->sign;
         float edge = rule->sign > 0 ? hi[a] : lo[a];
-        for (int32_t i = 0, n = (int32_t) arrlen(list); n > i; i++) {
+        for (int32_t i = 0, n = (int32_t) arrlen(runner->instancesByExactObject[rule->object]); n > i; i++) {
+            Instance** list = runner->instancesByExactObject[rule->object];
+            if ((int32_t) stbds_header(list)->length <= i) break;
             Instance* inst = list[i];
             if (inst->destroyed || !inst->active) continue;
             if (s * ((float) (a ? inst->y : inst->x) - edge) > (float) rule->reach &&

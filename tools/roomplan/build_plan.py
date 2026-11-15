@@ -46,6 +46,7 @@ sys.path.insert(0, os.path.join(HERE, '..', 'aot'))
 import closure as closure_mod  # noqa: E402
 import codeclose  # noqa: E402
 import dwinfo  # noqa: E402
+from observed_art import DATA_SHA256, OBSERVED_OWN_ART  # noqa: E402
 
 MAGIC = 0x50525444
 VERSION = 1
@@ -222,6 +223,40 @@ def whole_set(info, closure, room, scene, tiles):
     if hasattr(closure, 'walk_tiles'):
         extra.update(closure.walk_tiles(info, have | extra))
     return [(LATER, p, t) for p, t in sorted(extra - have)]
+
+
+def hidden_backgrounds(info, closure, code_closure, room, tiles):
+    """Disabled room slots a placed object's events can enable. Ordinary room scenes only; no new indices guessed.
+    Keep this separate from plan_items so battle groups and boot-ahead sets retain their existing content."""
+    hidden = getattr(closure, 'hidden_background_items', ())
+    if (not 0 <= room < len(hidden) or code_closure is None or
+            not hasattr(code_closure, 'writes_background') or not code_closure.writes_background(room)):
+        return []
+    have = {(p, t) for _, p, t in tiles}
+    extra = {(p, t) for item in hidden[room] for p, ts in [info.item_tiles(item)] if p is not None for t in ts}
+    return [(LATER, p, t) for p, t in sorted(extra - have)]
+
+
+def observed_own_art(info, closure, code_closure, room, tiles):
+    """Reviewed (room, placed object) evidence only; add its full own store art and walk closure atomically.
+    Applied after existing art so no cap decision or portrait entry can be displaced. New rows require prices;
+    this does not apply a blanket source rule or a new tile cap. Never called for battle-group scenes."""
+    if (closure is None or code_closure is None or room in PLACED_ART_SKIP_ROOMS or
+            getattr(info, 'sha256', None) not in DATA_SHA256 or not hasattr(code_closure, 'stored_art_sprites') or
+            not 0 <= room < len(code_closure.insts_by_room)):
+        return []
+    placed = {o for o, _ in code_closure.insts_by_room[room]}
+    have = {(p, t) for _, p, t in tiles}
+    extra = set()
+    for r, obj in sorted(OBSERVED_OWN_ART):
+        if r != room or obj not in placed:
+            continue
+        own = {(p, t) for s in code_closure.stored_art_sprites(obj) if 0 <= s < len(closure.sprite_items)
+               for item in closure.sprite_items[s] for p, ts in [info.item_tiles(item)] if p is not None for t in ts}
+        if own and hasattr(closure, 'walk_tiles'):
+            own.update(closure.walk_tiles(info, have | extra | own))
+        extra.update(own - have)
+    return [(LATER, p, t) for p, t in sorted(extra)]
 
 
 def placed_art(info, closure, code_closure, room, have):
@@ -529,7 +564,9 @@ def build(info, record, closure=None, code_closure=None, model=None):
             # A room with no recorder visit still needs its placed player's walk closure.
             tiles = sorted({(LATER, p, t) for item in walks.get(room, ())
                             for p, ts in [info.item_tiles(item)] if p is not None for t in ts})
+            tiles += hidden_backgrounds(info, closure, code_closure, room, tiles)
             tiles += placed_art(info, closure, code_closure, room, {(p, t) for _df, p, t in tiles})
+            tiles += observed_own_art(info, closure, code_closure, room, tiles)
             if extra or tiles:
                 scenes.append(encode_scene(info, room, NO_SUB, tiles, extra, cap))
             continue
@@ -542,7 +579,9 @@ def build(info, record, closure=None, code_closure=None, model=None):
             # The whole set reads the record's code (code_create_sprite): the in-play extras go to the code list only.
             code = s['code'] + ([] if subs else in_play(code_closure, room, s['code'], s['code']))
             tiles = tiles + whole_set(info, closure, room, s, tiles)
+            tiles += hidden_backgrounds(info, closure, code_closure, room, tiles)
             tiles += placed_art(info, closure, code_closure, room, {(p, t) for _df, p, t in tiles})
+            tiles += observed_own_art(info, closure, code_closure, room, tiles)
             scenes.append(encode_scene(info, room, NO_SUB,
                 tiles + boot_ahead(info, closure, by_room, room, tiles, model, code_closure), code, cap))
             keep = keep_tiles(info, s)

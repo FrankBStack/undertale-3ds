@@ -2199,6 +2199,11 @@ def witness_rules_tree(tmp_path, monkeypatch, check, mode):
     monkeypatch.setattr(check, 'launcher_marker', lambda s: '--witness')
     monkeypatch.setattr(check, 'rule_sources', lambda s: {'shared.c'})
     monkeypatch.setattr(check, 'without', lambda tokens, name, marker: [py, '-I', '../witness.py', mode, started])
+    # As in fake_rules_tree: the worktree outside build/ and scratch/ is not this test's business, and other test
+    # processes in the same tree (the sharded host suite) may write __pycache__ there while the probe runs.
+    sources = dict(tracked={}, others={}, identity=('HEAD', 'index', 'pointer'))
+    monkeypatch.setattr(check, 'freeze_sources', lambda root: ([], sources), raising=False)
+    monkeypatch.setattr(check, 'source_state', lambda root, tracked=None: sources)
     return build
 
 

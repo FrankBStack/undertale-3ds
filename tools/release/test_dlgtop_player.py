@@ -15,7 +15,10 @@ class DlgtopPlayerTests(unittest.TestCase):
         loader=(ROOT/'platform/3ds/source/z_loadscreen.c').read_text()
         # layout D: UNDERTALE's moveConsoles reaches the guarded restore through z_layout.c's CtrLayout_restoreMenu18,
         # which makes the same call unless the move up took a flight lend over (then the page is cleared).
-        self.assertIn('if (screensMenu.frameBuffer != shown) CtrLayout_restoreMenu18(shown, screensMenu.frameBuffer, bytes);',main)
+        # gofps (11-15): through z_gofps.c's CtrFpsbox_moveCopy, whose first call is CtrLayout_restoreMenu18.
+        self.assertIn('if (screensMenu.frameBuffer != shown) CtrFpsbox_moveCopy(shown, screensMenu.frameBuffer, bytes);',main)
+        gofps=(ROOT/'platform/3ds/source/z_gofps.c').read_text()
+        self.assertIn('    void* out = CtrLayout_restoreMenu18(dst, src, n);\n',gofps.split('void* CtrFpsbox_moveCopy(void* dst',2)[2])
         layout=(ROOT/'platform/3ds/source/z_layout.c').read_text()
         self.assertIn('    return Loadgame_restoreMenu(dst, src, n);\n}',layout.split('void* CtrLayout_restoreMenu18(',1)[1])
         self.assertIn('#define SCREENS_CARRY_COPY Loadgame_carryCopy',renderer)

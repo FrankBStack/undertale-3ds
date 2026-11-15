@@ -2385,6 +2385,25 @@ SECTIONS
     /* Dialogue return: append after every existing production tenant. */
     *(.text_dlgretire_late)
     *(.text_fpsghost_hintpage)
+    /* Adopt the ordinary close's black transfer before returning to play. */
+    *(.text_dlgcloseblack_late)
+    /* asgsmart S1 (11-14): Split's sprite draw fast path (z_battlesplit.c's CtrBattlesplit_drawSpriteQ); append only. */
+    *(.text_asgsmart)
+    /* arenaclr (asgsmart, 11-14): the arena layer's second clear skipped when it writes no new byte
+       (z_battlesplit.c's CtrBattlesplit_clearScreenL3 and __wrap_CtrRenderer_bsClearLayer); append only. */
+    *(.text_arenaclr)
+    /* Screenshot notice under the options menu (hiscase, bug-notice-stale-optrow): append only. */
+    *(.text_noticegate_late)
+    /* gofps (11-15): the move up's page copy without the counter (z_gofps.c); appended. */
+    *(.text_gofps_late)
+    /* asgsmart F1u (11-14): utkDrawSprite and game over's sprite entries as one call (ctr_gameoverscreen.inc's
+       CtrGameover_fuseSprite, installed in abqTargets slot 25 by utwindow_compile.py); append only. UNDERTALE New
+       only: on Old, UT_COLD_TEXT puts it in the AAC text slot (.aacout.text.asgfuse, aacout.cmake). */
+    *(.text_asgfuse)
+    /* bschoice (asgsmart, 11-15, chg-split-choice-screens-1115): a room with its own split scene that bsTouchRooms
+       doesn't name (Flowey's ending) is a battle's first room for the move up (z_battlesplit.c's bsTouchRoomCh;
+       UNDERTALE only); append only. */
+    *(.text_bschoice)
     *(.repack_test)
     *(.repack_test_ro)
   }
@@ -2410,6 +2429,10 @@ SECTIONS
     BYTE(0);
     . += __late_text_end < __late_text_limit ? __late_text_limit - __late_text_end - 1 : 0;
   }
+  /* sdmigrate's block keeps its bytes whatever is carved from it (z_sdmigrate.c SM_BSS_BYTES): a carve or pad
+     that is wrong moves every later late static. */
+  ASSERT(__sdmigrate_block_end - __sdmigrate_block_start == 0x110d,
+         "sdmigrate block is not 0x110d B: a carve (z_sdmigrate.c SM_CARVE_*) or its pad is wrong")
   ASSERT(__late_text_end < __late_text_limit,
          "late code (.text.late.*) outgrew its reserve: see platform/3ds/late_reserve.ld")
   /* freebytes H1 hole limits (flushrev R4-F2). On UNDERTALE Old CMake substitutes each hole's fixed end in the
@@ -2995,7 +3018,9 @@ SECTIONS
     *(.bss.late.utstall7)
     /* sdmigrate (after utstall item 7; both games): the chapter check's state, then the placeholder that keeps the
        retired folder move's buffers' bytes (z_sdmigrate.c), so nothing after it moves. Both KEEP'd: UNDERTALE never
-       reads the state and nothing reads the placeholder, and --gc-sections would drop them. */
+       reads the state and nothing reads the placeholder, and --gc-sections would drop them. The block's two ends
+       are marked for the size assert beside the late code one (above). */
+    __sdmigrate_block_start = ALIGN(4);
     KEEP(*(.bss.late.sdmigrate))
     /* bonegate (dv8; UT release, diagnostics excluded): its 8 B state, carved from the placeholder below (smSpare is
        8 B shorter under the same condition, z_sdmigrate.c SM_CARVE_BONEGATE), so the block and every later address stay.
@@ -3006,7 +3031,14 @@ SECTIONS
        objects are out of the catch-all above. 4-aligned and before smSpare, so no padding is added. */
     KEEP(*(.bss.late.paintchg))
     KEEP(*(.bss.late.paintchg_idle))
+    /* msglock (audiomain, 11-14 21:4x, UT): the drain's thread, its lost count and its overflow, 16 B, carved the same way
+       (z_sdmigrate.c SM_CARVE_MSGLOCK). 4-aligned and before smSpare, so no padding is added. */
+    KEEP(*(.bss.msglock_late))
+    /* soulahead (audiomain 11-15, UT with Tremor): ctr_soulahead.inc's 48 B, carved the same way, last (z_sdmigrate.c
+       SM_CARVE_SOULAHEAD also holds the 8-alignment pad before it), so no tenant above moves. */
+    KEEP(*(.bss.soulahead_late))
     KEEP(*z_sdmigrate.o(.bss.sdmigrate_spare))
+    __sdmigrate_block_end = .;
     *z_sdmigrate.o(.bss .bss.* COMMON)
     /* swkbd (last, after sdmigrate, merge order; UNDERTALE only): the essay keyboard's state, then libctru's
        keyboard applet's. */
@@ -3508,6 +3540,10 @@ SECTIONS
     /* battletouch r2 (11-13): the menus' look and the draw hook's byte (CtrBattletouch_menuHide). */
     *(.bss_battletouchmenu)
     *(.bss_fpsghost_hintpage)
+    /* battlesplit2 flash: the frame's cover notes and the two draws they pass on to (UNDERTALE only). */
+    *(.bss_bsflash_late)
+    /* battlesplit2 nap: Napstablook's way down in Mad Dummy's Split (UNDERTALE only). */
+    *(.bss_bsnap_late)
     /* ballast (build.sh ballast test builds only, empty in every release build): z_ballast.c's state, last, so a
        ballast build keeps every late static's address of the release build. Keep this line last in late .bss; new
        appends go above this comment. Its code and constants are in the AAC slots (aacout.cmake). */

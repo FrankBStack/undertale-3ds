@@ -1,4 +1,6 @@
 # UT lab qualification roster v2; no linker placement changes.
+# STALE since N10 rider R9 (lead ruling 11-15): New AAC text +16 KiB moved every address after the slot by +0x4000.
+# Regenerate and re-audit against the first frozen release New after R9 before opting in (work chg-n3ds-hotroster-stale-r9-1115).
 # Version: 1.0.0-beta.1
 # Release-URL: https://github.com/ethancawse/undertale-3ds/tree/v1.0.0-beta.1
 # Data-size: 62921978

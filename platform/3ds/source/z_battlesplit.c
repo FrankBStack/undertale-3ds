@@ -33,12 +33,12 @@
 #define BS_CODE __attribute__((noinline, section(".text_battlesplit")))
 #define BS_STATE __attribute__((section(".data_battlesplit")))
 
-// Test builds that wrap Runner_drawViews themselves never split.
-#if defined(CTRPORT_ASG_PROBE) || defined(CTRPORT_HALF_CENSUS)
+// Test builds that wrap Runner_drawViews themselves: the half census never splits; the counter probe does (below).
+#ifdef CTRPORT_HALF_CENSUS
 #define BS_DRAWVIEWS_WRAPPED 0
 #define __wrap_Runner_drawViews Battlesplit_drawViewsUnlinked // their wrapper has the name
 #else
-#define BS_DRAWVIEWS_WRAPPED 1
+#define BS_DRAWVIEWS_WRAPPED 1 // the counter probe's wrapper calls this one by that name (CMakeLists.txt, asgsmart)
 #endif
 
 #ifdef CTRPORT_BS_PLACESWITCH
@@ -265,17 +265,38 @@ static int32_t bsGroup10(Runner* runner);
 static bool bsGroupSplits10(int32_t group);
 static bool bsBuildClasses10(Bs* bs, DataWin* dw, int32_t group);
 static bool bsPlace10(int32_t layout, int32_t group, CtrLayoutPlace* out);
+// The flash (at the end of this file, the AAC slot's .aacout.text.bsflash): the layer clear and the present with the
+// frame's cover draws.
+static void bsClearLayerFl(Renderer* renderer);
+static void bsPresentFl(Renderer* renderer, int32_t band, int32_t topDy, int32_t bottomDy);
 // battlesplit11 (at the end of this file): the lift's guard without a move.
 static void bsGuard11(Bs* bs, const float* r);
 // battlesplit11f (at the end of this file): the router in place of bsRouteAt (same calls).
 static bool bsRouteAt11f(Renderer* renderer, int32_t want, const float* r);
 // group 56 (at the end of this file, .text_bsfollow): bsRouteAt for 11f's plain route, a BS_BOTH copy cut in mode 5.
 static bool bsRouteAt56(Renderer* renderer, int32_t want, const float* r);
+// exend (this file's end, AAC): bsRouteAt56 with Mettaton EX's by_row draws on the band's line (the same calls).
+static bool bsRouteAtEx(Renderer* renderer, int32_t want, const float* r);
+// G47 (this file's end, AAC): Undyne's arena drawn higher, the HUD in place. The layer clear, the present, the route
+// and the layer switch, each called in place of the one it calls (the same calls).
+static void bs47Clear(Renderer* renderer);
+static void bs47Present(Renderer* renderer, int32_t band, int32_t topDy, int32_t bottomDy, CtrBsFlash* flash);
+static bool bs47Route(Renderer* renderer, int32_t want, const float* r);
+static void bs47Layer(Renderer* renderer, int32_t layer);
 // battlesplit17 (at the end of this file, AAC): bsRouteAt for an automatic straddle, its arena copy cut at the band.
 static bool bsBoth17(Renderer* renderer, int32_t want, const float* r);
 // battlesplit18 (at the end of this file, AAC): bsTouchRoom10 and the frame's CtrBattlesplit_setting with the move up
 // (the same calls, other targets).
 static int32_t bsTouchRoom18(Runner* runner, int32_t room);
+// The Omega unit (change battletouch, at the end of this file, AAC): bsTouchRoom18 with Omega Flowey's room (same call).
+static int32_t bsTouchRoomOm(Runner* runner, int32_t room);
+// OM-1 (the Omega unit): on the console CtrBattlesplit_repick18 is the unit's bsRepickOm, which calls bsRepick18.
+#if defined(ENABLE_WAD16) && defined(__3DS__)
+#define BS_REPICK "bsRepickOm"
+#else
+#define BS_REPICK "bsRepick18"
+#endif
+#line 283
 int32_t CtrBattlesplit_layout18(void);
 // battlesplit13 (ctr_renderer.c, appended): CtrRenderer_bsBegun with the split's bottom target made again when the
 // screen set-up inside beginFrame dropped it. Called in place of CtrRenderer_bsBegun (same call).
@@ -869,12 +890,16 @@ static BS_CODE void bsDrawTiledPart(Renderer* renderer, int32_t tpagIndex, int32
               BS_IN->drawTiledPart(renderer, tpagIndex, srcX, srcY, srcW, srcH, dstX, dstY, dstW, dstH, color, alpha));
 }
 
+// asgsmart S1 (this file's end, .text_asgsmart): bsDrawSprite's fast change for a draw that stays on the layer.
+void CtrBattlesplit_drawSpriteQ(Renderer* renderer, int32_t tpagIndex, float x, float y, float originX, float originY, float xscale,
+                                float yscale, float angleDeg, uint32_t color, float alpha);
+
 // This frame's outer table: the renderer's as it is now, with the draws routed (an optional entry stays empty).
 static BS_CODE void bsInstall(Bs* bs, RendererVtable* inner) {
     RendererVtable* o = &bs->outer;
     *o = *inner;
     bs->inner = inner;
-    o->drawSprite = bsDrawSprite;
+    o->drawSprite = bsDrawSprite; o->drawSprite = CtrBattlesplit_drawSpriteQ; // asgsmart S1 (this file's end); the first store is order-only, keep it (see there)
     o->drawSpritePart = bsDrawSpritePart;
     o->drawSpritePartColor = bsDrawSpritePartColor;
     o->drawSpritePos = bsDrawSpritePos;
@@ -951,7 +976,7 @@ BS_CODE void __wrap_Runner_drawViews(Runner* runner, int32_t gameW, int32_t game
     bs->bandY = bs->viewTop + perPx * (float) bs->place.bandRows;
     bs->hideY = bs->viewTop + (bs->layout == CTR_BATTLE_LAYOUT_A && 0 > bs->place.bottomDy ? perPx * (float) -bs->place.bottomDy : 0.0f);
     if (bs->probe) bsProbeFrame(bs, runner);
-    bsClearLayer6(renderer);
+    bsClearLayerFl(renderer); // the flash (this file's end): bsClearLayer6, then the frame's cover notes
     renderer->vtable = &bs->outer;
     __real_Runner_drawViews(runner, gameW, gameH, debugShowCollisionMasks);
     if (renderer->vtable == &bs->outer) renderer->vtable = inner;
@@ -1083,7 +1108,7 @@ BS_CODE void CtrRenderer_chainBeginFrameBattlesplit(Renderer* renderer) {
             st->lastRoom = room;
             st->roomBattle = room == st->battleRoom && room >= 0;
             st->failed = false;
-            int32_t where = bsTouchRoom18(runner, room);
+            int32_t where = bsTouchRoomOm(runner, room);
             if (st->touch != 0 && where == 0) bsTouchMove(renderer, room, -1, false);
             if (st->touch == 0 && where == 2 && CtrScreens_game == 0 && bsTouchOn()) touchRoom = room;
         }
@@ -1248,8 +1273,9 @@ static BS_CODE6 void bsDrawTextUI6(Renderer* renderer, const char* text, float x
 // In drawViews, in place of CtrRenderer_bsClearLayer (bsInstall has just filled the outer table): the frame's count
 // starts, and the text draws count on their way through. (battlesplit14: bsClearLayer14 first, in place of bsClearLayer9.)
 static void bsClearLayerE(Renderer* renderer); // the SOUL's entry (W1, this file's end): bsClearLayer14 outside it
+static void bsClearLayerNap(Renderer* renderer); // it, then Napstablook's draw entry (this file's end)
 static BS_CODE6 void bsClearLayer6(Renderer* renderer) {
-    bsClearLayerE(renderer);
+    bsClearLayerNap(renderer);
     Bs* bs = bsState.bs;
     if (bs == nullptr) return;
     bs->boxText = 0;
@@ -1415,10 +1441,21 @@ static BS_CODE8 void bsPickEnd8(Bs* bs, int32_t why) {
     bs->pickAt = 0;
 }
 
+// The keys the pick's line names (A, the pen) are read past the release wraps, which return the same keys but act:
+// - hidKeysHeld (z_inputlate.c, UNDERTALE only, as this file): here, in endFrame, the frame's bracket is closed, and
+//   __wrap_hidKeysHeld takes a read outside it for main's read after a notice (suppressHeld): the next take rebased its
+//   latch and dropped held keys and the pen after every Split menu pick (battletouch #73, 11-15).
+// - hidKeysUp (ctr_optmenu.c, every build: only main's combo may call it): its wrap redoes the SELECT rule and reads
+//   hidKeysHeld through the wrap above, so it set suppressHeld too.
+// hidKeysDown is wrapped in test builds only (shots, datawarn test, audio capture), where no __real_ name is defined
+// otherwise; its wraps set no input state the game's take reads.
+u32 __real_hidKeysHeld(void);
+u32 __real_hidKeysUp(void);
+
 // In endFrame: the frame presented, then the pick looked for, (test builds) the screen looked
 // at, the line.
 static BS_CODE8 void bsPresent8(Renderer* renderer, int32_t band, int32_t topDy, int32_t bottomDy) {
-    CtrRenderer_bsPresent5(renderer, band, topDy, bottomDy);
+    bsPresentFl(renderer, band, topDy, bottomDy); // the flash (this file's end): CtrRenderer_bsPresent5, then the margins
     Bs* bs = bsState.bs;
     Runner* runner = renderer->runner;
     if (bs == nullptr || runner == nullptr) return;
@@ -1429,7 +1466,7 @@ static BS_CODE8 void bsPresent8(Renderer* renderer, int32_t band, int32_t topDy,
     }
     int32_t fight = bsPickGlobal(bs, runner, 0), mn = bsPickGlobal(bs, runner, 1), menu = bsPickGlobal(bs, runner, 2);
     if (bs->pickRow && fight == 0 && mn == 0 && 1 <= menu && menu <= 4) {
-        uint32_t down = hidKeysDown(), touch = down | hidKeysHeld() | hidKeysUp();
+        uint32_t down = hidKeysDown(), touch = down | __real_hidKeysHeld() | __real_hidKeysUp();
         if (bs->pickAt != 0) bsPickEnd8(bs, 3);
         bs->pickAt = bs->frames;
         bs->pickFrame = runner->frameCount;
@@ -1783,7 +1820,7 @@ static BS_CODE11F int32_t bsByCall11f(const Bs* bs, const float* r) {
 static BS_CODE11F bool bsRouteAt11f(Renderer* renderer, int32_t want, const float* r) {
     Bs* bs = bsState.bs;
     if (want >= BS_BY_CALL && (want & BS_CLASS) == BS_BY_CALL && bsByCall11f(bs, r) == BS_BOTH) return bsBoth17(renderer, BS_BOTH, r);
-    bool both = bsRouteAt56(renderer, want, r); // group 56: bsRouteAt, and in mode 5 a BS_BOTH copy cut
+    bool both = bsRouteAtEx(renderer, want, r); // group 56: bsRouteAt, and in mode 5 a BS_BOTH copy cut
     // bsRouteAt's guard (bsGuard11) made the object BS_BOTH on this draw: it goes on both too, the top first.
     if ((want & BS_GUARD) != 0 && (want & BS_CLASS) == BS_BOTTOM && bs->lastWant == BS_BOTH) return bsBoth17(renderer, BS_BOTH, r);
     return both;
@@ -2340,7 +2377,7 @@ static BS_CODE17 int32_t bsCut17(Bs* bs) {
 
 // Every layer switch (bsplitSwitch's, and the frame's first in bsClearLayer6) comes here first (-Wl,--wrap).
 BS_CODE17 void __wrap_CtrRenderer_bsLayer(Renderer* renderer, int32_t layer) {
-    __real_CtrRenderer_bsLayer(renderer, layer);
+    bs47Layer(renderer, layer); // G47 (this file's end): __real_CtrRenderer_bsLayer, then the arena's move
     Bs* bs = bsState.bs;
     if (bs == nullptr) return;
     uint8_t state = bs->spare14[0];
@@ -2380,6 +2417,9 @@ bool CtrLayout_autoUp(void);
 void CtrRenderer_bsSetUp18(Renderer* renderer);
 static const char bsLogUp18[] BS_RO18 = "battlesplit: room %d group %d: the game goes to the top screen for the battle\n";
 static const char bsLogDown18[] BS_RO18 = "battlesplit: room %d: the game goes back to the bottom screen\n";
+// chg-split-choice-screens-1115 (at the end of this file): bsTouchRoom10, with a room that has its own split scene
+// counted as a battle's first room outside Original.
+static int32_t bsTouchRoomCh(Runner* runner, int32_t room);
 
 // bsTouchRoom10's answer (0 a room that ends a move, 1 one that keeps it, 2 a battle's first room) for the code after it,
 // with the move up made or ended here. While the move up lasts every battle room and the game-over room keep it (1) and
@@ -2389,7 +2429,7 @@ static const char bsLogDown18[] BS_RO18 = "battlesplit: room %d: the game goes b
 // The same answer for a Battle layout pick in the room (bsRepick18, LAY-1): Original during the move up ends it here (0,
 // the game back below), and Top screen during step 3b ends 3b (0: the caller's bsTouchMove takes the game back up).
 static BS_HOOK18 int32_t bsTouchRoom18(Runner* runner, int32_t room) {
-    int32_t where = bsTouchRoom10(runner, room);
+    int32_t where = bsTouchRoomCh(runner, room);
     Renderer* renderer = runner->renderer;
     if (CtrLayout_autoUp()) {
         if (where != 0 && CtrBattlesplit_setting() != CTR_BATTLE_LAYOUT_ORIGINAL) return 1;
@@ -2425,13 +2465,13 @@ static BS_CODE18 void bsRepick18(Renderer* renderer) {
     Runner* runner = renderer != nullptr ? renderer->runner : nullptr;
     if (!BS_DRAWVIEWS_WRAPPED || runner == nullptr || runner->renderer != renderer || runner->dataWin == nullptr) return;
     int32_t room = runner->currentRoomIndex;
-    if (room != st->lastRoom || bsTouchRoom10(runner, room) == 0) return;
+    if (room != st->lastRoom || bsTouchRoomCh(runner, room) == 0) return;
     CtrRenderer_bsSetUp18(renderer);
     int32_t where = bsTouchRoom18(runner, room);
     if (st->touch != 0 && where == 0) bsTouchMove(renderer, room, -1, false);
     logInfo(bsLogPick18, (int) room, (int) where);
 }
-__asm__(".global CtrBattlesplit_repick18\n.set CtrBattlesplit_repick18, bsRepick18\n");
+__asm__(".global CtrBattlesplit_repick18\n.set CtrBattlesplit_repick18, " BS_REPICK "\n");
 
 // The frame's layout: Top screen is the whole battle on the top screen, Original here.
 static BS_CODE18 int32_t bsLayout18(void) {
@@ -2772,7 +2812,7 @@ static const uint8_t bsFWho[76] BS_ROF = { 0x40, 0x44, 0x44, 0x41, 0x44, 0x44, 0
                                            0x40, 0x44, 0x04, 0x11, 0x14, 0x44, 0x01, 0x00, 0x14, 0x21, 0x01, 0x11,
                                            0x50, 0x41, 0x45, 0x13, 0x00, 0x40, 0x14, 0x11, 0x11, 0x11, 0x04, 0x00,
                                            0x00, 0x00, 0x11, 0x15, 0x00, 0x01, 0x11, 0x04, 0x00, 0x00, 0x44, 0x00,
-                                           0x00, 0x00, 0x10, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+                                           0x00, 0x00, 0x11, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
                                            0x41, 0x44, 0x14, 0x11, 0x44, 0x14, 0x11, 0x11, 0x00, 0x00, 0x01, 0x00,
                                            0x04, 0x23, 0x28, 0xa8 };
 static const Bs* bsFBs BS_BSSF; // the battle and group bsFOk is for
@@ -2815,7 +2855,7 @@ static BS_CODEF void bsClearLayerF(Renderer* renderer) {
     Instance* u = bsFOk != 0 ? bsLive(runner, bsState.border[1]) : nullptr;
     Instance* d = u != nullptr ? bsLive(runner, bsState.border[3]) : nullptr;
     // bsmex (z_bsmex.c): scene mode 8 (Mettaton EX) sets its place, its lines and the whole flag each frame
-    CtrBsmex_frameF(renderer, bsState.battleRoom, g, &bs->place, bs->viewTop, perPx, &bs->splitY, &bs->turn14, bs->frames);
+    CtrBsmex_frameX(renderer, bsState.battleRoom, g, &bs->place, bs->viewTop, perPx, &bs->splitY, &bs->turn14, bs->frames);
     if (d == nullptr) return;
     // The box measured against the view's top as the room's data places it (room_battle's view 0: 0), not the camera:
     // a view shake (obj_shaker moves view_yview: obj_knighthammer, obj_tsunderplane_body, obj_wordburst,
@@ -2909,6 +2949,107 @@ __attribute__((noinline, noipa, optimize("Os"), section(".text_stalecarry"))) bo
     return (bsState.probe & 32) != 0 && CtrBench_running();
 }
 #endif
+
+// ===[ arenaclr: the arena layer's second clear, skipped when it would write the bytes already there (change asgsmart,
+// 11-14; gpuburst's lever 3), own section, appended ]===
+// bsClearScreen clears the top layer, then (the application surface bound) the arena layer: BS_AGAIN's switch there,
+// a memory fill of the whole layer behind a frame split (the switch marks the target drawn), and the switch back.
+// At drawViews' own clear, the frame's first, that fill rewrites what the layer already holds: bsClearLayer9's
+// CtrRenderer_bsClearLayer has just filled it with 0x000000FF (C3D_CLEAR_ALL; the layer target has no depth buffer),
+// and nothing has drawn on it since. A draw reaches the layer only while the application surface's target is the
+// layer, and only CtrRenderer_bsLayer(renderer, 1) makes it so; in this file that is bsplitSwitch, which counts
+// bs->switches, and the entry flight's bsDrawSpriteE, which does not (bsClearLayerE puts it in the table only when
+// spare14[1] is not 0, and then this twin is not installed). So with bs->switches 0 the layer is the fill's value
+// everywhere, and a clear to black at alpha 1 or more (makeColor: 0, 0, 0, 255, the value 0x000000FF) writes the same
+// bytes again, by memory fill or quad, whatever the colour mask. That fill alone is skipped. The two switches stay,
+// so the renderer leaves the bind as before (the layer bound and left: boundTargetDrawn set, clearedTarget none, the
+// state put back), the band clip's wrapper sees the same two calls, and bs->switches ends at 2 as before. Changed:
+// no fill and no frame split (the GPU queue only), and the application surface's content serial is bumped once less
+// (versions are only compared for equality). Any other clear is bsClearScreen's own. bsClearScreen's switch to the top
+// layer does nothing here: bs->layer is BS_TOP until the frame's first counted switch. The twin goes in by
+// CtrRenderer_bsClearLayer's wrap (-Wl,--wrap, CMakeLists.txt), whose only caller is bsClearLayer9, on every split
+// frame after bsInstall. bsClearScreen is called by its assembler name (no new call edge; bsInstall still takes its
+// address, so it stays as it is). No new data: 0 B late data and BSS.
+#ifndef CTRPORT_LATERECLAIM_ARENA_SECTION
+#define CTRPORT_LATERECLAIM_ARENA_SECTION ".text_arenaclr"
+#endif
+#line 2942
+#define BS_CODEL3 __attribute__((noinline, noipa, section(CTRPORT_LATERECLAIM_ARENA_SECTION)))
+void bsClearScreenL3old(Renderer* renderer, uint32_t color, float alpha) __asm__("bsClearScreen");
+void CtrBattlesplit_clearScreenL3(Renderer* renderer, uint32_t color, float alpha);
+void __real_CtrRenderer_bsClearLayer(Renderer* renderer);
+void __wrap_CtrRenderer_bsClearLayer(Renderer* renderer);
+BS_CODEL3 void CtrBattlesplit_clearScreenL3(Renderer* renderer, uint32_t color, float alpha) {
+    Bs* bs = bsState.bs;
+    if (bs->switches != 0 || (color & 0xFFFFFFu) != 0 || !(alpha >= 1.0f)) {
+        bsClearScreenL3old(renderer, color, alpha);
+        return;
+    }
+    bs->inner->clearScreen(renderer, color, alpha);
+    if (!CtrRenderer_bsAppBound(renderer)) return;
+    CtrRenderer_bsLayer(renderer, BS_BOTTOM);
+    CtrRenderer_bsLayer(renderer, BS_TOP);
+    bs->switches = 2;
+}
+BS_CODEL3 void __wrap_CtrRenderer_bsClearLayer(Renderer* renderer) {
+    __real_CtrRenderer_bsClearLayer(renderer);
+    Bs* bs = bsState.bs;
+    if (bs != nullptr && bs->spare14[1] == 0) bs->outer.clearScreen = CtrBattlesplit_clearScreenL3;
+}
+
+// ===[ asgsmart S1: the sprite draw's fast change (change asgsmart, 11-14), own section, appended ]===
+// Smart's fine sprites cost the most in Split: each draw went through bsWant, bsRouteAt11f, bsRouteAt56, bsRouteAt and
+// bsplitSwitch, five calls in three late sections, before the renderer's own (gpuburst splitprof2: the router is
+// 9 us of an ember's 69 us on the Old 2DS). Most draws need none of it: their class is TOP or BOTTOM (BY_ROW
+// resolved), and the layer is already theirs. For those this is bsWant's own work (its class cache read and written
+// the same way) and the inner table's call; every other draw goes to bsDrawSprite before anything is written.
+// Exact: for such a want the chain does nothing else. bsRouteAt11f's straddle test needs want >= BS_BY_CALL;
+// bsRouteAt56 changes a want only under Mettaton EX's whole place (turn14 8, sent the full way here) or by clearing
+// BS_GUARD (never set here: a bottom draw with the lift's rows hidden goes the full way); bsRouteAt passes a plain
+// TOP or BOTTOM to bsplitSwitch, which does nothing when the layer is already that one; and no BS_BOTH copy is made.
+// The detector (bs->probe) sends every draw the full way. bsDrawSprite is called by its assembler name: no new call
+// edge, so the order of this file's old functions stays (RULES: strict-layout objects).
+// bsInstall keeps its old store of bsDrawSprite ahead of this one's. It is dead (the compiler drops it: 0 B), but without
+// it GCC emitted bsDrawSprite's two callers in .aacout.text.battlesplit14 the other way round in dev builds (build #14's
+// check_layout). A pointer constant or a never-called function taking bsDrawSprite's address did not bring the old
+// order back; this store does, and every old function's code stays the same. It is intentional and only there for the
+// order: do not remove it as a dead store.
+void bsDrawSpriteFullQ(Renderer* renderer, int32_t tpagIndex, float x, float y, float originX, float originY, float xscale, float yscale,
+                       float angleDeg, uint32_t color, float alpha) __asm__("bsDrawSprite");
+#ifndef CTRPORT_LATERECLAIM_ASG_SECTION
+#define CTRPORT_LATERECLAIM_ASG_SECTION ".text_asgsmart"
+#endif
+#line 2984
+__attribute__((noinline, section(CTRPORT_LATERECLAIM_ASG_SECTION))) void CtrBattlesplit_drawSpriteQ(Renderer* renderer, int32_t tpagIndex, float x, float y,
+                                                                                    float originX, float originY, float xscale, float yscale,
+                                                                                    float angleDeg, uint32_t color, float alpha) {
+    Bs* bs = bsState.bs;
+    VMContext* vm = renderer->runner->vmContext;
+    Instance* inst = vm->currentInstance;
+    int32_t want = BS_TOP;
+    if (inst != nullptr && vm->currentEventType == EVENT_DRAW) {
+        int32_t object = inst->objectIndex;
+        if (inst == bs->lastInst && object == bs->lastObject) {
+            want = bs->lastWant;
+        } else {
+            if (bs->probe || 0 > object || bs->count <= (uint32_t) object) goto full;
+            int32_t c = bs->cls[object] & BS_CLASS;
+            if (c == BS_BY_ROW) c = inst->y >= bs->splitY ? BS_BOTTOM : BS_TOP;
+            if (c > BS_BOTTOM || (c == BS_BOTTOM && bs->hideY > bs->viewTop)) goto full;
+            bs->cls[object] = (uint8_t) (bs->cls[object] | BS_SEEN);
+            bs->lastInst = inst;
+            bs->lastObject = object;
+            bs->lastWant = c;
+            want = c;
+        }
+    }
+    // A cached want with BS_CHECK or BS_GUARD, BS_BOTH or a place class never equals a layer (0 or 1).
+    if (want != bs->layer || bs->turn14 == BS_MEX_WHOLE) goto full;
+    bs->inner->drawSprite(renderer, tpagIndex, x, y, originX, originY, xscale, yscale, angleDeg, color, alpha);
+    return;
+full:
+    bsDrawSpriteFullQ(renderer, tpagIndex, x, y, originX, originY, xscale, yscale, angleDeg, color, alpha);
+}
 #endif
 
 // Game-over presentation unit: presentation eligibility and automatic-role return only.
@@ -2922,4 +3063,574 @@ GO_BS void CtrBattlesplit_gameoverReturn(Renderer* renderer) {
     if (bsState.touch != 0) goTouchReturn(renderer, renderer->runner->currentRoomIndex, -1, false);
     if (CtrLayout_autoUp()) CtrLayout_moveUp(renderer, false);
 }
+#endif
+
+// ===[ The flash (change battlesplit2, 11-14; the top Split's flash) ]===
+// A cover draw (class COVER: the white flash, Asgore's fire storm maker, Mettaton's attack maker, Undyne's darkener)
+// that covers the view goes on both layers (bsRouteAt), so the box's screen has it whole; the top screen showed it on the
+// band alone. PC lights the whole screen (Azahar f831 of the oracle rows: only rows 53..186 x 40..359 lit). Here each
+// such draw's colour and alpha are noted in the frame's order, and present (CtrRenderer_bsPresentFlash, ctr_renderer.c's
+// end) puts them on the top screen outside the band.
+// - Noted: the frame's sprite and rectangle draws pass bsFlSprite and bsFlRect (the outer table's entries, after
+//   bsClearLayer6 and the modes have set theirs, which they call). A draw is a cover draw on both layers when its
+//   instance's class is COVER (bsWant's class cache, set by the draw) and the draw switched layers at least twice
+//   (BS_AGAIN's switch to the arena layer and back: a top draw switches once at most). A rectangle's colour is what
+//   it draws. A sprite's is its blend times its texels, which are not known here: only a sprite drawn at least 10000
+//   times its size is noted, which in UNDERTALE is the white flash's alone (its fader, drawn 99999 times its size from
+//   the view's corner, so only its first texel shows, white). Undyne's darkener (a marker's black pixel at 600 times)
+//   is black and not noted.
+// - With each, where the draw's vertices went in the renderer's ring (CtrRenderer_bsFlashMark before and after it): a
+//   cover reaching above the view is in a batch battlesplit22 draws again on the top margin's strip, and present
+//   takes it out of that batch, so the margin has it once (CtrRenderer_bsPresentFlash).
+// - Kept for the game frame (runner->frameCount): a paused present (the same frame again, nothing drawn) has them too.
+// Nothing the game reads changes. Same-size edits only: drawViews calls bsClearLayerFl in place of bsClearLayer6 and
+// bsPresent8 calls bsPresentFl in place of CtrRenderer_bsPresent5 (static and noipa, so the callers' code stays).
+#ifdef ENABLE_WAD16 // AAC tenants carry an explicit guard (test_aacslot_shared.py)
+#ifdef __3DS__
+#define BS_CODEFL __attribute__((noinline, noipa, optimize("Os"), section(".aacout.text.bsflash")))
+static struct {
+    void (*sprite)(Renderer* renderer, int32_t tpagIndex, float x, float y, float originX, float originY, float xscale, float yscale,
+                   float angleDeg, uint32_t color, float alpha);
+    void (*rect)(Renderer* renderer, float x1, float y1, float x2, float y2, uint32_t color, float alpha, bool outline);
+    int32_t game; // runner->frameCount of the split frame the notes are for
+    CtrBsFlash notes;
+} bsFl __attribute__((section(".bss_bsflash_late,\"aw\",%nobits @")));
+
+// After a draw: noted when it was a cover draw on both layers (switches: bs->switches before it, from: the ring then).
+static BS_CODEFL void bsFlNote(Renderer* renderer, uint32_t switches, const uint32_t* from, uint32_t color, float alpha) {
+    Bs* bs = bsState.bs;
+    if ((bs->lastWant & BS_CLASS) != BS_COVER || 2u > bs->switches - switches || bsFl.notes.n >= CTR_BS_FLASH_MAX) return;
+    uint32_t n = bsFl.notes.n, to[2];
+    CtrRenderer_bsFlashMark(renderer, to);
+    bsFl.notes.color[n] = color;
+    bsFl.notes.alpha[n] = alpha;
+    // Its vertices, and the ring's generation at each end (its second word changes only when the ring starts over).
+    bsFl.notes.from[n] = from[0];
+    bsFl.notes.to[n] = to[0];
+    bsFl.notes.gen[n][0] = from[1];
+    bsFl.notes.gen[n][1] = to[1];
+    bsFl.notes.n = n + 1;
+}
+
+static BS_CODEFL void bsFlSprite(Renderer* renderer, int32_t tpagIndex, float x, float y, float originX, float originY, float xscale,
+                                 float yscale, float angleDeg, uint32_t color, float alpha) {
+    uint32_t switches = bsState.bs->switches, from[2];
+    CtrRenderer_bsFlashMark(renderer, from);
+    bsFl.sprite(renderer, tpagIndex, x, y, originX, originY, xscale, yscale, angleDeg, color, alpha);
+    if (xscale >= 10000.0f) bsFlNote(renderer, switches, from, color, alpha);
+}
+
+static BS_CODEFL void bsFlRect(Renderer* renderer, float x1, float y1, float x2, float y2, uint32_t color, float alpha, bool outline) {
+    uint32_t switches = bsState.bs->switches, from[2];
+    CtrRenderer_bsFlashMark(renderer, from);
+    bsFl.rect(renderer, x1, y1, x2, y2, color, alpha, outline);
+    if (!outline) bsFlNote(renderer, switches, from, color, alpha);
+}
+
+// In place of bsClearLayer6 in drawViews: it, then the frame's notes start empty and the two draws pass bsFl's.
+static BS_CODEFL void bsClearLayerFl(Renderer* renderer) {
+    bs47Clear(renderer); // G47 (this file's end): bsClearLayer6, then the frame's lift
+    Bs* bs = bsState.bs;
+    bsFl.notes.n = 0;
+    if (bs == nullptr) return;
+    bsFl.game = renderer->runner != nullptr ? renderer->runner->frameCount : -1;
+    bsFl.sprite = bs->outer.drawSprite;
+    bs->outer.drawSprite = bsFlSprite;
+    bsFl.rect = bs->outer.drawRectangle;
+    bs->outer.drawRectangle = bsFlRect;
+}
+
+// In place of CtrRenderer_bsPresent5 in bsPresent8: the present, then this game frame's notes on the top margins.
+static BS_CODEFL void bsPresentFl(Renderer* renderer, int32_t band, int32_t topDy, int32_t bottomDy) {
+    bool now = renderer->runner != nullptr && renderer->runner->frameCount == bsFl.game;
+    bs47Present(renderer, band, topDy, bottomDy, now ? &bsFl.notes : nullptr); // G47's present, then the flash and the bottom's gap
+}
+#endif
+#endif
+
+// ===[ Napstablook's way down (change battlesplit2, 11-14; Mad Dummy's D: shift 224, alpha held, R2) ]===
+// Mad Dummy's fight (group 45): at con2 33 Mad Dummy's object makes its ghost (blook: an NPC marker drawing
+// a Napstablook sprite at twice its size) at room y -200, alpha 0, and it comes down 4 a step (vspeed) fading in by 0.025
+// a step (con2 34) to its stop past y 14 (con2 35: vspeed 0). The Original's top screen starts at room row 0, so the
+// ghost comes in from the screen's top edge. The Split's top margin shows the 230 room px above that too, where the
+// ghost would show at once, faint and whole, from the step it is made. Here, in the Split, it starts 224 room px higher
+// (56 steps: whole turns of its 8-step animation), so it comes onto the top screen from its top edge as on PC:
+// - The shift: once, at the begin frame after the ghost was made (y -196, alpha 0.025 after its first step, vspeed 4),
+//   when that frame is split. The frame it is made in draws it above the view as the Original does (no shift yet: none
+//   of it is drawn, the draw below takes only the shifted ghost).
+// - The hold: from the begin frame whose y is -208 (the Original's stop less 224: the step of the 55th add, as the
+//   Original's last one), its alpha is put back each begin frame to what it was there. It reaches the stop 56 steps
+//   later than the Original with the Original's alpha and image index bits (the index: whole turns), so from the stop on
+//   Split@N+56 is Original@N bitwise. The hold runs whatever the layout is then (a change to the Original on the way down
+//   leaves the ghost the alpha it would have had), and ends at the stop (vspeed 0) or when the ghost is gone.
+// - The draw: wholly above the view and reaching the top margin's rows, its drawSprite goes through the renderer's
+//   CtrRenderer_bsNapDraw (ctr_renderer.c's end, R2), which lets the culls take it so battlesplit22 can show
+//   it on the margin. Only the routed draw onto the half view does: the routing (bs->outer, the layer switches) runs as
+//   for any draw, and the ghost's own draw in it reaches CtrRenderer_bsNapDraw through a copy of the inner table.
+// Same-size edits only: layout's chain18 calls CtrBattlesplit_entryNap in place of CtrBattlesplit_entryW1, bsClearLayer6
+// calls bsClearLayerNap in place of bsClearLayerE (both noipa, so the callers' code stays). The objects and the sprite
+// are UNDERTALE 1.08's (Steam and GOG alike); a data file without them has no ghost here to look at.
+#ifdef ENABLE_WAD16 // AAC tenants carry an explicit guard (test_aacslot_shared.py)
+#ifdef __3DS__
+#define BS_CODENAP __attribute__((noinline, noipa, optimize("Os"), section(".aacout.text.bsnap")))
+#define BS_NAP_GROUP 45     // Mad Dummy's battle group
+#define BS_NAP_OWNER 288    // Mad Dummy's object
+#define BS_NAP_GHOST 1365   // the NPC marker object
+#define BS_NAP_SPRITE 203   // the ghost's Napstablook sprite
+#define BS_NAP_SHIFT 224.0f // room px: 56 steps of 4
+typedef void (*BsNapDraw)(Renderer* renderer, int32_t tpagIndex, float x, float y, float originX, float originY, float xscale,
+                          float yscale, float angleDeg, uint32_t color, float alpha);
+bool CtrRenderer_bsNapDraw(Renderer* renderer, BsNapDraw draw, int32_t tpagIndex, float x, float y, float originX, float originY,
+                           float xscale, float yscale, float angleDeg, uint32_t color, float alpha);
+static struct {
+    BsNapDraw next;  // the outer table's drawSprite bsClearLayerNap found
+    BsNapDraw draw;  // the inner table's, during the ghost's routed draw
+    VMContext* varFor;
+    int32_t var;     // Mad Dummy's blook: its variable id in varFor, -1 none
+    uint32_t id;     // the shifted ghost's instance id, 0 none
+    float alpha;     // its held alpha
+    bool held;
+} bsNap __attribute__((section(".bss_bsnap_late,\"aw\",%nobits @")));
+
+// The live NPC marker instance with that id, or nullptr.
+static BS_CODENAP Instance* bsNapFind(Runner* runner, uint32_t id) {
+    if (runner->instancesByObject == nullptr || runner->dataWin == nullptr || BS_NAP_GHOST >= runner->dataWin->objt.count) return nullptr;
+    Instance** list = runner->instancesByObject[BS_NAP_GHOST];
+    for (ptrdiff_t j = 0; arrlen(list) > j; j++)
+        if (list[j]->instanceId == id && !list[j]->destroyed) return list[j];
+    return nullptr;
+}
+
+// Mad Dummy's blook, or nullptr.
+static BS_CODENAP Instance* bsNapGhost(Runner* runner) {
+    VMContext* ctx = runner->vmContext;
+    if (ctx == nullptr || runner->instancesByObject == nullptr || runner->dataWin == nullptr || BS_NAP_GHOST >= runner->dataWin->objt.count)
+        return nullptr;
+    if (bsNap.varFor != ctx) {
+        uint32_t name[2]; // "blook", made in code (no constant)
+        name[0] = 0x6f6f6c62u;
+        name[1] = 0x6bu;
+        ptrdiff_t slot = shgeti(ctx->varNameMap, (char*) name);
+        bsNap.var = 0 > slot ? -1 : (int32_t) ctx->varNameMap[slot].value;
+        bsNap.varFor = ctx;
+    }
+    if (0 > bsNap.var) return nullptr;
+    Instance** owners = runner->instancesByObject[BS_NAP_OWNER];
+    for (ptrdiff_t j = 0; arrlen(owners) > j; j++) {
+        if (owners[j]->destroyed) continue;
+        RValue* v = bsPickFind(&owners[j]->selfVars, bsNap.var);
+        if (v == nullptr) return nullptr;
+        int32_t id = v->type == RVALUE_REAL ? (int32_t) v->real : v->type == RVALUE_INT32 ? v->int32 : 0;
+        return 0 < id ? bsNapFind(runner, (uint32_t) id) : nullptr;
+    }
+    return nullptr;
+}
+
+// Each begin frame, after the entry and the chain (CtrBattlesplit_entryNap): the hold, else the shift.
+static BS_CODENAP void bsNapStep(Renderer* renderer) {
+    Runner* runner = renderer != nullptr ? renderer->runner : nullptr;
+    if (runner == nullptr) return;
+    if (bsNap.id != 0) {
+        Instance* g = bsNapFind(runner, bsNap.id);
+        if (g == nullptr || g->vspeed != 4.0f) {
+            bsNap.id = 0;
+            bsNap.held = false;
+            return;
+        }
+        if (g->y >= 16.0f - BS_NAP_SHIFT) {
+            if (!bsNap.held) bsNap.alpha = g->imageAlpha;
+            bsNap.held = true;
+            g->imageAlpha = bsNap.alpha;
+        }
+        return;
+    }
+    Bs* bs = bsState.bs;
+    if (!bsState.armed || bs == nullptr || bs->layout != CTR_BATTLE_LAYOUT_A || bs->group != BS_NAP_GROUP) return;
+    Instance* g = bsNapGhost(runner);
+    if (g == nullptr || g->y != -196.0f || g->vspeed != 4.0f || g->imageAlpha != 0.025f || g->spriteIndex != BS_NAP_SPRITE) return;
+    g->y -= BS_NAP_SHIFT;
+    bsNap.id = g->instanceId;
+    bsNap.held = false;
+}
+
+// In place of CtrBattlesplit_entryW1 in layout's chain18: it, then the ghost's step.
+void CtrBattlesplit_entryNap(Renderer* renderer);
+BS_CODENAP void CtrBattlesplit_entryNap(Renderer* renderer) {
+    CtrBattlesplit_entryW1(renderer);
+    bsNapStep(renderer);
+}
+
+// The ghost's draw in the routing: the inner table's drawSprite through CtrRenderer_bsNapDraw.
+static BS_CODENAP void bsNapInner(Renderer* renderer, int32_t tpagIndex, float x, float y, float originX, float originY, float xscale,
+                                  float yscale, float angleDeg, uint32_t color, float alpha) {
+    if (!CtrRenderer_bsNapDraw(renderer, bsNap.draw, tpagIndex, x, y, originX, originY, xscale, yscale, angleDeg, color, alpha))
+        bsNap.draw(renderer, tpagIndex, x, y, originX, originY, xscale, yscale, angleDeg, color, alpha);
+}
+
+// The outer table's drawSprite while a shifted ghost comes down in the Split: the ghost's draw (its sprite, twice its size,
+// upright) wholly above the view and reaching the top margin's rows is routed with the inner table's drawSprite through
+// bsNapInner; every other draw as before.
+static BS_CODENAP void bsNapSprite(Renderer* renderer, int32_t tpagIndex, float x, float y, float originX, float originY, float xscale,
+                                   float yscale, float angleDeg, uint32_t color, float alpha) {
+    Bs* bs = bsState.bs;
+    Runner* runner = renderer->runner;
+    Instance* inst = runner != nullptr && runner->vmContext != nullptr ? runner->vmContext->currentInstance : nullptr;
+    DataWin* dw = renderer->dataWin;
+    if (inst != nullptr && inst->instanceId == bsNap.id && inst->spriteIndex == BS_NAP_SPRITE && xscale == 2.0f && yscale == 2.0f &&
+        angleDeg == 0.0f && dw != nullptr && 0 <= tpagIndex && dw->tpag.count > (uint32_t) tpagIndex && bs != nullptr && bs->inner != nullptr) {
+        const TexturePageItem* t = &dw->tpag.items[tpagIndex];
+        float bottom = y + ((float) t->targetY - originY + (float) t->targetHeight) * yscale; // the quad's (ctrDrawSprite's)
+        float perPx = (bs->viewBottom - bs->viewTop) / 240.0f;
+        if (bs->viewTop > bottom && bottom > bs->viewTop - perPx * (float) bs->place.topDy) {
+            RendererVtable* was = bs->inner;
+            RendererVtable in = *was;
+            bsNap.draw = was->drawSprite;
+            in.drawSprite = bsNapInner;
+            bs->inner = &in;
+            bsNap.next(renderer, tpagIndex, x, y, originX, originY, xscale, yscale, angleDeg, color, alpha);
+            bs->inner = was;
+            return;
+        }
+    }
+    bsNap.next(renderer, tpagIndex, x, y, originX, originY, xscale, yscale, angleDeg, color, alpha);
+}
+
+// In place of bsClearLayerE in bsClearLayer6: it, then (a shifted ghost on its way down in Mad Dummy's Split) the ghost's
+// draw entry over the outer table's drawSprite the modes set.
+static BS_CODENAP void bsClearLayerNap(Renderer* renderer) {
+    bsClearLayerE(renderer);
+    Bs* bs = bsState.bs;
+    if (bs == nullptr || bsNap.id == 0 || bs->layout != CTR_BATTLE_LAYOUT_A || bs->group != BS_NAP_GROUP) return;
+    bsNap.next = bs->outer.drawSprite;
+    bs->outer.drawSprite = bsNapSprite;
+}
+#endif
+#endif
+
+// ===[ The endings' decision box in Split (asgsmart, chg-split-choice-screens-1115, maintainer 11-15) ]===
+// Flowey's ending room has its own split scene row, as the tutorial's room_floweybattle has,
+// but bsTouchRooms doesn't name it: bsTouchRoom10 makes it a battle room (roomBattle) and answers 0, so with the game
+// on the bottom screen the move up (bsTouchRoom18) never runs and the split is refused (!CtrScreens_gameBelow), and a
+// move up that was on ends at the room's entry (c26rev6 CHOICESCREENS-1). Here a room with its own split scene that
+// bsTouchRooms doesn't name is a battle's first room (2), as room_floweybattle is, with Battle layout Split or Top
+// screen, or while a move up lasts (so Original picked in the room ends it, as in the tutorial). With Original and no
+// move up it stays 0: step 3b's Stylus move to the bottom screen never starts there (no new Original move).
+// Same-size edits only (nothing that exists moves): bsTouchRoom18 and bsRepick18 call this by its static name in place
+// of bsTouchRoom10, and it calls bsTouchRoom10 (and bsRoomScene10), so it takes bsTouchRoom10's place in the call graph
+// as bsTouchRoom18 did (static and without "used": a "used" or assembler-name version reorders four sections). The
+// object's other sections keep every byte, symbol and size; only the two calls' relocations change (compiled and
+// compared on the object; check_layout.py on the link). Its own appended section: .text_bschoice, late_reserve.ld
+// after .text_asgfuse (appended last). UNDERTALE only. No data, no constants. Host check: test_battlesplit_choicescr.py.
+#ifdef ENABLE_WAD16 // UNDERTALE only, as bsTouchRoom18
+#define BS_CODECH __attribute__((noinline, noipa, section(".text_bschoice")))
+static BS_CODECH int32_t bsTouchRoomCh(Runner* runner, int32_t room) {
+    int32_t where = bsTouchRoom10(runner, room);
+    if (where == 0 && bsRoomScene10(runner->dataWin, room) != nullptr &&
+        (CtrBattlesplit_setting() != CTR_BATTLE_LAYOUT_ORIGINAL || CtrLayout_autoUp())) where = 2;
+    return where;
+}
+#endif
+
+// ===[ Omega Flowey with the stylus (change battletouch, chg-stylus-move-all-soul-scenes-1115; maintainer 11-15) ]===
+// "shouldnt stylus mode force omega flowey on the bottom screen?" and, 11-15 03:21, "if touch controls are on then we
+// can force override game screen in fights like omega flowey" (lead: keyed on the stylus, not on the layout). Omega
+// Flowey's room (room_floweyx, one 640x480 view, no split picture) is a battle's first room for step 3b: with the game
+// on top and the stylus on, chainBeginFrameBattlesplit's bsTouchMove takes it to the bottom screen with Battle layout
+// Original or 3DS Mode (3DS Mode has nothing to split there), with the held pair (R10; refused, the game stays on top).
+// Top screen keeps it on top, as step 3b everywhere. With the game already below nothing moves (bsTouchRoom10's 0).
+// The way out (asgsmart 11-15, the choice screens' unit): the win's room_flowey_endchoice keeps the game below with
+// Battle layout Original (1), as the fake heart's later unit wants it; with Split or Top screen the move ends here,
+// before bsTouchRoom18 reads the state, so the choice screen's own move (its split scene: the game on top, the box
+// below) starts at the same first frame with no move back and forth. Every other room ends it as before (0).
+// Same-size edit only: chainBeginFrameBattlesplit calls bsTouchRoomOm in place of bsTouchRoom18 (the same call).
+// A Battle layout pick in Omega's room: bsRepickOm (OM-1, below), CtrBattlesplit_repick18's target on the console.
+#ifdef ENABLE_WAD16 // AAC tenants carry an explicit guard (test_aacslot_shared.py)
+#ifdef __3DS__
+#define BS_CODEOM __attribute__((noinline, noipa, optimize("Os"), section(".aacout.text.btomega")))
+// Text only (aacout.cmake): the names share the code's section as z_battletouch.c's BT_ROOM does.
+static const char bsOmRooms[] __attribute__((section(".aacout.text.btomega,\"ax\",%progbits @"))) =
+    "room_floweyx\0room_flowey_endchoice";
+static BS_CODEOM int32_t bsTouchRoomOm(Runner* runner, int32_t room) {
+    BsState* st = &bsState;
+    const char* name = 0 > room || (uint32_t) room >= runner->dataWin->room.count ? nullptr : runner->dataWin->room.rooms[room].name;
+    if (name != nullptr && !CtrLayout_autoUp()) {
+        if (st->touch == 0 && CtrScreens_game == 0 && strcmp(name, bsOmRooms) == 0)
+            return CtrBattlesplit_setting() == CTR_BATTLE_LAYOUT_TOP ? 1 : 2;
+        if (st->touch != 0 && strcmp(name, bsOmRooms + sizeof "room_floweyx") == 0) {
+            if (CtrBattlesplit_setting() == CTR_BATTLE_LAYOUT_ORIGINAL) return 1;
+            bsTouchMove(runner->renderer, room, -1, false);
+        }
+    }
+    return bsTouchRoom18(runner, room);
+}
+// OM-1 (c26rev5; LAY-1: a Battle layout pick applies in the room it was made in). bsRepick18 makes nothing in Omega's
+// room (room_floweyx has no battle for bsTouchRoom10), so on the console CtrBattlesplit_repick18 is this (BS_REPICK:
+// layout's CtrLayout_chain18 makes the same call, another target; bsRepick18's bytes and place are unchanged). With
+// Omega's own move made (the game below for the stylus), a Top screen pick ends it in the room, after the pick's
+// set-up, as bsTouchRoom18 ends step 3b with Top screen in a battle room; Original and 3DS Mode keep it. A pick never
+// starts the move (with the game on top nothing moves here), as everywhere. Every other case is bsRepick18's.
+static BS_CODEOM __attribute__((used)) void bsRepickOm(Renderer* renderer) {
+    BsState* st = &bsState;
+    Runner* runner = renderer != nullptr ? renderer->runner : nullptr;
+    if (BS_DRAWVIEWS_WRAPPED && st->touch != 0 && runner != nullptr && runner->renderer == renderer &&
+        runner->dataWin != nullptr && !CtrLayout_autoUp() && CtrBattlesplit_setting() == CTR_BATTLE_LAYOUT_TOP) {
+        int32_t room = runner->currentRoomIndex;
+        const char* name = room != st->lastRoom || 0 > room || (uint32_t) room >= runner->dataWin->room.count
+            ? nullptr : runner->dataWin->room.rooms[room].name;
+        if (name != nullptr && strcmp(name, bsOmRooms) == 0) {
+            CtrRenderer_bsSetUp18(renderer);
+            bsTouchMove(renderer, room, -1, false);
+            logInfo(bsLogPick18, (int) room, 0);
+            return;
+        }
+    }
+    bsRepick18(renderer);
+}
+#endif
+#endif
+
+// ===[ exend: Mettaton EX's ending in Split (change battlesplit2, 11-15; the maintainer's EX ending reports) ]===
+// His concluding speech showed an empty white bubble on the top screen (maintainer, 11-15: "i cant see any of his
+// dialogue"): z_bsmex.c moves splitY to the bottom screen's first row once Mettaton EX is seen, for BY_CALL's shots,
+// and bsWant resolves by_row draws on splitY too, so the speech's writer (by_row, at his y + 30: room y 80 or more) went
+// to the arena layer. In place of bsRouteAt56 in bsRouteAt11f (the same calls): while that line is moved
+// (CtrBsmex_rowsKept), a by_row draw bsWant sent to the bottom from an instance above the band's line (bandY: in mode
+// 8 the band is the standard one, the line splitY has before the move) goes on the top layer, as before he was seen;
+// everything else as bsRouteAt56 routes it. Only in layout A, the one whose frame runs z_bsmex.c (bsClearLayerF): the
+// answer is kept from A's last frame, so after a switch to C (which never refreshes it) a C draw would read A's stale
+// answer (c26rev6 EXEND-1). The whole place is untouched (CtrBsmex_rowsKept is false, and bsRouteAt56
+// sends every draw to the arena layer). A run's later letter (bsRunLeaves11f still reads the moved line) leaves the run
+// and is drawn the full way, through here. Presentation only: no instance moves, nothing the game reads changes. One
+// same-size edit (the call's target); AAC only (.aacout.text.bsexend), with z_bsmex.c's end; its paired constants
+// input stays empty. Without noipa, as bsRouteAt56: its caller's code keeps the registers it kept.
+#ifdef ENABLE_WAD16 // AAC tenants carry an explicit guard (test_aacslot_shared.py)
+#ifdef __3DS__
+#define BS_CODEEXR __attribute__((noinline, noclone, optimize("Os"), section(".aacout.text.bsexend")))
+static BS_CODEEXR bool bsRouteAtEx(Renderer* renderer, int32_t want, const float* r) {
+    Bs* bs = bsState.bs;
+    Instance* inst = bs->lastInst;
+    int32_t o = bs->lastObject;
+    if ((want & BS_CLASS) == BS_BOTTOM && inst != nullptr && 0 <= o && bs->count > (uint32_t) o && (bs->cls[o] & BS_CLASS) == BS_BY_ROW &&
+        bs->bandY > inst->y && bs->layout == CTR_BATTLE_LAYOUT_A && CtrBsmex_rowsKept())
+        want = BS_TOP;
+    // G47 (this file's end): bsRouteAt56, then the arena's move. It gets a copy of the place: r is the drawing
+    // wrapper's own array, and passed on to G47's noipa code its address would escape, so the wrappers' late code
+    // changed (128 B less on Old, #86 11-15). With the copy the late text is byte-identical.
+    float place[4] = { r[0], r[1], r[2], r[3] };
+    return bs47Route(renderer, want, place);
+}
+#endif
+#endif
+
+// ===[ G47: Undyne's arena drawn higher, the HUD in place (change battlesplit2, 11-15; option (i)) ]===
+// maintainer, 11-14 (Split): in Undyne's fight (group 47) the box is not centred, 27.5 px low in her homing spears. A lift
+// under (c) cannot fix it: (c) keeps the HP line and the buttons at the foot (his rule: box and effects move, the HUD
+// fixed) and shows the lifted rows above a seam, so every spear crossing layer row 196 (the homing spears do in 434 of
+// 633 frames) would vanish into the lift's black rows and come back that many rows lower. Here nothing is lifted: the
+// bottom screen shows the arena layer whole (one piece, lift 0 for the present), and the arena's draws are drawn L
+// rows higher on that layer instead, all but the HUD's. So the spears pass over the HP line and the buttons as on PC,
+// L rows higher, and no draw jumps.
+// - L: the box-follow formula (bsfollow's: the box centre's row less BS_F_MID), uncapped up to BS47_MOST, taken each
+//   frame from the box's top and bottom borders, so it changes only while the box does: between the turns. (#86's
+//   first build held L while a spear or arrow was alive; the shots come 1-2 frames before the box's last step, so that
+//   held a passing value for the whole attack: 9 for the green SOUL's 0, 36 for the homing 28. Azahar log, 11-15.)
+//   Below BS47_LEAST rows it is 0 (the green SOUL's box: 1.25 rows,
+//   ruled 0). The menu and the speech box come to 40 (BS_A_UP, as every centred fight), the homing spears' to 28,
+//   the rising spears' to 53.
+// - Moved: a draw on the arena layer whose class is not COVER (the darkener's cover stays whole on both layers), from
+//   any object but the HUD's when it draws in the HUD rows (layer row BS_C_SEAM down): the battle controller (its HP
+//   line; its box fill moves), the HP label beside that line (its own object), the five buttons and the SOUL (on the
+//   buttons in a menu). The move is the projection's
+//   (CtrRenderer_bs47Shift, ctr_renderer.c's end): runs and primitives follow it, no vertex changes.
+// - The rows above the layer: a moved bottom draw reaching above row L goes on both layers, its top-layer copy cut to
+//   rows 0..L-1 (CtrRenderer_bs47Clip), so those rows show on the top screen where the band shows them and the rest only
+//   on the bottom screen: none lost, none twice. Such draws do not ask the lift's guard (nothing is hidden).
+// - Touch: the place keeps bottomDy -L, so CtrLayout_bottomView's arena rows and CtrLayout_bottomSeam's (seam 196 and
+//   L) match the picture: the stylus SOUL is placed on the moved box, a button tap on the fixed buttons.
+// Presentation only: no instance moves, nothing the game reads changes. Objects by index, as in UNDERTALE 1.08's Steam
+// and GOG data (both 1709 objects, the same indices; BS_F_OBJECTS); other data is not moved. Same-size edits only: four
+// calls (bsClearLayerFl's, bsPresentFl's, bsRouteAtEx's, __wrap_CtrRenderer_bsLayer's) name these in place of the
+// functions they call. AAC only (.aacout.text.bsg47, appended last); development builds log (CTRPORT_BS47_LOG). No
+// new memory: the state, the renderer's kept projection among it, is the battle's own Bs, in the last of top14's
+// entries (Muffet's draws above row 0, written only for her body's draws, which group 47 has none of; and only read
+// here in a group 47 split), zero from bsMake's calloc at each battle.
+#ifdef ENABLE_WAD16 // AAC tenants carry an explicit guard (test_aacslot_shared.py)
+#ifdef __3DS__
+#define BS_CODE47 __attribute__((noinline, noipa, optimize("Os"), section(".aacout.text.bsg47")))
+#define BS_G47 47
+#define BS47_MOST 64       // a lift past this is not taken
+#define BS47_LEAST 2       // nor one below this (the green SOUL's box)
+#define BS47_CONTROLLER 155
+#define BS47_HPLABEL 184   // the HP label (its own object; #86b's log named it moved in the HUD rows)
+#define BS47_SOUL 744
+#define BS47_FIGHTBT 751   // the five buttons, FIGHT to MERCY: 751..755
+#define BS47_SPAREBT 755
+#define BS47_UBORDER 760
+#define BS47_DBORDER 762
+#define BS47_RISESPEAR 269 // the rising spears
+#define BS47_SPEAR 272     // the homing spears
+#define BS47_ARROW 266     // the green SOUL's arrows (and their child object)
+void CtrRenderer_bs47Shift(Renderer* renderer, float dy, float* keep);
+bool CtrRenderer_bs47Clip(Renderer* renderer, int32_t rows);
+typedef struct {
+    Instance* inst;  // the draw the move is for (the class cache's instance and object)
+    int32_t object;
+    int16_t lift;    // this frame's L, 0 none
+    int8_t on;       // a G47 split frame
+    int8_t move;     // that draw's arena copy is moved
+    int8_t clip;     // the top-layer copy's cut is on
+    int8_t seen;     // lift holds a value (this battle)
+#ifdef CTRPORT_BS47_LOG
+    int8_t n;
+    int16_t logged[12];
+#endif
+    float keep[17];  // CtrRenderer_bs47Shift's: the projection before the move (16), the move (1)
+} Bs47;
+#define BS47_AT (BS_TOPS14 - (int32_t) ((sizeof(Bs47) + sizeof(BsTop14) - 1) / sizeof(BsTop14)))
+_Static_assert(BS47_AT >= BS_TOPS14 / 2, "G47's state in top14's last entries only");
+
+// The battle's G47 state: in a group 47 split's Bs only (see above), else nullptr.
+static BS_CODE47 Bs47* bs47Of(Bs* bs) {
+    if (bs == nullptr || bs->group != BS_G47 || bs->layout != CTR_BATTLE_LAYOUT_A || bs->count != BS_F_OBJECTS) return nullptr;
+    return (Bs47*) (void*) &bs->top14[BS47_AT];
+}
+
+#ifdef CTRPORT_BS47_LOG
+// Once an object a battle: its name, what and where (development builds).
+static BS_CODE47 void bs47Note(Bs* bs, Bs47* s, const char* what, const float* r) {
+    int32_t o = bs->lastObject;
+    for (int32_t k = 0; s->n > k; k++)
+        if (s->logged[k] == o) return;
+    if (s->n < (int8_t) (sizeof(s->logged) / sizeof(s->logged[0]))) s->logged[s->n++] = (int16_t) o;
+    DataWin* dw = bs->renderer->dataWin;
+    const char* name = 0 <= o && dw != nullptr && dw->objt.count > (uint32_t) o ? dw->objt.objects[o].name : nullptr;
+    if (r == nullptr) logInfo("battlesplit G47: %s %s\n", name != nullptr ? name : "?", what);
+    else logInfo("battlesplit G47: %s %s (%d,%d to %d,%d)\n", name != nullptr ? name : "?", what, (int) r[0], (int) r[1], (int) r[2], (int) r[3]);
+}
+#endif
+
+// Whether this draw's arena copy is moved (r: its place; nullptr, or r[0] > r[2], when not known).
+static BS_CODE47 int32_t bs47Moves(Bs* bs, Bs47* s, int32_t want, const float* r) {
+    (void) s; // the log's (development builds)
+    if ((want & BS_CLASS) == BS_COVER) return 0;
+    int32_t o = bs->lastObject;
+    float seam = bs->viewTop + (bs->viewBottom - bs->viewTop) * ((float) BS_C_SEAM / 240.0f);
+    bool known = r != nullptr && r[2] >= r[0];
+    if (o == BS47_CONTROLLER || o == BS47_HPLABEL || o == BS47_SOUL || (BS47_FIGHTBT <= o && BS47_SPAREBT >= o)) {
+#ifdef CTRPORT_BS47_LOG
+        if (!known) bs47Note(bs, s, "draws with no place: not moved", r);
+#endif
+        return known && seam > r[1] ? 1 : 0;
+    }
+#ifdef CTRPORT_BS47_LOG
+    // Neither the HUD's nor the fight's own (her generators and spears 264..272, the borders, the box's text, FIGHT's
+    // target): a draw in the HUD rows from one is named, so the HUD's list is known whole.
+    bool own = (264 <= o && 272 >= o) || (759 <= o && 762 >= o) || o == 784 || o == 735 || o == 739;
+    if (!own && known && r[3] > seam) bs47Note(bs, s, "draws in the HUD rows: moved", r);
+    if (!known) bs47Note(bs, s, "draws with no place: moved", r);
+#endif
+    return 1;
+}
+
+// bsClearLayer6 (the frame's place: bsfollow's lift among it), then this frame's L for a G47 split frame.
+static BS_CODE47 void bs47Clear(Renderer* renderer) {
+    bsClearLayer6(renderer);
+    Bs* bs = bsState.bs;
+    Bs47* s = bs47Of(bs);
+    Runner* runner = renderer->runner;
+    if (s == nullptr) return;
+    s->on = 0;
+    s->inst = nullptr;
+    if (runner == nullptr) return;
+    float perPx = (bs->viewBottom - bs->viewTop) / 240.0f;
+    if (!(0.0f < perPx)) return;
+    int32_t lift = s->seen ? s->lift : BS_A_UP;
+    Instance* u = bsLive(runner, BS47_UBORDER);
+    Instance* d = bsLive(runner, BS47_DBORDER);
+    if (u != nullptr && d != nullptr) {
+        const Room* room = runner->currentRoom;
+        float top = room != nullptr && room->views != nullptr ? (float) room->views[0].viewY : bs->viewTop;
+        float mid = (u->y + d->y) * 0.5f; // the box centre (room y)
+        float c = (mid - top) / perPx - BS_F_MID;
+        int32_t want = !(c >= (float) BS47_LEAST) ? 0 : c >= (float) BS47_MOST ? BS47_MOST : (int32_t) (c + 0.5f); // a NaN: 0
+        lift = want;
+    }
+#ifdef CTRPORT_BS47_LOG
+    // An L change while a spear or arrow is alive is named: only the box's last frames into an attack (or out) may.
+    bool flying = bsLive(runner, BS47_SPEAR) != nullptr || bsLive(runner, BS47_RISESPEAR) != nullptr || bsLive(runner, BS47_ARROW) != nullptr;
+    if (!s->seen || lift != s->lift)
+        logInfo("battlesplit G47: frame %d: lift %d to %d (shots %s)\n", (int) runner->frameCount, s->seen ? (int) s->lift : -1,
+                (int) lift, flying ? "alive" : "none");
+#endif
+    s->seen = 1;
+    s->lift = (int16_t) lift;
+    s->on = 1;
+    bs->place.bottomDy = (int16_t) -lift; // touch's view and seam (the present takes 0: bs47Present)
+    bs->hideY = bs->viewTop + perPx * (float) lift;
+}
+
+// The present: one piece (lift 0), the top copy's cut off and the projection as the frame left it taken back first.
+static BS_CODE47 void bs47Present(Renderer* renderer, int32_t band, int32_t topDy, int32_t bottomDy, CtrBsFlash* flash) {
+    Bs47* s = bs47Of(bsState.bs);
+    if (s != nullptr && s->on) {
+        if (s->clip) {
+            s->clip = 0;
+            CtrRenderer_bsClip17(renderer, 0);
+        }
+        CtrRenderer_bs47Shift(renderer, 0.0f, s->keep);
+        bottomDy = 0;
+    }
+    CtrRenderer_bsPresentGap(renderer, band, topDy, bottomDy, flash);
+}
+
+// The arena's move for a draw on layer: up L rows on the arena layer for a moved draw, else none.
+static BS_CODE47 void bs47Apply(Renderer* renderer, Bs* bs, Bs47* s, int32_t layer) {
+    float dy = 0.0f;
+    if (layer == BS_BOTTOM && s->move) dy = -(bs->viewBottom - bs->viewTop) * ((float) s->lift / 240.0f);
+    CtrRenderer_bs47Shift(renderer, dy, s->keep);
+}
+
+// bsRouteAt56, then the move for the layer it bound; a moved bottom draw reaching above row L on both layers, its top
+// copy (drawn first) cut to the rows above L (bs47Layer takes the cut off at the switch to its arena copy).
+static BS_CODE47 bool bs47Route(Renderer* renderer, int32_t want, const float* r) {
+    Bs* bs = bsState.bs;
+    Bs47* s = bs47Of(bs);
+    if (s == nullptr || !s->on) return bsRouteAt56(renderer, want, r);
+    s->inst = bs->lastInst;
+    s->object = bs->lastObject;
+    s->move = (int8_t) bs47Moves(bs, s, want, r);
+    bool both;
+    if (s->move && 0 < s->lift && (want & BS_CLASS) == BS_BOTTOM) {
+        want &= ~BS_GUARD; // nothing is hidden: no guard
+        if (r[2] >= r[0] && bs->hideY > r[1]) {
+            both = bsRouteAt56(renderer, BS_BOTH, r);
+            bs47Apply(renderer, bs, s, bs->layer);
+            if (both && bs->layer != BS_BOTTOM && CtrRenderer_bs47Clip(renderer, s->lift)) s->clip = 1;
+            return both;
+        }
+    }
+    both = bsRouteAt56(renderer, want, r);
+    bs47Apply(renderer, bs, s, bs->layer);
+    return both;
+}
+
+// Every layer switch (in __wrap_CtrRenderer_bsLayer's first call): the top copy's cut off, the switch, then the move.
+// A draw that did not pass bs47Route (an automatic straddle's, bsBoth17) is moved unless it is the HUD's.
+static BS_CODE47 void bs47Layer(Renderer* renderer, int32_t layer) {
+    Bs* bs = bsState.bs;
+    Bs47* s = bs47Of(bs);
+    if (s != nullptr && s->clip) {
+        s->clip = 0;
+        CtrRenderer_bsClip17(renderer, 0);
+    }
+    __real_CtrRenderer_bsLayer(renderer, layer);
+    if (s == nullptr || !s->on) return;
+    if (s->inst != bs->lastInst || s->object != bs->lastObject) {
+        s->inst = bs->lastInst;
+        s->object = bs->lastObject;
+        s->move = (int8_t) bs47Moves(bs, s, bs->lastWant, nullptr);
+    }
+    bs47Apply(renderer, bs, s, layer);
+}
+#endif
 #endif

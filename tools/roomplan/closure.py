@@ -9,6 +9,8 @@ For a scene the closure adds:
   expressions of a face, other frames of an animation);
 - the room's own content: its enabled backgrounds, its tiles, and every frame of the sprite of each visible object
   placed in it;
+- disabled background slots separately, admitted only for ordinary rooms whose placed objects can write the
+  background visibility or index (codeclose.CodeClosure.writes_background, build_plan.hidden_backgrounds);
 - for a battle group, every frame of the sprite of each object whose code the group ran, visible or not
   (code_sprite: UNDERTALE's monster objects are invisible, and the sprite they name is the one drawn when they are
   hit; build_plan.whole_set).
@@ -65,6 +67,7 @@ class Closure:
             self.ok = True
         except (ValueError, struct.error, IndexError, KeyError):
             self.sprite_of, self.sprite_items, self.plan_items, self.plan_parts = {}, [], [], []
+            self.hidden_background_items = []
             self.code_sprite = []
             self.code_create_sprite = []
             self.sprite_series = []
@@ -162,14 +165,14 @@ class Closure:
                     self.walk_items = sorted({item for s in family for item in self.sprite_items[s]})
         self.code_sprite = self._code_sprites(d, chunks, plist, objects)
         self.code_create_sprite = self._code_sprites(d, chunks, plist, objects, create_only=True)
-        self.plan_items, self.plan_parts, self.walk_objects = [], [], []
+        self.plan_items, self.plan_parts, self.walk_objects, self.hidden_background_items = [], [], [], []
         for p in plist(b'ROOM'):
-            items, parts, walkers = set(), [], set()
+            items, parts, walkers, hidden = set(), [], set(), set()
             bgs, insts, tiles = (_u32(d, inside(p + off, b'ROOM')) for off in (40, 48, 52))
             for q in plist(b'ROOM', bgs):
                 enabled, index = _i32(d, inside(q, b'ROOM')), _i32(d, inside(q + 8, b'ROOM'))
-                if enabled and 0 <= index < len(backgrounds) and backgrounds[index] >= 0:
-                    items.add(backgrounds[index])
+                if 0 <= index < len(backgrounds) and backgrounds[index] >= 0:
+                    (items if enabled else hidden).add(backgrounds[index])
             for q in plist(b'ROOM', insts):
                 index = _i32(d, inside(q + 8, b'ROOM'))
                 if index in players:
@@ -185,6 +188,7 @@ class Closure:
             self.plan_items.append(sorted(items))
             self.plan_parts.append(sorted(set(parts)))
             self.walk_objects.append(sorted(walkers))
+            self.hidden_background_items.append(sorted(hidden))
 
     def walk_frames(self, room):
         """Normal walk family for an unrecorded room with a placed player, or none."""

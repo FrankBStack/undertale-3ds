@@ -494,7 +494,22 @@ static void postMessage(CtrAudioSystem* ca, const char* fmt, ...) {
     LightLock_Unlock(&ca->msgLock);
 }
 
-static void drainMessages(CtrAudioSystem* ca) {
+#ifdef ENABLE_WAD16 // msglock (this file's end): the frame's drain and the game thread's posts only try msgLock
+static void msglockDrain(CtrAudioSystem* ca);
+static void msglockPost(CtrAudioSystem* ca, const char* fmt, ...);
+static void msglockFinal(CtrAudioSystem* ca);
+#define MSGLOCK_DRAIN msglockDrain
+#define MSGLOCK_POST msglockPost
+#define MSGLOCK_FINAL msglockFinal
+#define MSGLOCK_KEEP __attribute__((noinline)) // drainMessages' one caller left (msglockFinal) doesn't inline it
+#else
+#define MSGLOCK_DRAIN drainMessages
+#define MSGLOCK_POST postMessage
+#define MSGLOCK_FINAL drainMessages
+#define MSGLOCK_KEEP
+#endif
+#line 497
+MSGLOCK_KEEP static void drainMessages(CtrAudioSystem* ca) {
     for (;;) {
         char line[MESSAGE_LENGTH];
         uint32_t dropped = 0;
@@ -2260,7 +2275,7 @@ static void ctrInit(AudioSystem* audio, DataWin* dataWin, FileSystem* fileSystem
 static void ctrDestroy(AudioSystem* audio) {
     CtrAudioSystem* ca = (CtrAudioSystem*) audio;
     shutdownAudio(ca);
-    drainMessages(ca); // includes any missing file reported during shutdown
+    MSGLOCK_FINAL(ca); // includes any missing file reported during shutdown
     if (gShutdownTarget == ca) gShutdownTarget = NULL;
 
     for (int i = 0; i < MAX_STREAM_ENTRIES; i++) free(ca->streamEntries[i].path);
@@ -2361,7 +2376,7 @@ static void ctrUpdate(AudioSystem* audio, float deltaTime) {
     if (!ca->initialized) return;
 
     bool groupChanged = AudioSystem_updateGroupGains(audio, deltaTime);
-    drainMessages(ca);
+    MSGLOCK_DRAIN(ca);
     if (ca->ndspReady) startPendingVoices(ca);
 
     for (int i = 0; i < VOICE_COUNT; i++) {
@@ -4214,7 +4229,7 @@ UTA_LATE static void utaSetCallback(ndspCallback callback, void* data) {
         return;
     }
     utaCa = (CtrAudioSystem*) data;
-    utaPost = postMessage;
+    utaPost = MSGLOCK_POST;
     if (!utaMapped) {
         for (int i = 0; i < UTA_CHANNELS; i++) {
             utaMap[i] = (int8_t) i;
@@ -6009,7 +6024,7 @@ __attribute__((noinline, optimize("Os"), section(".text.flowend_late"))) static 
     }
     flowendSongState = ok ? 2 : 0;
     flowendLastOpen = svcGetSystemTick(); // the first spare waits for a quiet second of its own
-    if (ok) postMessage(ca, flowendAheadLog, flowendSongPath, TICKS_TO_MS(flowendLastOpen - t0));
+    if (ok) MSGLOCK_POST(ca, flowendAheadLog, flowendSongPath, TICKS_TO_MS(flowendLastOpen - t0));
     return true;
 }
 #define FLOWEND_SONG_OPEN \
@@ -6463,7 +6478,7 @@ __attribute__((noinline, optimize("Os"), section(".text.flowend_late"))) void __
     }
     flowendAheadState = ok ? 2 : 0;
     flowendAheadTick = svcGetSystemTick();
-    if (ok) postMessage(ca, flowendAheadLog, flowendAheadPath, TICKS_TO_MS(svcGetSystemTick() - t0));
+    if (ok) MSGLOCK_POST(ca, flowendAheadLog, flowendAheadPath, TICKS_TO_MS(svcGetSystemTick() - t0));
 }
 #endif
 
@@ -7766,7 +7781,7 @@ AUDOFIX_FEED_CODE int32_t audofixFeedRead(CtrDecoder* dec, int16_t* out, uint32_
         __sync_synchronize();
         audofixFeeding[k] = NULL;
         if (feed) {
-            if (audofixFedEnd[k] == 0) postMessage(ca, audofixFeedLog, ca->streams[k].name, (unsigned long) at);
+            if (audofixFedEnd[k] == 0) MSGLOCK_POST(ca, audofixFeedLog, ca->streams[k].name, (unsigned long) at);
             dec->positionFrames = at + n;
             audofixFedEnd[k] = at + n;
             return (int32_t) n;
@@ -9738,7 +9753,7 @@ LOADCLASS_CODE static void loadclassOpen(CtrAudioSystem* ca) {
     }
     flowendSongState = ok ? 2 : 0;
     flowendLastOpen = svcGetSystemTick(); // the other spares wait for a quiet second of their own
-    if (ok) postMessage(ca, flowendAheadLog, flowendSongPath, TICKS_TO_MS(flowendLastOpen - t0));
+    if (ok) MSGLOCK_POST(ca, flowendAheadLog, flowendSongPath, TICKS_TO_MS(flowendLastOpen - t0));
 }
 
 // Opener thread: 0 no song paused at volume 0; 1 one is; 2 one is while the transition's flash or fall sounds. The
@@ -10634,7 +10649,7 @@ LCPAIR_CODE static void loadclassPairLog(CtrAudioSystem* ca) {
     for (int k = 0; STREAM_CONTEXTS > k; k++) {
         GomCtx* g = &loadclassGom.c[k];
         if (g->copy != LOADCLASS_JOINS || __atomic_load_n(&g->phase, __ATOMIC_ACQUIRE) != GOM_DONE) continue;
-        postMessage(ca, loadclassJoinFormat, ca->streams[k].name, 2u, g->said, g->heardTick > g->cueTick ? TICKS_TO_MS(g->heardTick - g->cueTick) : 0.0,
+        MSGLOCK_POST(ca, loadclassJoinFormat, ca->streams[k].name, 2u, g->said, g->heardTick > g->cueTick ? TICKS_TO_MS(g->heardTick - g->cueTick) : 0.0,
                     (unsigned long) g->target, (long) g->residual, (long) g->offset[0], (long) g->offset[1], (unsigned) g->tries);
         g->copy = 0;
     }
@@ -10825,7 +10840,7 @@ LCLATER_CODE static void loadclassOpenAny(CtrAudioSystem* ca) {
     }
     flowendSongState = ok ? 2 : 0;
     flowendLastOpen = svcGetSystemTick(); // the other spares wait for a quiet second of their own
-    if (ok) postMessage(ca, flowendAheadLog, flowendSongPath, TICKS_TO_MS(flowendLastOpen - t0));
+    if (ok) MSGLOCK_POST(ca, flowendAheadLog, flowendSongPath, TICKS_TO_MS(flowendLastOpen - t0));
 }
 
 // Opener thread, at a wait with no play waiting (CtrAudioSystem_chainNoteLoadclass): true when it opened a sound. The
@@ -11045,7 +11060,11 @@ USSTOP_TTEXT static void hplTestRead(uint32_t got) {
 
 // The file's own functions, by their assembler names (no new call-graph edge).
 void hplUpdateNext(AudioSystem* audio, float deltaTime) __asm__("gomUpdate");
+#ifdef ENABLE_WAD16 // msglock (this file's end): hplStart's line is posted from the game thread's update
+void hplPost(CtrAudioSystem* ca, const char* fmt, ...) __asm__("msglockPost");
+#else
 void hplPost(CtrAudioSystem* ca, const char* fmt, ...) __asm__("postMessage");
+#endif
 int32_t hplReadNext(CtrDecoder* dec, int16_t* out, uint32_t maxFrames) __asm__("audofixFeedRead");
 void hplRegisterNext(ndspCallback callback, void* data) __asm__("mlRegister");
 void hplStopNext(void) __asm__("CtrAudioSystem_chainStopFlowhitch");
@@ -11701,6 +11720,182 @@ LCSTOP_CODE bool lcstopIsPlaying(AudioSystem* audio, int32_t soundOrInstance) {
 }
 #endif
 
+// ===[ msglock (change audiomain, 11-14 21:2x; UNDERTALE): the game thread never waits on the audio log queue ]===
+// drainMessages took msgLock with a blocking LightLock_Lock at every update. LightLock has no priority inheritance, and
+// the threads that post run on core 1, where one can be paused inside its short section (a higher-priority wake, the
+// application time limit): the game thread then waits for it (52.8 ms measured on the o2ds before the boost;
+// audiomain.md, "msgLock inversion"). Now the frame's drain only tries the lock. Taken, it does what drainMessages did:
+// the queued lines in order, then, under the same hold, the missing files and the drop count. Busy, it returns at once
+// and the next update goes on from there: nothing is lost and the order stays. A post made on the game thread (the late
+// posters' calls, utaPost, the sound pack's records) tries the lock too. When it is busy, the line goes to the game
+// thread's own overflow (8 lines, allocated at the first drain), and so does every later game-thread line until a
+// drain empties it, so the game thread's lines keep their order. The drain that empties the queue logs the overflow
+// right after the queued lines; ctrDestroy's final drain does too. A line is lost only if the overflow is full, or
+// was never allocated: those are counted apart from the queue's own drops, on their own line with the reason, and a
+// failed allocation is logged at once. A post from any other thread waits for the lock as before.
+// Threads: the game thread is the one that drains, its TLS pointer stored once, at the first drain (before it, every
+// post waits, as before). That word is read from every thread, so its accesses are atomic. The overflow and its count
+// are read and written only behind MSGLOCK_ON_GAME(), so only the game thread touches them: plain memory, no barriers.
+// msglockDrain's one caller is ctrUpdate (main.c's frame loop, :1457 paused and :1525), and msglockFinal's is
+// ctrDestroy (main.c :447 exitAfterScreen and :1757 main's exit), all on the main thread; test_msglock.py checks the
+// callers. Every way in to the queue from code that can run on the game thread is a thread-aware one: MSGLOCK_POST,
+// utaPost, hplPost's assembler name (hplStart runs in the game thread's update) and the sound pack's posts.
+// Uncontended, every line, its order and the drop line are as they were. Lines the overflow held come after any direct
+// logInfo line made between their post and the drain that logs them (a queued line already came at the drain).
+// Placement: the code is an AAC text tail input (.aacout.text.msglock, aacout.cmake: after every earlier tenant, the
+// latereclaim block included; later tail units may follow it), with its own three strings in the same input (assembled
+// there: a C constant cannot share a section with code); the state's 16 B are carved from z_sdmigrate.c's placeholder
+// (late_reserve.ld, SM_CARVE_MSGLOCK), so no other address moves. DELTARUNE keeps the blocking drain.
+#ifdef ENABLE_WAD16 // AAC tenants carry an explicit guard (test_aacslot_shared.py)
+#define MSGLOCK_CODE __attribute__((noinline, noipa, section(".aacout.text.msglock")))
+#define MSGLOCK_SLOTS 8u
+typedef char MsglockLine[MESSAGE_LENGTH];
+static void* msglockGame __attribute__((section(".bss.msglock_late")));         // the draining (game) thread's TLS
+// Whether the caller is the game thread. msglockGame is stored once (the first drain) and read from every thread, so
+// both are atomic; relaxed is enough, as it publishes nothing else (only the game thread touches the overflow).
+#define MSGLOCK_ON_GAME() (getThreadLocalStorage() == __atomic_load_n(&msglockGame, __ATOMIC_RELAXED))
+static uint32_t msglockDropped __attribute__((section(".bss.msglock_late")));   // its lines lost (overflow full or none)
+static MsglockLine* msglockOv __attribute__((section(".bss.msglock_late")));     // its overflow (MSGLOCK_SLOTS lines)
+static uint32_t msglockOvCount __attribute__((section(".bss.msglock_late")));   // lines in it
+extern const char msglockLostLog[] __asm__("msglockLostLog"), msglockFull[] __asm__("msglockFull"),
+    msglockNone[] __asm__("msglockNone");
+// MSGLOCK_STRINGS begin (test_msglock.py gives the host compiler these as C arrays)
+__asm__(".pushsection .aacout.text.msglock,\"ax\",%progbits\n"
+        "msglockLostLog: .asciz \"Audio: %lu game thread messages dropped (overflow %s)\\n\"\n"
+        "msglockFull: .asciz \"full\"\n"
+        "msglockNone: .asciz \"not allocated\"\n"
+        ".balign 4\n.popsection");
+// MSGLOCK_STRINGS end
+
+// Whether the caller now holds msgLock: another thread waits for it, as postMessage does; the game thread only tries.
+// The game thread takes it only while its overflow is empty, so its lines stay in order.
+MSGLOCK_CODE static bool msglockTake(CtrAudioSystem* ca) {
+    if (!MSGLOCK_ON_GAME()) {
+        LightLock_Lock(&ca->msgLock);
+        return true;
+    }
+    return msglockOvCount == 0 && LightLock_TryLock(&ca->msgLock) == 0;
+}
+
+// The game thread's overflow, in order, then empty (game thread only).
+MSGLOCK_CODE static void msglockFlush(void) {
+    for (uint32_t i = 0; msglockOvCount > i; i++) logQuiet("%s", msglockOv[i]);
+    msglockOvCount = 0;
+}
+
+// The game thread's lost lines: their count and why, then zero (game thread only).
+MSGLOCK_CODE static void msglockReport(void) {
+    if (msglockDropped > 0) logQuiet(msglockLostLog, (unsigned long) msglockDropped, msglockOv ? msglockFull : msglockNone);
+    msglockDropped = 0;
+}
+
+// ctrUpdate's drain: drainMessages with a try at each take.
+MSGLOCK_CODE static void msglockDrain(CtrAudioSystem* ca) {
+    if (__atomic_load_n(&msglockGame, __ATOMIC_RELAXED) == NULL) { // the first drain: this is the game thread
+        msglockOv = (MsglockLine*) malloc(MSGLOCK_SLOTS * sizeof(MsglockLine)); // its overflow, made once
+        __atomic_store_n(&msglockGame, getThreadLocalStorage(), __ATOMIC_RELAXED);
+        if (msglockOv == NULL) logQuiet(msglockLostLog, 0ul, msglockNone);
+    }
+    if (!MSGLOCK_ON_GAME()) return; // never: ctrUpdate runs on the main thread only
+    for (;;) {
+        char line[MESSAGE_LENGTH];
+        uint32_t dropped = 0;
+        if (LightLock_TryLock(&ca->msgLock) != 0) return; // busy: the next update goes on from here
+        if (ca->msgCount == 0) {
+            char** missing = ca->missingFiles;
+            ca->missingFiles = NULL;
+            dropped = ca->msgDropped;
+            ca->msgDropped = 0;
+            LightLock_Unlock(&ca->msgLock);
+            msglockFlush(); // after the queue's lines: the overflow's are newer than the game thread's queued ones
+            for (ptrdiff_t i = 0; arrlen(missing) > i; i++) {
+                CtrNotice_missing("Missing audio", missing[i]);
+                free(missing[i]);
+            }
+            arrfree(missing);
+            if (dropped > 0) logQuiet("Audio: %lu decode thread messages dropped\n", (unsigned long) dropped);
+            msglockReport();
+            return;
+        }
+        memcpy(line, ca->messages[ca->msgHead], sizeof(line));
+        ca->msgHead = (ca->msgHead + 1) % MESSAGE_SLOTS;
+        ca->msgCount--;
+        LightLock_Unlock(&ca->msgLock);
+        logQuiet("%s", line);
+    }
+}
+
+// postMessage, but on the game thread a busy lock (or a non-empty overflow) sends the line to the overflow instead of
+// waiting; with the overflow full, or none, the line is counted as lost.
+MSGLOCK_CODE __attribute__((used)) static void msglockPost(CtrAudioSystem* ca, const char* fmt, ...) {
+    char line[MESSAGE_LENGTH];
+    va_list args;
+    va_start(args, fmt);
+    vsnprintf(line, sizeof(line), fmt, args);
+    va_end(args);
+    if (!msglockTake(ca)) { // the game thread's: the lock is busy, or its overflow holds earlier lines
+        if (msglockOv != NULL && MSGLOCK_SLOTS > msglockOvCount) memcpy(msglockOv[msglockOvCount++], line, sizeof(line));
+        else msglockDropped++;
+        return;
+    }
+    if (ca->msgCount < MESSAGE_SLOTS) {
+        memcpy(ca->messages[(ca->msgHead + ca->msgCount) % MESSAGE_SLOTS], line, sizeof(line));
+        ca->msgCount++;
+    } else {
+        ca->msgDropped++;
+    }
+    LightLock_Unlock(&ca->msgLock);
+}
+
+// ctrDestroy's drain (the threads are stopped): drainMessages, blocking as before, then the overflow's lines and the
+// game thread's lost count. Called on the game thread (main.c's exits); from any other, the overflow is left alone.
+MSGLOCK_CODE static void msglockFinal(CtrAudioSystem* ca) {
+    drainMessages(ca);
+    if (!MSGLOCK_ON_GAME()) return;
+    msglockFlush();
+    msglockReport();
+}
+
+#ifdef CTRPORT_ADPCM_SFXPACK
+// The sound pack's ways in (z_logfix.c's CtrLogfix_post calls these in place of CtrLogfix_postMessage and
+// CtrLogfix_postLines): the same posts, with msglockPost's rule for the game thread.
+void CtrMsglock_post(void* ca, const char* format, ...);
+__attribute__((naked, noinline, section(".aacout.text.msglock"))) void CtrMsglock_post(void* ca __attribute__((unused)),
+                                                                                      const char* format __attribute__((unused)), ...) {
+    __asm__("b msglockPost");
+}
+
+// CtrLogfix_postLines (all of a record's lines in one hold, or none), but on the game thread a busy lock (or a non-empty
+// overflow) sends them all to the overflow, or, with too little room there, counts them all as lost.
+// Another thread's record goes to CtrLogfix_postLines itself, which waits as before. That call is also what keeps
+// .text_logfix in the link: z_logfix.c no longer names it, and the linker's section GC would drop its 192 B and move
+// every later late function down (the #36 link showed it).
+bool CtrMsglock_postLines(void* vp, uint32_t count, void (*fill)(void* ctx, uint32_t i, char* slot, uint32_t size), void* ctx);
+MSGLOCK_CODE bool CtrMsglock_postLines(void* vp, uint32_t count, void (*fill)(void*, uint32_t, char*, uint32_t), void* ctx) {
+    CtrAudioSystem* ca = (CtrAudioSystem*) vp;
+    if (!MSGLOCK_ON_GAME()) return CtrLogfix_postLines(vp, count, fill, ctx);
+    if (msglockOvCount != 0 || LightLock_TryLock(&ca->msgLock) != 0) {
+        if (msglockOv != NULL && MSGLOCK_SLOTS - msglockOvCount >= count) {
+            for (uint32_t i = 0; count > i; i++) fill(ctx, i, msglockOv[msglockOvCount + i], MESSAGE_LENGTH);
+            msglockOvCount += count;
+            return true;
+        }
+        msglockDropped += count;
+        return false;
+    }
+    bool room = MESSAGE_SLOTS >= count && MESSAGE_SLOTS - count >= ca->msgCount;
+    if (room) {
+        for (uint32_t i = 0; count > i; i++) fill(ctx, i, ca->messages[(ca->msgHead + ca->msgCount + i) % MESSAGE_SLOTS], MESSAGE_LENGTH);
+        ca->msgCount += count;
+    } else {
+        ca->msgDropped += count;
+    }
+    LightLock_Unlock(&ca->msgLock);
+    return room;
+}
+#endif
+#endif
+
 #include "sfxlate_boost_contract.inc"
 #line 10879
 // bootahead (first update, changes bootmask and bootahead2): the menu song named to the spare, at the end so nothing above
@@ -11711,3 +11906,5 @@ LCSTOP_CODE bool lcstopIsPlaying(AudioSystem* audio, int32_t soundOrInstance) {
 #endif
 #line 11682
 #include "ctr_bootahead.inc"
+// soulahead (change audiomain, 11-15): the first SOUL fight's cold opens, its own link after bootahead's.
+#include "ctr_soulahead.inc"

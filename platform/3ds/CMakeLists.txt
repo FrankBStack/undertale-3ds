@@ -388,6 +388,7 @@ endif()
 # ===[ 3DS platform layer ]===
 file(GLOB PLATFORM_SOURCES CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/source/*.c")
 list(REMOVE_ITEM PLATFORM_SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/source/z_fpsghost_hintpage.c")
+list(REMOVE_ITEM PLATFORM_SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/source/z_gofps.c") # gofps.cmake
 list(REMOVE_ITEM PLATFORM_SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/source/z_audioboost.c") # Explicit Old-only unit below.
 list(REMOVE_ITEM PLATFORM_SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/source/z_bootline_console.c") # Added explicitly for UT below.
 list(REMOVE_ITEM PLATFORM_SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/source/z_stalecarry.c") # Only stalecarry builds add it below.
@@ -1043,7 +1044,11 @@ else()
     # (z_utstall.c utflWholeAll), which left ~620 KiB at zq45, so 256 KiB keeps ~360 KiB for the features' own memory
     # (bufexp's results: 512 KiB clean on Azahar, 1024 KiB cut the set, 3 held frames in the fight).
     # New loses half each from heap and linear (57,264 KB each). memcap: tools/analysis/console_memcap.py.
-    set(ctrport_ut_late 0xEB000)
+    # New AAC slot (review decision 11-15, N10 rider R9): New's AAC text slot grew 16 KiB (aacout.cmake), which moves
+    # New's late text start by exactly 0x4000; New's late reserve gives the same 0x4000 back (0xEB000 -> 0xE7000), so
+    # New's late text limit, .rodata, .data, .bss, TLS, heap and linear memory do not move. New release late text
+    # free 304,120 B at #43, 16,384 B less from here.
+    set(ctrport_ut_late 0xE7000)
     if(CTRPORT_TARGET STREQUAL "o3ds")
         # Old 1.0 envelope (the maintainer's conditional OK, 11-09): six more
         # pages of late code, 0xB6000 -> 0xBC000, with the AAC text slot's +36 KiB (aacout.cmake) and 284 B of zeroed
@@ -1502,6 +1507,44 @@ if(CTRPORT_GAME STREQUAL "deltarune")
     string(REPLACE "    *libctru.a:hid.o(.text.hidTouchRead)
 " "" CTRPORT_LATE_LD_TEXT "${CTRPORT_LATE_LD_TEXT}")
 endif()
+# latereclaim choice routing: late_reserve.ld precedes aacout.ld, so the first
+# selector wins. G100 may compose before or after this unit; its exact late line
+# determines the expected receiving size on each configure. Other builds retain it.
+set(CTRPORT_LATERECLAIM_CHOICE_BYTES 0)
+if(CTRPORT_GAME STREQUAL "undertale" AND CTRPORT_TARGET STREQUAL "o3ds" AND CTRPORT_RELEASE_SOURCE_URL)
+    set(latereclaim_line "    *(.text_bschoice)\n")
+    string(REPLACE "${latereclaim_line}" "" latereclaim_rest "${CTRPORT_LATE_LD_TEXT}")
+    string(LENGTH "${CTRPORT_LATE_LD_TEXT}" latereclaim_before)
+    string(LENGTH "${latereclaim_rest}" latereclaim_after)
+    string(LENGTH "${latereclaim_line}" latereclaim_length)
+    math(EXPR latereclaim_removed "${latereclaim_before} - ${latereclaim_after}")
+    if(latereclaim_removed EQUAL latereclaim_length)
+        set(CTRPORT_LATERECLAIM_CHOICE_BYTES 76)
+    elseif(NOT latereclaim_removed EQUAL 0)
+        message(FATAL_ERROR "latereclaim: late_reserve.ld must have zero or one exact .text_bschoice selector")
+    endif()
+    string(FIND "${latereclaim_rest}" ".text_bschoice" latereclaim_remaining)
+    if(NOT latereclaim_remaining LESS 0)
+        message(FATAL_ERROR "latereclaim: unrecognized .text_bschoice selector in late_reserve.ld")
+    endif()
+    set(CTRPORT_LATE_LD_TEXT "${latereclaim_rest}")
+    # N11 appended hiscase's two live inputs. Reclaim the entire suffix;
+    # neither original source body/section name changes on any target.
+    foreach(latereclaim_tail noticegate gofps)
+        set(latereclaim_line "    *(.text_${latereclaim_tail}_late)\n")
+        string(REPLACE "${latereclaim_line}" "" latereclaim_rest "${CTRPORT_LATE_LD_TEXT}")
+        string(LENGTH "${CTRPORT_LATE_LD_TEXT}" latereclaim_before)
+        string(LENGTH "${latereclaim_rest}" latereclaim_after)
+        string(LENGTH "${latereclaim_line}" latereclaim_length)
+        math(EXPR latereclaim_removed "${latereclaim_before} - ${latereclaim_after}")
+        string(FIND "${latereclaim_rest}" ".text_${latereclaim_tail}_late" latereclaim_remaining)
+        if(NOT latereclaim_removed EQUAL latereclaim_length OR NOT latereclaim_remaining LESS 0)
+            message(FATAL_ERROR "latereclaim: exactly one ${latereclaim_tail} late selector required")
+        endif()
+        set(CTRPORT_LATE_LD_TEXT "${latereclaim_rest}")
+    endforeach()
+endif()
+# End latereclaim choice routing.
 # Development-only code in the AAC slots (CTRPORT_DEVONLY_AAC above): this build's copy of the script drops the late
 # selectors for labguard, the pen log's own pair and bsrdev, so aacout.cmake's dev-only inputs (after every other AAC
 # input) take them. Release builds keep the script as it is; every line must be found exactly once.
@@ -2215,6 +2258,8 @@ if(CTRPORT_GAME STREQUAL "undertale")
         # (the same call; dimlight's wrapper still answers it).
         set_property(SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/source/ctr_renderer.c" APPEND PROPERTY COMPILE_DEFINITIONS
             "gspLcdInit=CtrBattlesplit_lcdInitBsr")
+        # G47's arena move (battlesplit2, 11-15; z_battlesplit.c's end) logs its lift and any draw it cannot place.
+        set_property(SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/source/z_battlesplit.c" APPEND PROPERTY COMPILE_DEFINITIONS CTRPORT_BS47_LOG)
     endif()
     set_property(SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/source/ctr_renderer.c" APPEND PROPERTY COMPILE_DEFINITIONS
         "CtrKeeplit_setDisplay=CtrDimlight_setDisplay")
@@ -3945,6 +3990,11 @@ if(CTRPORT_USE_TREMOR AND TREMOR_INCLUDE_DIR AND TREMOR_LIBRARY AND OGG_LIBRARY)
             message(STATUS "Vorbis codebook share off: ${TREMOR_LIBRARY} is not the checked Tremor build")
         endif()
     endif()
+    # soulahead r2 (UNDERTALE; source/ctr_soulahead.inc): a stream's open is seen at its read-ahead start, and each
+    # room change at the runner's physics set-up. Wrapped, so openStream and the runner keep their code.
+    if(CTRPORT_GAME STREQUAL "undertale")
+        target_link_options(ctrport PRIVATE -Wl,--wrap=CtrDecoder_startReadAhead,--wrap=Physics_initRoom)
+    endif()
 endif()
 # pacer A + E1 (UNDERTALE Old 3DS): the audio threads' blocks of up to 256 KiB come from an arena of their own, so a
 # core-1 audio thread paused inside malloc or free (the app time limit) no longer holds newlib's heap lock against the
@@ -4033,8 +4083,9 @@ if(CTRPORT_GAME STREQUAL "undertale")
     # ctr_audio_system.c) since loadaudio 76dd8ab09; on z_freebies.c this define was dead and the window hooks never
     # installed (UT-036 regression, zq47). tools/analysis/test_utwindow_chain.py checks the chain from the caller.
     # utfade (source/z_utfade.c) sits in front: a door's room change shows black while the room loads. The chain is
-    # CtrLoadmix_handleRoomChange -> CtrUtfade_pendingRoom -> CtrGameover_pendingRoom -> CtrUtWindow_pendingRoom
-    # -> the real function; each unit's __real_ call names the next link. No new link wraps.
+    # CtrLoadmix_handleRoomChange -> CtrUtfade_pendingRoom -> CtrGameover_pendingRoom -> CtrListfree_pendingRoom
+    # -> CtrUtWindow_pendingRoom -> the real function; each unit's __real_ call names the next link. No new link wraps.
+    # (listfree's two defines sit with game over's, near the end of this file.)
     set_property(SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/source/ctr_audio_system.c" APPEND PROPERTY
         COMPILE_DEFINITIONS __real_Runner_handlePendingRoomChange=CtrUtfade_pendingRoom)
     set_property(SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/source/z_utfade.c" APPEND PROPERTY
@@ -4358,7 +4409,7 @@ endif()
 
 # battlesplit (change battlesplit, UNDERTALE): the split battle layout. All its code, constants and state are late
 # (late_reserve.ld). It takes main.c's Runner_drawViews call, except in the test builds that take it themselves (the
-# counter probe and the half census), where it never splits.
+# counter probe and the half census). The half census never splits; the counter probe passes the call on to it.
 if(CTRPORT_GAME STREQUAL "undertale")
     set_source_files_properties("${CMAKE_CURRENT_SOURCE_DIR}/source/z_battlesplit.c"
         "${CMAKE_CURRENT_SOURCE_DIR}/source/z_battlesplitbsr.c" "${CMAKE_CURRENT_SOURCE_DIR}/source/z_bsgroup.c"
@@ -4366,6 +4417,14 @@ if(CTRPORT_GAME STREQUAL "undertale")
         COMPILE_OPTIONS "-Os;-fno-merge-constants;-fno-tree-switch-conversion;-fno-jump-tables")
     if(NOT CTRPORT_ASG_PROBE AND NOT CTRPORT_HALF_CENSUS)
         target_link_options(ctrport PRIVATE -Wl,--wrap=Runner_drawViews)
+    elseif(NOT CTRPORT_HALF_CENSUS)
+        # asgsmart (c26rev6 ASGS1-1): the counter probe's draw wrapper calls the split's by the name it has here, so a
+        # probe run with battle_layout=1 splits and its counts are the Split's (the probe's step wrapper does the same
+        # with inputlate's, above).
+        set_property(SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/source/z_battlesplit.c" APPEND PROPERTY COMPILE_DEFINITIONS
+                     "__wrap_Runner_drawViews=Battlesplit_drawViewsUnlinked")
+        set_property(SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/source/ctr_asgprobe.c" APPEND PROPERTY COMPILE_DEFINITIONS
+                     "AP_BATTLESPLIT")
     endif()
     # battlesplit11f: runner.c's run draws, so each later draw of a run is routed (z_battlesplit.c defines the
     # wrappers where runner.c makes the calls, UTK_PLAIN_RUNS).
@@ -4374,6 +4433,9 @@ if(CTRPORT_GAME STREQUAL "undertale")
     # battlesplit17: every layer switch from z_battlesplit.c passes its band clip first (the wrapper is in that file,
     # battlesplit's AAC tenant; CtrRenderer_bsLayer itself stays where it is).
     target_link_options(ctrport PRIVATE -Wl,--wrap=CtrRenderer_bsLayer)
+    # arenaclr (asgsmart, 11-14): the layer's clear puts z_battlesplit.c's clear twin in the split's table (the
+    # wrapper is in that file's .text_arenaclr; CtrRenderer_bsClearLayer stays where it is).
+    target_link_options(ctrport PRIVATE -Wl,--wrap=CtrRenderer_bsClearLayer)
     # battlesplit22 (ctr_renderer.c's end): the Split's top margin drawn before the present, and 14c/14f's strip noted.
     target_link_options(ctrport PRIVATE -Wl,--wrap=CtrRenderer_bsPresent5,--wrap=CtrRenderer_bsStripCopy14)
     # bsplace (build.sh "bsplace", tests only, never Release): L switches preset A's placement between (b) and (c).
@@ -4498,6 +4560,13 @@ endif()
 if(CTRPORT_GAME STREQUAL "undertale" AND NOT CTRPORT_RELEASE_SOURCE_URL)
     set_property(SOURCE "${ENGINE_DIR}/src/bench_script.c" "${CMAKE_CURRENT_SOURCE_DIR}/source/ctr_benchmark.c"
                  APPEND PROPERTY COMPILE_DEFINITIONS CTRPORT_BENCH_GLOBAL_VARI)
+endif()
+# battletouch #51 (lead 11-15): the tap hold's "pace: tap hold bottom" line (ctr_renderer.c), touch-test builds
+# only (u2 r2): its code and string sit in the production btswitch AAC input, so a plain dev build must link that
+# input as release does (check_devonly_aac rule 1: dev's production end is release's used end).
+if(CTRPORT_GAME STREQUAL "undertale" AND CTRPORT_TOUCH_TEST)
+    set_property(SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/source/ctr_renderer.c"
+                 APPEND PROPERTY COMPILE_DEFINITIONS CTRPORT_BTH_LOG)
 endif()
 # menutime (change scanout, ethanlog5 row 13; UNDERTALE only): the options menu's open and close timed for the log, and
 # its glyphs read in the game's load behind the loading bar so that its first open never reads the card, and the press
@@ -5061,6 +5130,7 @@ if(CTRPORT_GAME STREQUAL "undertale")
 endif()
 
 include("${CMAKE_CURRENT_SOURCE_DIR}/fpsghost_hintpage.cmake")
+include("${CMAKE_CURRENT_SOURCE_DIR}/gofps.cmake")
 
 # sfxboost: configure the Old-only audio ceiling before the final dispatcher.
 include("${CMAKE_CURRENT_SOURCE_DIR}/sfxlate_boost.cmake")
@@ -5073,7 +5143,14 @@ if(CTRPORT_GAME STREQUAL "undertale")
         "${CMAKE_CURRENT_SOURCE_DIR}/source/ctr_gameoverscreen.inc"
         "${CMAKE_CURRENT_SOURCE_DIR}/../../tools/analysis/vine_extract.py")
     set_property(SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/source/ctr_renderer.c" APPEND PROPERTY COMPILE_DEFINITIONS
+        __real_Runner_handlePendingRoomChange=CtrListfree_pendingRoom)
+    # listfree (change stepdrift): after a room change, free the per-object instance lists left empty (z_listfree.c,
+    # .aacout.text.listfree on both models). Its link sits between game over and utwindow: CtrGameover_pendingRoom ->
+    # CtrListfree_pendingRoom -> CtrUtWindow_pendingRoom -> the real function, and it frees after they return.
+    set_property(SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/source/z_listfree.c" APPEND PROPERTY COMPILE_DEFINITIONS
         __real_Runner_handlePendingRoomChange=CtrUtWindow_pendingRoom)
+    set_source_files_properties("${CMAKE_CURRENT_SOURCE_DIR}/source/z_listfree.c" PROPERTIES
+        COMPILE_OPTIONS "-Os;-fno-merge-constants;-fno-tree-switch-conversion;-fno-jump-tables")
 endif()
 
 # Dialogue close retirement: a source-level continuation, no compiler adapter
@@ -5084,7 +5161,9 @@ if(CTRPORT_GAME STREQUAL "undertale")
     set_property(SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/source/main.c" APPEND PROPERTY
         COMPILE_DEFINITIONS "CtrBlank_dialogueShown=CtrDlgtop_consoleShown")
     set_property(SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/source/ctr_renderer.c" APPEND PROPERTY OBJECT_DEPENDS
-        "${CMAKE_CURRENT_SOURCE_DIR}/source/ctr_dlgtop_retire.inc")
+        "${CMAKE_CURRENT_SOURCE_DIR}/source/ctr_dlgtop_retire.inc"
+        "${CMAKE_CURRENT_SOURCE_DIR}/source/ctr_dlgtop_closeblack.inc"
+        "${CMAKE_CURRENT_SOURCE_DIR}/source/ctr_dlgtop_admit.inc" "${CMAKE_CURRENT_SOURCE_DIR}/source/ctr_dlgtop_wake.inc")
 endif()
 
 # Last: the launcher dispatcher wraps the finished C_COMPILER_LAUNCHER chain.

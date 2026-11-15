@@ -19,3 +19,11 @@
 // for any other scene, no scene, or no data.
 void CtrBsmex_frameF(Renderer* renderer, int32_t room, int32_t group, CtrLayoutPlace* place, float viewTop, float perPx,
                      float* split, uint8_t* whole, uint32_t frames);
+
+// exend (change battlesplit2, 11-15; z_bsmex.c's end, AAC): battlesplit's call in place of CtrBsmex_frameF (the same
+// arguments): it, then in Mettaton EX's ending the centred place, never the whole one.
+void CtrBsmex_frameX(Renderer* renderer, int32_t room, int32_t group, CtrLayoutPlace* place, float viewTop, float perPx,
+                     float* split, uint8_t* whole, uint32_t frames);
+// True when this frame's splitY is CtrBsmex_frameF's moved line (a mode 8 scene, Mettaton EX seen, the centred place):
+// battlesplit's by_row draws then keep the band's line (bandY); the moved line is BY_CALL's alone.
+bool CtrBsmex_rowsKept(void);

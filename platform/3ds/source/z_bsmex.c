@@ -150,4 +150,67 @@ BSM_CODE void CtrBsmex_frameF(Renderer* renderer, int32_t room, int32_t group, C
         if (*whole == CTR_BSMEX_WHOLE) *whole = 0;
     }
 }
+
+// ===[ exend (change battlesplit2, 11-15; the maintainer's EX ending reports) ]===
+// Two of maintainer's 11-15 reports from his Split play (Old 3DS, N8.1), both from the place above:
+// - The concluding speech all white ("i cant see any of his dialogue", while the ratings' call-in text shows, and
+//   Original shows it): the speech's text writer (class by_row) is placed at Mettaton's y + 30, room y 80 or
+//   more, and once he is seen splitY is the moved line (room y 80), so its text went to the arena layer, black on the
+//   bottom screen's black, and its bubble (top) stayed empty on the top screen. CtrBsmex_rowsKept tells battlesplit's
+//   router (bsRouteAtEx, z_battlesplit.c's end) when the line is moved: by_row draws then keep the band's line, as
+//   before Mettaton EX is seen, and the moved line is BY_CALL's alone (the shots it is for).
+// - After Split, Original, Split in his ending, Mettaton and the ratings stayed on the bottom screen: a split's first
+//   frame takes the whole place for a heart value of turns with mnfight 1 or 2 or the heart cohort alive, and in the
+//   ending turns keeps its last heart value (Alarm 6 adds no more) while his speech runs with mnfight 1. The white
+//   flash at his end was on the bottom screen alone for the same reason. CtrBsmex_frameX: in his ending (con
+//   BSM_ENDING or more: 50 to 59 his death, 90 to 105 the ratings' end; his Create sets 0, only his Step and the fourth
+//   heart set 50 or more, his Alarm 4 adds 1) the place is the centred one, never the whole one: the lift goes back as
+//   CtrBsmex_frameF takes it back (at once on a split's first frame, else BSM_STEP rows a frame), the lines and the
+//   flag as its centred place has them.
+// Presentation only, as the rest of this file: reads his con (a find, never an insert). AAC only
+// (.aacout.text.bsexend); its paired constants input stays empty.
+#define BSM_CODEX __attribute__((noinline, noipa, optimize("Os"), section(".aacout.text.bsexend")))
+#define BSM_ENDING 50 // his con from which the fight is ending
+
+// Whether Mettaton EX (ex) is in his ending: his con at BSM_ENDING or more. bsmInt's find, without its cap.
+static BSM_CODEX bool bsmEnding(VMContext* vm, Instance* ex) {
+    char name[4] = { 'c', 'o', 'n', '\0' };
+    ptrdiff_t slot = shgeti(vm->varNameMap, name);
+    if (0 > slot || ex->selfVars.capacity == 0) return false;
+    int32_t var = (int32_t) vm->varNameMap[slot].value;
+    const IntRValueHashMap* map = &ex->selfVars;
+    uint32_t mask = map->mask, idx = ((uint32_t) var * 0x9E3779B9u) & mask;
+    while (map->entries[idx].key != var) {
+        if (map->entries[idx].key == INT_RVALUE_HASHMAP_EMPTY_KEY) return false;
+        idx = (idx + 1) & mask;
+    }
+    const RValue* v = &map->entries[idx].value;
+    if (v->type == RVALUE_INT32) return v->int32 >= BSM_ENDING;
+    return v->type == RVALUE_REAL && v->real >= BSM_ENDING;
+}
+
+BSM_CODEX void CtrBsmex_frameX(Renderer* renderer, int32_t room, int32_t group, CtrLayoutPlace* place, float viewTop, float perPx,
+                               float* split, uint8_t* whole, uint32_t frames) {
+    int32_t lift = -place->bottomDy; // before CtrBsmex_frameF moves it
+    float band = split[1];
+    uint8_t flag = *whole;
+    CtrBsmex_frameF(renderer, room, group, place, viewTop, perPx, split, whole, frames);
+    Runner* runner = renderer != nullptr ? renderer->runner : nullptr;
+    if (bsmHere == 0 || bsmWhole == 0 || runner == nullptr || !(0.0f < perPx)) return;
+    Instance* ex = bsmLive(runner, BSM_EX);
+    if (ex == nullptr || !bsmEnding(runner->vmContext, ex)) return;
+    bsmWhole = 0;
+    int32_t want = bsmLift;
+    if (frames == 0 || 0 > lift || lift > BSM_LIFT_MOST) lift = want;
+    else lift = want > lift + BSM_STEP ? lift + BSM_STEP : lift - BSM_STEP > want ? lift - BSM_STEP : want;
+    place->bottomDy = (int16_t) -lift;
+    split[2] = viewTop + perPx * (float) lift; // hideY: the bottom screen's first row
+    split[1] = band;                          // bandY: the band's, as before the call
+    split[0] = split[2];                      // splitY: the BY_CALL line at the bottom screen's first row (he is seen)
+    *whole = flag == CTR_BSMEX_WHOLE ? 0 : flag;
+}
+
+BSM_CODEX bool CtrBsmex_rowsKept(void) {
+    return bsmHere != 0 && bsmSeen != 0 && bsmWhole == 0;
+}
 #endif // ENABLE_WAD16

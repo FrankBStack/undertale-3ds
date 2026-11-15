@@ -59,7 +59,8 @@ void CtrBlank_vblank1Lock(LightLock*);
 void __real_CtrBlank_yieldBottom(void*, bool);
 void __real_CtrDimlight_setDisplay(Renderer*, const CtrDisplaySettings*);
 void __real_CtrDimlight_noticeClear(void);
-void __real_CtrScreens_screenshotNotice(bool);
+void bpNoticeGate(bool) __asm__("CtrBottomPaint_noticeGate"); // menu gate (file end); asm name: keeps emit order
+void bpYieldGate(void*, bool) __asm__("CtrBottomPaint_yieldGate"); // the same, for the bottom menu (file end)
 void __real_CtrDimlight_rosalinaSleep(s64);
 void __real_CtrRenderer_endFrame(Renderer*);
 #if defined(CTRPORT_TARGET_O3DS)
@@ -270,7 +271,7 @@ BP_CODE void __wrap_CtrBlank_yieldBottom(void* r, bool yield) {
         if (p->yielded != yield) { bpRevoke(p); p->yielded = yield; }
         LightLock_Unlock(&p->lock);
     }
-    __real_CtrBlank_yieldBottom(r, yield);
+    bpYieldGate(r, yield);
 }
 BP_CODE void __wrap_CtrDimlight_setDisplay(Renderer* r, const CtrDisplaySettings* settings) {
     BpState* p = bpReady();
@@ -289,7 +290,7 @@ BP_CODE void __wrap_CtrDimlight_noticeClear(void) {
 }
 BP_CODE void __wrap_CtrScreens_screenshotNotice(bool paint) {
     CtrBottomPaint_invalidate();
-    __real_CtrScreens_screenshotNotice(paint);
+    bpNoticeGate(paint);
 }
 BP_CODE void __wrap_CtrDimlight_rosalinaSleep(s64 ns) {
     if (CtrDimlight_rosalinaHeld()) CtrBottomPaint_invalidate();
@@ -337,5 +338,41 @@ static const char bpDuplicatePainter[] __attribute__((section(".paintchg_lcdscop
     "Bottom painter: already installed\n";
 static __attribute__((noinline, section(".paintchg_lcdscope_code"))) void bpRejectInstall(void) {
     logWarn(bpDuplicatePainter);
+}
+#endif
+
+// The screenshot notice saves the stats rows it covers (y 8..15 of the top consoles) and puts them back when it ends.
+// The options menu on the top screen (CtrOptmenu_onTop, set as it opens) prints its own page over those rows, and
+// closing it clears both top buffers (optLeaveTop), so while it is there the saved strip is stale: painting would
+// cover the menu's first row and the restore would put the old stats line over it. The menu owns the page then: the
+// notice gives up its strip without painting or restoring, and the close clears whatever it had painted. A menu on
+// the bottom screen leaves the top consoles alone, so the notice keeps its strip and restores it as before.
+// Appended late code (late_reserve.ld, after the existing tenants): the wrapper above keeps its size.
+// The wrapper calls it through an asm-named declaration (bpNoticeGate): with a call GCC sees as this file's own
+// function it emits the wrapper after cpuFlush instead of in place, moving three late functions (check_layout).
+#if defined(ENABLE_WAD16)
+void __real_CtrScreens_screenshotNotice(bool);
+extern uint8_t CtrOptmenu_onTop; // ctr_optmenu.c
+__attribute__((noinline, noclone, section(".text_noticegate_late"))) void CtrBottomPaint_noticeGate(bool paint) {
+    if (CtrOptmenu_onTop) {
+        CtrScreens_noticeShown = false;
+        return;
+    }
+    __real_CtrScreens_screenshotNotice(paint);
+}
+
+// r2 (shopsplit replay 07f5fef48, Game on Top): the renderer's own notice (ctr_renderer.c's waitWithScreenshotNotice)
+// paints "Screenshot saved" on the bottom screen's rows y 8..15 in each frame's wait while screenshotNoticeUntil is
+// set, and with the game on top the options menu is on that screen: the banner covered its Game row. Main calls the
+// yield (above) once a frame, after the menu's open or update and before the next frame's wait. With the menu open on
+// the bottom screen the notice ends there, as its second running out would end it (the timer cleared, the display
+// marked for the next frame's configureScreens): the wait then neither paints nor restores. The menu on the top screen
+// is noticeGate's above. Appended late code, called through an asm-named declaration as noticeGate is.
+__attribute__((noinline, noclone, section(".text_noticegate_late"))) void CtrBottomPaint_yieldGate(void* r, bool yield) {
+    if (r != NULL && CtrArgui_state.menuIsOpen && !CtrOptmenu_onTop && BP(r, NOTICE) != 0) {
+        BP(r, NOTICE) = 0;
+        BP(r, CONFIG) = true;
+    }
+    __real_CtrBlank_yieldBottom(r, yield);
 }
 #endif

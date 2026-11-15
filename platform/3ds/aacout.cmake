@@ -16,6 +16,31 @@
 # already in AAC stays in place" against "do not grow an earlier input" (above) for the suffix only.
 # btgrey (lead 11-13, battlesplit item A: z_battletouch.c's Battle stylus row grey under Top screen) is such a new last
 # input, after touchoverworld: nothing that exists moves.
+# bsflash (battlesplit2, 11-14: the Split's cover draws on the top screen's margins; z_battlesplit.c's and
+# ctr_renderer.c's ends) is the next last text input, after btgrey; it has no constants (its rodata input, paired as
+# every tenant's is, stays empty).
+# bsnap (battlesplit2, 11-14: Napstablook's way down in Mad Dummy's Split; z_battlesplit.c's and ctr_renderer.c's
+# ends) is the next, after bsflash; it has no constants (its rodata input stays empty). Both empty, N8a's two
+# readonly-only inputs after them do not move.
+# btswitch (lead 11-15, change battletouch #51: z_battletouch.c's tap switch, ctr_renderer.c's bottom hold,
+# ctr_gpu_queue.c's frame-end setter) is the next new last text input, after bsnap. Its constants are the
+# next new last rodata input, after N8a's two (appended there, so N8a's Old-release constants keep their offsets).
+# btstory (lead 11-15, change battletouch u3 r5: the story screens' taps, z_battletouch.c) appends after every
+# tenant of its base, the reclaim block included (a unit never grows a tenant before the block). Text only:
+# its constants sit in its text input (BT_TEXTRO), as dev links N8a's readonly inputs in late text.
+# listfree (lead 11-14, change stepdrift: z_listfree.c frees the empty per-object instance lists after a room change;
+# c26rev8 GO 2a4bbb5d9, LF-3) appends after btstory. It has no constants: its empty rodata input appends after
+# btswitch's, at the rodata tail, so nothing before it moves.
+# soulahead (change audiomain 11-15, ctr_soulahead.inc: Omega Flowey's first SOUL songs opened ahead; c26rev7 GO) is
+# the next tail append, after listfree; its rodata input (empty) after listfree's.
+# msglock (audiomain, 11-14 21:2x: ctr_audio_system.c's frame drain and game-thread posts that only try msgLock;
+# c26rev6 GO) follows soulahead; its rodata input (empty: its three strings are assembled into the text input) too.
+# btomega (lead 11-15, change battletouch Omega r3: Omega Flowey with the stylus; z_battletouch.c's and z_battlesplit.c's
+# ends; c26rev5 GO) follows msglock. Text only: its constants sit in its text input (BT_ROOM).
+# bsexend (battlesplit2, 11-15: Mettaton EX's ending in Split; z_bsmex.c's and z_battlesplit.c's ends), bsgap (the
+# Split's flash on the bottom screen's empty rows; ctr_renderer.c's end) and bsg47 (Undyne's arena drawn higher in
+# Split, the HUD in place; z_battlesplit.c's and ctr_renderer.c's ends), c26rev8 GO, follow btomega in that order.
+# None has constants: their rodata inputs stay empty, after msglock's.
 # S4 occupies part of the retired Frame hole. Its padding stays fixed, so
 # battlesplit14 and every existing tenant retain their dv8q addresses.
 set(aacout_text_hole_inputs
@@ -35,6 +60,24 @@ set(aacout_text_inputs
     .aacout.text.touchmenus
     .aacout.text.touchoverworld
     .aacout.text.btgrey
+    .aacout.text.bsflash
+    .aacout.text.bsnap
+    .aacout.text.asgfuse
+    .aacout.text.btswitch
+    .aacout.text.latereclaim_dlg
+    .aacout.text.latereclaim_asg
+    .aacout.text.latereclaim_arena
+    .aacout.text.latereclaim_choice
+    .aacout.text.latereclaim_notice
+    .aacout.text.latereclaim_gofps
+    .aacout.text.btstory
+    .aacout.text.listfree
+    .aacout.text.soulahead
+    .aacout.text.msglock
+    .aacout.text.btomega
+    .aacout.text.bsexend
+    .aacout.text.bsgap
+    .aacout.text.bsg47
 )
 set(aacout_rodata_inputs
     .aacout.rodata.bootahead
@@ -47,9 +90,33 @@ set(aacout_rodata_inputs
     .aacout.rodata.touchmenus
     .aacout.rodata.touchoverworld
     .aacout.rodata.btgrey
+    .aacout.rodata.bsflash
+    .aacout.rodata.bsnap
     .aacout.rodata.n8a_optmenu
     .aacout.rodata.n8a_utfadea
+    .aacout.rodata.btswitch
+    .aacout.rodata.listfree
+    .aacout.rodata.soulahead
+    .aacout.rodata.msglock
+    .aacout.rodata.bsexend
+    .aacout.rodata.bsgap
+    .aacout.rodata.bsg47
 )
+# Intact final late suffix, UT Old shipping release only. N11's asgfuse precedes these inputs.
+# A later bschoice input (G100, 76 B) is consumed below without changing its source or other targets.
+set(aacout_latereclaim FALSE)
+if(CTRPORT_GAME STREQUAL "undertale" AND CTRPORT_TARGET STREQUAL "o3ds" AND CTRPORT_RELEASE_SOURCE_URL)
+    set(aacout_latereclaim TRUE)
+    if(NOT DEFINED CTRPORT_LATERECLAIM_CHOICE_BYTES OR
+            NOT CTRPORT_LATERECLAIM_CHOICE_BYTES MATCHES "^(0|76)$")
+        message(FATAL_ERROR "latereclaim: choice routing must run before AAC emission")
+    endif()
+    set_property(SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/source/ctr_renderer.c" APPEND PROPERTY
+        COMPILE_DEFINITIONS CTRPORT_LATERECLAIM_DLG_SECTION=".aacout.text.latereclaim_dlg")
+    set_property(SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/source/z_battlesplit.c" APPEND PROPERTY
+        COMPILE_DEFINITIONS CTRPORT_LATERECLAIM_ASG_SECTION=".aacout.text.latereclaim_asg"
+        CTRPORT_LATERECLAIM_ARENA_SECTION=".aacout.text.latereclaim_arena")
+endif()
 # N8a: only UT Old release moves these two immutable inputs; all other targets retain their late inputs.
 if(CTRPORT_GAME STREQUAL "undertale" AND CTRPORT_TARGET STREQUAL "o3ds" AND CTRPORT_RELEASE_SOURCE_URL)
     set_property(SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/source/ctr_optmenu.c"
@@ -151,7 +218,11 @@ foreach(kind text rodata)
         endif()
     endforeach()
     if(kind STREQUAL "text")
-        set(aacout_capacity 43396)
+        # UNDERTALE New: 43,396 B until N10, then 16 KiB more (59,780 B; review decision 11-15, N10 rider R9): flash + Nap D
+        # left New dev 2,904 B over the old slot, and ~8-9 KB of New tenants are queued. The 16 KiB comes off New's late
+        # reserve (CMakeLists.txt, ctrport_ut_late), so text after the slot moves by four whole pages and nothing after
+        # text moves. tools/analysis/aac_capacity.py is the tools' copy of these numbers (test_aac_capacity.py).
+        set(aacout_capacity 59780)
         if(CTRPORT_TARGET STREQUAL "o3ds")
             # Old 1.0 envelope (relready-resize.md, integrate21 dv8q): 36 KiB more, nine pages.
             set(aacout_capacity 80260)
@@ -228,7 +299,46 @@ foreach(kind text rodata)
             string(APPEND aacout_inputs "        . += DEFINED(__${id}_present) ? ((${phase} - __${id}_gap_start) & 31) : 0;\n")
             string(APPEND aacout_inputs "        __${id}_gap_end = ABSOLUTE(.);\n")
         endif()
+        # One minimal 4 KiB phase pad for the entire suffix; no padding between its inputs.
+        # 0x928 is w10's source phase, independently checked against the actual pre-move map.
+        if(aacout_latereclaim AND input STREQUAL ".aacout.text.latereclaim_dlg")
+            string(APPEND aacout_inputs "        __latereclaim_text_gap_start = ABSOLUTE(.);\n        . += ((2344 - __latereclaim_text_gap_start) & 4095);\n        __latereclaim_text_gap_end = ABSOLUTE(.);\n        __latereclaim_start = ABSOLUTE(.);\n")
+        endif()
+        if(aacout_latereclaim AND input STREQUAL ".aacout.text.latereclaim_notice")
+            string(APPEND aacout_inputs "        . = ALIGN(8);\n")
+        endif()
+        if(aacout_latereclaim AND input MATCHES "^\\.aacout\\.text\\.latereclaim_(dlg|asg|arena|choice|notice|gofps)$")
+            set(part "${CMAKE_MATCH_1}")
+            string(APPEND aacout_inputs "        __latereclaim_${part}_start = ABSOLUTE(.);\n")
+        endif()
         string(APPEND aacout_inputs "        KEEP(INPUT_SECTION_FLAGS (${aacout_flags}) *(${input}))\n")
+        if(aacout_latereclaim AND input STREQUAL ".aacout.text.latereclaim_choice")
+            # G100 may compose first: preserve the optional last input intact, with its original map name.
+            string(APPEND aacout_inputs "        KEEP(INPUT_SECTION_FLAGS (${aacout_flags}) *(.text_bschoice))\n")
+        endif()
+        if(aacout_latereclaim AND input STREQUAL ".aacout.text.latereclaim_notice")
+            string(APPEND aacout_inputs "        KEEP(INPUT_SECTION_FLAGS (${aacout_flags}) *(.text_noticegate_late))\n")
+        endif()
+        if(aacout_latereclaim AND input STREQUAL ".aacout.text.latereclaim_gofps")
+            string(APPEND aacout_inputs "        KEEP(INPUT_SECTION_FLAGS (${aacout_flags}) *(.text_gofps_late))\n")
+        endif()
+        if(aacout_latereclaim AND input MATCHES "^\\.aacout\\.text\\.latereclaim_(dlg|asg|arena|choice|notice|gofps)$")
+            string(APPEND aacout_inputs "        __latereclaim_${part}_end = ABSOLUTE(.);\n")
+            if(part STREQUAL "gofps")
+                string(APPEND aacout_inputs "        __latereclaim_end = ABSOLUTE(.);\n")
+                foreach(pair "dlg;0;824" "asg;824;268" "arena;1092;192")
+                    list(GET pair 0 name)
+                    list(GET pair 1 offset)
+                    list(GET pair 2 size)
+                    string(APPEND aacout_inputs "        ASSERT(__latereclaim_${name}_start - __latereclaim_start == ${offset}, \"latereclaim ${name} offset\");\n        ASSERT(__latereclaim_${name}_end - __latereclaim_${name}_start == ${size}, \"latereclaim ${name} size\");\n")
+                endforeach()
+                # ld folds constant sums in maps; emit the same single constants the proof expects.
+                math(EXPR latereclaim_notice_offset "((2344 + 1284 + ${CTRPORT_LATERECLAIM_CHOICE_BYTES} + 7) & ~7) - 2344")
+                math(EXPR latereclaim_gofps_offset "${latereclaim_notice_offset} + 144")
+                string(APPEND aacout_inputs "        ASSERT(__latereclaim_notice_start - __latereclaim_start == ${latereclaim_notice_offset}, \"latereclaim notice offset\");\n        ASSERT(__latereclaim_notice_end - __latereclaim_notice_start == 144, \"latereclaim notice size\");\n        ASSERT(__latereclaim_gofps_start - __latereclaim_start == ${latereclaim_gofps_offset}, \"latereclaim gofps offset\");\n        ASSERT(__latereclaim_gofps_end - __latereclaim_gofps_start == 192, \"latereclaim gofps size\");\n")
+                string(APPEND aacout_inputs "        ASSERT(__latereclaim_choice_start - __latereclaim_start == 1284, \"latereclaim choice offset\");\n        ASSERT(__latereclaim_choice_end - __latereclaim_choice_start == ${CTRPORT_LATERECLAIM_CHOICE_BYTES}, \"latereclaim choice size\");\n        ASSERT((__latereclaim_start & 4095) == 2344, \"latereclaim source phase\");\n        ASSERT(__aacout_text_used_end <= __aacout_text_start + ${aacout_capacity} - 16384, \"latereclaim enters protected AAC text reserve\");\n")
+            endif()
+        endif()
     endforeach()
     if(CTRPORT_DEVONLY_AAC)
         # The dev-only tail and its budgets (c26rev2's contracts, 11-11): the plain dev tail, alignment included,
@@ -236,6 +346,16 @@ foreach(kind text rodata)
         # Old plain dev keeps at least 8,192 B of the text slot free, and Old's production lists leave the 16,384 B
         # protected reserve. Test vehicles (ballast, labcrash, the AAC test tenant) are held to the slot's capacity only.
         string(APPEND aacout_inputs "        __aacout_${kind}_devonly_start = ABSOLUTE(.);\n")
+        # u0-tailalign (lead 11-15): the tail's first input starts at the largest tail-input alignment of its kind
+        # today, so a production growth that is not a multiple of it moves every tail input by one delta
+        # (check_devonly_aac.py's check_tail_shift), not by two when an aligned input pads inside the tail. Text 8:
+        # z_labguard.o's 8-aligned code (the pen and bsrdev code is 4). Rodata 4: z_labguard.o's .rodata (the pen
+        # and bsrdev constants are 1). The tail start stays the production end (rule 1); the gap is zero fill.
+        if(kind STREQUAL "text")
+            string(APPEND aacout_inputs "        . = ALIGN(8);\n")
+        else()
+            string(APPEND aacout_inputs "        . = ALIGN(4);\n")
+        endif()
         foreach(selector IN LISTS aacout_devonly_${kind})
             string(APPEND aacout_inputs "        /* aacout devonly */ INPUT_SECTION_FLAGS (${aacout_flags}) ${selector}\n")
         endforeach()
@@ -259,6 +379,15 @@ foreach(kind text rodata)
             endif()
         endif()
     endif()
+    # Old release keeps the same 16,384 B after its production lists that the dev link asserts above (lead 11-14,
+    # audit F3-1 T7). That room is dev's: the 8,192 B dev-only tail plus plain dev's 8,192 B free. A release-only
+    # compose fails here, not first at the next dev link. Test vehicles (ballast, the AAC test tenant) are held to
+    # the slot's capacity only, as in dev.
+    set(aacout_release_reserve "")
+    if(kind STREQUAL "text" AND CTRPORT_TARGET STREQUAL "o3ds" AND NOT CTRPORT_DEVONLY_AAC AND NOT CTRPORT_BALLAST
+       AND NOT CTRPORT_AACSLOT_TEST)
+        set(aacout_release_reserve "        ASSERT(__aacout_text_start + ${aacout_capacity} - __aacout_text_used_end >= 16384, \"AAC text: Old release lists inside the 16,384 B dev reserve\");\n")
+    endif()
     set(aacout_region "${aacout_prefix}
         . = ALIGN(4);
         __aacout_${kind}_start = ABSOLUTE(.);
@@ -269,7 +398,7 @@ ${aacout_inputs}
         KEEP(*(${aacout_unlisted}))
         ASSERT(ABSOLUTE(.) == __aacout_${kind}_used_end, \"Unlisted or invalid AAC ${kind} input\");
         ASSERT(__aacout_${kind}_used_end <= __aacout_${kind}_start + ${aacout_capacity}, \"AAC ${kind} slot overflow\");
-        . += __aacout_${kind}_used_end <= __aacout_${kind}_start + ${aacout_capacity} ? __aacout_${kind}_start + ${aacout_capacity} - __aacout_${kind}_used_end : 0;
+${aacout_release_reserve}        . += __aacout_${kind}_used_end <= __aacout_${kind}_start + ${aacout_capacity} ? __aacout_${kind}_start + ${aacout_capacity} - __aacout_${kind}_used_end : 0;
         __aacout_${kind}_end = ABSOLUTE(.);
         ${aacout_match}")
     string(FIND "${aacout_ld}" "${aacout_match}" aacout_found)

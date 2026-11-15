@@ -81,6 +81,7 @@ DLGTOP_COLD static void dlgtopRoom(CtrRenderer* r, const Room* room) {
 }
 
 static void dlgtopClose(void);
+static void dlgtopCloseBlack(void);
 // Called before battlesplit/Step. Room/renderer/settings boundaries drain;
 // an ordinary close keeps DIALOGUE's target until one of those boundaries.
 DLGTOP_CODE static void dlgtopPrepare(CtrRenderer* r) {
@@ -100,7 +101,7 @@ DLGTOP_CODE static void dlgtopPrepare(CtrRenderer* r) {
         dlgtopRoom(r, room);
     }
     dlgtopLease.drawing = false;
-    if (dlgtopLease.target != nullptr && (!dlgtopWants(r) || !dlgtopBoxOpen(r))) dlgtopClose();
+    if (dlgtopLease.target != nullptr && (!dlgtopWants(r) || !dlgtopBoxOpen(r))) dlgtopCloseBlack();
 }
 
 DLGTOP_CODE static void dlgtopTake(CtrRenderer* r) {
@@ -122,9 +123,13 @@ DLGTOP_CODE static C3D_RenderTarget* dlgtopBorrowed(CtrRenderer* r) {
 }
 
 #include "ctr_dlgtop_retire.inc"
+#include "ctr_dlgtop_wake.inc"
+#define dlgtopClose dlgtopCloseValidated
+#include "ctr_dlgtop_closeblack.inc"
+#undef dlgtopClose
 // Retain the original query; uses below and in replay also validate layout.
-#define dlgtopBorrowed dlgtopWake
-#define CtrLayout_chain18 CtrDlgtop_idleChain
+#define dlgtopBorrowed dlgtopRecord
+#define CtrLayout_chain18 CtrDlgtop_idleGate
 
 void CtrLayout_chain18(Renderer*);
 DLGTOP_CODE void CtrDlgtop_frame(Renderer* renderer) {

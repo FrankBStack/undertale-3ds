@@ -333,6 +333,7 @@ def source_wanted(relative, game=None):
             return game != 'deltarune'
         # The room plan's build step (build.sh runs build_plan.py) and this game's committed records.
         # codeclose.py: build_plan.py imports it (UNDERTALE's in-play code closure; change codeclose).
+        # observed_art.py: build_plan.py imports it (rule 1b's reviewed own-art pairs; change plangap, c26rev7 PG-1).
         # records/sounds/: the sound plan records (build_sfxplan.py, UNDERTALE).
         if parts[2] == "records" and (len(parts) == 4 or (len(parts) == 5 and parts[3] == "sounds")):
             return game is None or parts[-1].startswith(game + "-")
@@ -353,7 +354,7 @@ def source_wanted(relative, game=None):
         if parts[2] == "sharebuf" and len(parts) == 4:
             return parts[-1] == "deltarune.json" and game != "undertale"
         return len(parts) == 3 and parts[-1] in ("build_phases.py", "build_plan.py", "build_sfxplan.py", "closure.py", "codeclose.py", "dwinfo.py",
-                                                 "records.py",
+                                                 "observed_art.py", "records.py",
                                                  "source_plan.py")
     if parts[:2] == ["platform", "3ds"]:
         if parts[2:4] == ['vendor', 'pvaac'] and game == 'undertale':

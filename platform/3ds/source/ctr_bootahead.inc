@@ -51,6 +51,7 @@ __attribute__((noinline, noipa, optimize("Os"), section(".aacout.text.bootahead"
 #define BOOTAHEAD_MENU_LAST 226u
 #define BOOTAHEAD_JINGLE 423u // the Settings room's first music
 void CtrAudioSystem_menuMusic(CtrAudioSystem* ca);
+void CtrAudioSystem_chainNoteSoulahead(const char* state); // ctr_soulahead.inc, the next note link
 int CtrAudioSystem_menuSound(CtrAudioSystem* ca, const char* path, uint32_t first, uint32_t last, const char** name, size_t* len);
 
 // The sound in first..last whose file name (before any extension) is path's last part (its name in *name, its length in
@@ -114,7 +115,8 @@ __attribute__((noinline, noipa, optimize("Os"), section(".aacout.text.bootahead"
 }
 
 // Opener thread, at each note (flowend's wrap calls it first): a name the game thread handed over becomes the spare's
-// wanted path at the opener's next wait; then the menu's music. Then loadclass 4c's link, as before.
+// wanted path at the opener's next wait; then the menu's music. Then soulahead's link (ctr_soulahead.inc), which calls
+// loadclass 4c's, as this link did before.
 __attribute__((noinline, noipa, optimize("Os"), section(".aacout.text.bootahead"))) void CtrAudioSystem_chainNoteBootahead(const char* state) {
     CtrAudioSystem* ca = *BOOTAHEAD_ADDR(CtrAudioSystem*, gShutdownTarget);
     char* ask = NULL;
@@ -142,7 +144,7 @@ __attribute__((noinline, noipa, optimize("Os"), section(".aacout.text.bootahead"
     if (ca != NULL && ca->opener != NULL && threadGetCurrent() == ca->opener && !ca->openerQuit &&
         *BOOTAHEAD_ADDR(CtrAudioSystem*, flowendAheadOwner) == ca && strcmp(state, BOOTAHEAD_ADDR(const char, flowendWaiting)) == 0)
         CtrAudioSystem_menuMusic(ca);
-    CtrAudioSystem_chainNotePair(state);
+    CtrAudioSystem_chainNoteSoulahead(state);
 }
 #else
 __attribute__((noinline, section(".aacout.text.bootahead"))) bool CtrAudioSystem_aheadHint(const char* path) {

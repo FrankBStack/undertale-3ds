@@ -4,6 +4,7 @@ The helper has the original blitter's ABI and memory effects; it never retains t
 Scope and exact call count fail closed. The independent ELF verifier checks every other allocated byte.
 """
 from pathlib import Path
+import hashlib
 import importlib.util
 import json
 import re
@@ -156,6 +157,204 @@ def route_gameover_setup(text):
     return text[:scope.start()]+changed+text[scope.end():]
 
 
+# asgsmart F1u: ctr_gameoverscreen.inc's CtrGameover_fuseSprite takes utkDrawSprite's place in the alpha stubs' target
+# table (slot 25; the stub, its alpha adaptation and abqCore are unchanged). It branches to these four, reads these
+# words, and nothing else. Each name must be defined exactly once, in its own section: the renderer's in the ordinary
+# pass, go in the game-over unit's retained storage. A mismatch fails the build rather than picking another recipe.
+# Operands are checked whole (c26rev6 F1UI-1): a branch names one entry or one of the fold's labels exactly (no
+# addend), each pool word is exactly one claimed name, each once (no addend, compound or number), and every other
+# instruction names no symbol except a load from one of the fold's own pools at a word offset inside it.
+# First, though (c26rev6 r2 delta, 18:1x): the fold's whole section must be one of the reviewed recipes below,
+# instruction for instruction (fuse_canonical: comments, whitespace runs, local label spelling, and local labels
+# nothing in the section names, only). Any other assembly fails the build with "F1u NOT fused"; a new compiler output
+# needs its recipe reviewed and added here. F1u r5 (N11 link, 11-15): a -g build's fold carries GCC's debug view labels
+# (.LVL, .LFB, .LBB, ...), named only from the debug sections. They are dropped like comments, so the release, dev and
+# New builds read as the reviewed recipes. The recipes are the r3 texts minus their one unreferenced label (the pool's
+# skip label); every instruction, operand, referenced label and pool word is unchanged.
+FUSE_RECIPES = {'57e67a9228c1812db18fab8b68f5a72a69040a847ee6c175e9d16f166ce0af0d': 'plain',  # release Old, dev Old, New
+                '1bba55ae4119b7e5e926e567c9fb5e7baa6eb76c1d7a2c913ed4a339d2a941b7': 'probe'}  # the counter probe twin
+FUSE = 'CtrGameover_fuseSprite'
+FUSE_SLOT = 25
+FUSE_BRANCHES = {'utkDrawSprite': ('.text.late.utkill',), 'utkDrawSpriteBody': ('.text.late.utkill',),
+                 'ctrDrawSprite': ('.text.ctrDrawSprite', '.text'), 'aslFineSprite': ('.text_asgorelong',)}
+FUSE_DATA = {'asgRun': '.bss.late.asgdraw', 'utaGateFrame': '.bss.late.utasgore',
+             'utaGateCalls': '.bss.late.utasgore', 'utaGateOn': '.bss.late.utasgore'}
+FUSE_PROBE = {'utaOff': '.bss.late.utasgore', 'utaGateProbe': '.bss.late.utasgore', 'utaWhy': '.bss.late.utasgore'}
+FUSE_OWN = {'go': '.bss_gameoverscreen'}
+FUSE_OPERANDS = re.compile(r'^(?:r\d+|sp|lr|pc|ip|fp|sl|sb|lsl|lsr|asr|ror|rrx)$')
+
+
+def fuse_expected(command):
+    """The builds that compile the fold (ctr_gameoverscreen.inc's own condition): not timing, not a forced split."""
+    forced = [a for a in command if a.startswith('-DASG_FORCE_SPLIT')]
+    assert all(a in ('-DASG_FORCE_SPLIT=0', '-DASG_FORCE_SPLIT=1', '-DASG_FORCE_SPLIT=2', '-DASG_FORCE_SPLIT=3')
+               for a in forced), ('Unknown forced split define', forced)
+    return '-DCTRPORT_RENDER_TIMING' not in command and all(a == '-DASG_FORCE_SPLIT=0' for a in forced)
+
+
+def label_sections(text):
+    """Every label's definition sections, in order (GCC's section directives, as vine_extract follows them)."""
+    found, section, stack = {}, '.text', []
+    for line in text.splitlines():
+        directive = re.match(r'\s*\.(pushsection|section)\s+([^,\s]+)', line)
+        if directive:
+            if directive[1] == 'pushsection':
+                stack.append(section)
+            section = directive[2]
+            continue
+        if re.match(r'\s*\.popsection\b', line):
+            section = stack.pop()
+            continue
+        plain = re.match(r'\s*\.(text|data|bss)\s*(?:@.*)?$', line)
+        if plain:
+            section = '.' + plain[1]
+            continue
+        label = re.match(r'([A-Za-z_][\w.]*):', line)
+        if label:
+            found.setdefault(label[1], []).append(section)
+    return found
+
+
+# F1u r4 (audit F3-1, 11-14): the fold's section is ctr_place.h's UT_COLD_TEXT(asgfuse), per model: the AAC text
+# slot on UNDERTALE Old, an appended late section on New. FUSE_SECTION is the reviewed recipes' spelling; fuse_canonical
+# reads the build's own section and writes it with that spelling, so one recipe covers both models.
+FUSE_SECTION = '.text_asgfuse'
+FUSE_SECTIONS = {'-DCTRPORT_TARGET_O3DS': '.aacout.text.asgfuse', '-DCTRPORT_TARGET_N3DS': FUSE_SECTION}
+
+
+def fuse_section(command):
+    """The fold's section for this build's model (exactly one model define)."""
+    models = [a for a in command if a in FUSE_SECTIONS]
+    assert len(models) == 1, ('F1u: one model define', models)
+    return FUSE_SECTIONS[models[0]]
+
+
+def fuse_canonical(go_extra, section=FUSE_SECTION):
+    """The fold's section (its section lines and body) as one text: comments dropped, each whitespace run one space,
+    a local label definition that no line of the helper names dropped, the other local labels renamed .LF0, .LF1,
+    ... in order of first use, the section named FUSE_SECTION. Instructions, operands, pool order and alignment stay.
+    "No line of the helper" is every retained section, not just the fold's (c26rev6 F1UR5-1): a .word in
+    .rodata_gameoverscreen that names a fold label pins that label's place as surely as a branch in the fold does.
+    The helper is late_sections' output: no .debug_* sections, no .loc lines, so GCC's -g view labels stay unnamed.
+    The reference search reads the raw lines, comments and all (c26rev6 F1UR6-1: '.ascii "@"' then '.word .LX' on
+    one line hides the .word from an '@' split). A label named only in a comment is kept: fails closed."""
+    out, selected, names = [], False, {}
+    for line in go_extra.splitlines():
+        directive = re.match(r'\s*\.(pushsection|section)\s+([^,\s]+)', line)
+        if directive:
+            selected = directive[2] == section
+            if selected:
+                line = line[:directive.start(2)] + FUSE_SECTION + line[directive.end(2):]
+        elif re.match(r'\s*\.(?:popsection|text|data|bss)\b', line):
+            selected = False
+        if selected:
+            s = ' '.join(line.split('@', 1)[0].split())
+            if s:
+                out.append(s)
+    label, local = r'\.L[\w.]+:', r'(?<![\w.])\.L[\w.]+'
+    every = (line.strip() for line in go_extra.splitlines())
+    named = {m for s in every if not re.fullmatch(label, s) for m in re.findall(local, s)}
+    out = [s for s in out if not (re.fullmatch(label, s) and s[:-1] not in named)]
+    out = [re.sub(local, lambda m: names.setdefault(m[0], '.LF%d' % len(names)), s) for s in out]
+    return '\n'.join(out) + '\n'
+
+
+def route_fuse(text, go_extra, expected, probe, section=FUSE_SECTION):
+    """Check the fold's every operand and binding, then point abqTargets' slot 25 at it. Returns (text, receipt)."""
+    defined = FUSE in label_sections(go_extra)
+    named = [s for s in FUSE_SECTIONS.values() if re.search(r'(?<![\w.])' + re.escape(s) + r'(?![\w.])', go_extra)]
+    if not expected:
+        assert not defined and not named, 'Fold present where its build excludes it'
+        return text, dict(fused=False)
+    assert defined, 'Fold missing from the game-over pass'
+    assert named == [section], ('F1u: the fold is in this model\'s section only', section, named)
+    recipe = hashlib.sha256(fuse_canonical(go_extra, section).encode()).hexdigest()
+    assert FUSE_RECIPES.get(recipe) == ('probe' if probe else 'plain'), \
+        ('F1u NOT fused: the fold assembly is not a reviewed recipe; review it and add it to FUSE_RECIPES', recipe)
+    # The fold's own section, as extracted.
+    body, selected = [], False
+    for line in go_extra.splitlines():
+        directive = re.match(r'\s*\.(pushsection|section)\s+([^,\s]+)', line)
+        if directive:
+            selected = directive[2] == section
+            continue
+        if re.match(r'\s*\.(?:popsection|text|data|bss)\b', line):
+            selected = False
+            continue
+        if selected:
+            body.append(line.split('@', 1)[0].rstrip())
+    labels = [m[1] for line in body for m in [re.match(r'([\w.]+):$', line.strip())] if m]
+    assert [n for n in labels if not n.startswith('.L')] == [FUSE], ('Fold section labels', labels)
+    local = set(n for n in labels if n.startswith('.L'))
+    assert len(local) == len(labels) - 1, ('Fold label twice', labels)
+    # Each literal pool: a fold label and the .word lines right after it (their count bounds a load's offset).
+    pools, current = {}, None
+    for line in body:
+        s = line.strip()
+        if re.fullmatch(r'\.L[\w.]+:', s):
+            current = s[:-1]
+            pools[current] = 0
+        elif current is not None and re.match(r'\.(?:word|4byte|long)\s', s):
+            pools[current] += 1
+        elif s and not re.match(r'\.(?:p2)?align\s', s):
+            current = None
+    data = dict(FUSE_DATA, **(FUSE_PROBE if probe else {}), **FUSE_OWN)
+    branches, words = [], []
+    for line in body:
+        s = line.strip()
+        if not s or re.fullmatch(r'[\w.]+:', s):
+            continue
+        parts = s.split(None, 1)
+        op, rest = parts[0], parts[1].strip() if len(parts) > 1 else ''
+        if op.startswith('.'):
+            if op in ('.word', '.4byte', '.long'):
+                # The whole expression is one claimed name: no addend, no compound, no number, no other symbol.
+                assert rest in data, ('Fold data word', s)
+                words.append(rest)
+            else:
+                exact = {'.global': FUSE, '.type': FUSE + ', %function', '.size': FUSE + ', .-' + FUSE,
+                         '.syntax': 'unified', '.arm': '', '.code': '32'}
+                assert (op in exact and rest == exact[op]) or (op in ('.align', '.p2align') and re.fullmatch(r'\d', rest)) \
+                    or (op == '.fpu' and re.fullmatch(r'[\w-]+', rest)), ('Fold directive', s)
+            continue
+        if re.fullmatch(r'bl?(?:eq|ne|cs|cc|hs|lo|mi|pl|vs|vc|hi|ls|ge|lt|gt|le|al)?', op):
+            # The whole operand: one of the fold's own labels, or one of the four entries by its exact name.
+            assert rest in local or rest in FUSE_BRANCHES, ('Fold branch operand', s)
+            if rest in FUSE_BRANCHES:
+                branches.append(rest)
+            continue
+        # Any other instruction: registers, shifts and immediates, or a load from one of the fold's pools at a word
+        # offset inside it. Nothing else may name a symbol.
+        def pool_ref(m):
+            offset = int(m[2] or '+0')
+            assert pools.get(m[1], 0) > 0 and offset % 4 == 0 and 0 <= offset < 4 * pools[m[1]], ('Fold pool load', s)
+            return ' '
+        plain = re.sub(r'(?<![\w.])(\.L[\w.]+)(\+\d+)?(?![\w.+\-*/])', pool_ref, rest)
+        names = [n for n in re.findall(r'(?<![\w#])\.?[A-Za-z_][\w.]*', plain) if not FUSE_OPERANDS.match(n)]
+        assert not names and '=' not in plain, ('Fold instruction names a symbol', s)
+    assert set(branches) == set(FUSE_BRANCHES), ('Fold branch targets', sorted(set(branches)))
+    assert sorted(words) == sorted(data), ('Fold data words, each exactly once', sorted(words))
+    ordinary, own = label_sections(text), label_sections(go_extra)
+    for name, sections in FUSE_BRANCHES.items():
+        assert len(ordinary.get(name, [])) == 1 and ordinary[name][0] in sections and name not in own, ('Fold branch', name)
+    for name, section in data.items():
+        where = (own if name in FUSE_OWN else ordinary).get(name, [])
+        other = (ordinary if name in FUSE_OWN else own).get(name, [])
+        assert where == [section] and not other, ('Fold data binding', name, where, other)
+    # abqTargets' slot 25, the only utkDrawSprite word anywhere.
+    assert ordinary.get('abqTargets') == ['.rodata.late.alphabyte'], ('Alpha stub targets', ordinary.get('abqTargets'))
+    table = re.search(r'(?m)^abqTargets:\n((?:\t\.word\t[\w.]+\n)+)', text)
+    assert table, 'Alpha stub target table shape'
+    targets = table[1].splitlines()
+    assert len(targets) > FUSE_SLOT and targets[FUSE_SLOT] == '\t.word\tutkDrawSprite', ('Slot 25', targets[FUSE_SLOT:FUSE_SLOT + 1])
+    assert len(re.findall(r'(?m)^\t\.word\tutkDrawSprite$', text)) == 1, 'utkDrawSprite word outside slot 25'
+    assert not re.search(r'(?<![\w.])' + FUSE + r'(?![\w.])', text), 'Fold already named in the ordinary pass'
+    targets[FUSE_SLOT] = '\t.word\t' + FUSE
+    text = text[:table.start(1)] + '\n'.join(targets) + '\n' + text[table.end(1):]
+    return text, dict(fused=True, slot=FUSE_SLOT, recipe=FUSE_RECIPES[recipe] + ' ' + recipe, branches=sorted(set(branches)),
+                      words=sorted(set(words)))
+
+
 def route_lcd(text):
     """Apply dimlight only after this adapter's existing picture-call edits."""
     path = Path(__file__).resolve().parents[1] / 'buildcache/dimlight_compile.py'
@@ -237,6 +436,9 @@ def main(args):
                       for m in re.finditer(coarse_pattern, text)]
     assert coarse_callers == ['utkDrawSprite'], coarse_callers
     text = re.sub(coarse_pattern, lambda m: m[1]+'CtrGameover_coarseSprite'+(m[2] or '')+m[3], text)
+    # After both reroutes, so the fold's own direct calls stay direct and both caller lists above are as they were.
+    text, fuse_receipt = route_fuse(text, go_extra, fuse_expected(command), '-DCTRPORT_ASG_PROBE' in command,
+                                    fuse_section(command))
     text += '\n'+go_extra
     text, lcd_receipt = route_lcd(text)
     with open(routed_file, 'w', encoding='utf-8', newline='\n') as handle:  # write_text(newline=) needs Python 3.10
@@ -254,7 +456,9 @@ def main(args):
     output.with_name('utwindow.json').write_text(json.dumps(dict(
         caller='CtrRenderer_endFrame.part.0', old='blitApp', new='CtrUtWindow_blitApp',
         count=count, exit=rc, original=str(original_file), routed=str(routed_file),
-        lcd=lcd_receipt), indent=2) + '\n', encoding='utf-8')
+        lcd=lcd_receipt, fuse=fuse_receipt), indent=2) + '\n', encoding='utf-8')
     print(f'Window motion: {count} final picture call operands routed; warm instructions retained', flush=True)
     print('dimlight LCD call operands: ' + json.dumps(lcd_receipt), flush=True)
+    # Every build says whether F1u is fused (an unreviewed fold never gets here: it fails the build, "F1u NOT fused").
+    print('F1u slot 25: ' + json.dumps(fuse_receipt), flush=True)
     return rc

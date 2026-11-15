@@ -2097,3 +2097,7 @@ void CtrFpsdiag_draw(int32_t x, int32_t y, const char* text, uint32_t colour) {
     __wrap_arguiDrawText(x, y, text, colour);
 }
 #endif
+#if defined(ENABLE_WAD16) && defined(__3DS__)
+// gofps (z_gofps.c): the counter's painted rectangles by name, an exact alias (no C reference, no code change here).
+__asm__(".global CtrFpsbox_rect\n.set CtrFpsbox_rect, fps75Rect\n");
+#endif

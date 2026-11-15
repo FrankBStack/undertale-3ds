@@ -50,6 +50,14 @@ void apRealStep(Runner* runner) {
 #define AP_STEP __real_Runner_step
 #endif
 void __real_Runner_drawViews(Runner* runner, int32_t gameW, int32_t gameH, bool debugShowCollisionMasks);
+#ifdef AP_BATTLESPLIT
+// asgsmart: the split's draw wrapper (z_battlesplit.c, renamed by CMakeLists.txt), so a probe run splits when the
+// battle layout says Split; it calls the real Runner_drawViews itself.
+void Battlesplit_drawViewsUnlinked(Runner* runner, int32_t gameW, int32_t gameH, bool debugShowCollisionMasks);
+#define AP_DRAW_VIEWS Battlesplit_drawViewsUnlinked
+#else
+#define AP_DRAW_VIEWS __real_Runner_drawViews
+#endif
 void __wrap_Runner_step(Runner* runner) APL;
 void __wrap_Runner_drawViews(Runner* runner, int32_t gameW, int32_t gameH, bool debugShowCollisionMasks) APL;
 
@@ -147,6 +155,7 @@ extern uint32_t utaCount[8], utaShadowCount[4];
 extern uint64_t utaTicks[6];
 extern uint32_t utaWhy[48];
 extern uint8_t utaOff;
+extern uint32_t utaGateProbe; // asgsmart: the uta gate under test (<game dir>/utagate.txt, else 110)
 
 // Frame log (on unless <game dir>/asgnoframes.txt): every frame, one "[asgframe]" line with its runner frame, sprite calls, step
 // and draw ticks, the ticks inside drawSprite, the uta counters' and plan refusals' changes over the frame, and the
@@ -278,6 +287,18 @@ static APL void apTimeLog(void) {
 #ifdef AP_LEAN
 #define apTimeLog() ((void) 0)
 #endif
+
+// asgsmart (c26rev6 ASGS1-2): the gate's counters, every 300-frame window, in every probe build (AP_LEAN included, which
+// drops [asgtime]). Zeros are printed: a Split run's window shows switch43 above 0 (layer switches,
+// CtrRenderer_bsLayer), an Original run's 0. The line ends in " end", so a cut line is told from a whole one.
+static uint32_t apGateLast[3] APB;
+static APL void apGateLog(void) {
+    uint32_t now[3] = { utaWhy[41], utaWhy[42], utaWhy[43] };
+    logInfo("[asggate] f=%lu gate=%lu off41=%lu calls42=%lu switch43=%lu tot41=%lu tot42=%lu tot43=%lu end\n", (unsigned long) apFrames,
+            (unsigned long) utaGateProbe, (unsigned long) (now[0] - apGateLast[0]), (unsigned long) (now[1] - apGateLast[1]),
+            (unsigned long) (now[2] - apGateLast[2]), (unsigned long) now[0], (unsigned long) now[1], (unsigned long) now[2]);
+    for (int i = 0; 3 > i; i++) apGateLast[i] = now[i];
+}
 
 static APL void apSprite(Renderer* renderer, int32_t tpagIndex, float x, float y, float originX, float originY, float xscale,
                          float yscale, float angleDeg, uint32_t color, float alpha) {
@@ -557,6 +578,16 @@ void __wrap_Runner_drawViews(Runner* runner, int32_t gameW, int32_t gameH, bool 
         f = fopen(CTRPORT_GAME_DIR "/utaoff.txt", "r");
         utaOff = f != nullptr ? 1 : 0;
         if (f != nullptr) fclose(f);
+        utaGateProbe = 110;
+        f = fopen(CTRPORT_GAME_DIR "/utagate.txt", "r");
+        if (f != nullptr) {
+            char g[8] = { 0 };
+            uint32_t v = 0, n = (uint32_t) fread(g, 1, sizeof(g) - 1, f);
+            for (uint32_t i = 0; n > i && g[i] >= '0' && '9' >= g[i]; i++) v = v * 10 + (uint32_t) (g[i] - '0');
+            if (n != 0 && g[0] >= '0' && '9' >= g[0] && 256 > v) utaGateProbe = v;
+            fclose(f);
+        }
+        logInfo("[asgtime] uta gate %lu\n", (unsigned long) utaGateProbe);
         if (utaOff) logInfo("[asgtime] utaoff: every fine sprite goes the full way\n");
     } else if (apDump == 2) {
         apDump = -1;
@@ -572,7 +603,7 @@ void __wrap_Runner_drawViews(Runner* runner, int32_t gameW, int32_t gameH, bool 
     int seqFrame = runner->frameCount;
     apSeqFrame = (uint8_t) (apSeqOn > 0 && (seqFrame == 370 || seqFrame == 560 || seqFrame == 698 || seqFrame == 699));
     apSeqN = 0;
-    __real_Runner_drawViews(runner, gameW, gameH, debugShowCollisionMasks);
+    AP_DRAW_VIEWS(runner, gameW, gameH, debugShowCollisionMasks);
     apRead(&b);
     if (apSeqFrame) {
         apSeqFrame = 0;
@@ -607,6 +638,7 @@ void __wrap_Runner_drawViews(Runner* runner, int32_t gameW, int32_t gameH, bool 
     if (++apFrames % 300 == 0) {
         apLog();
         apPhLog();
+        apGateLog();
         if (apTime > 0) apTimeLog();
     }
 }

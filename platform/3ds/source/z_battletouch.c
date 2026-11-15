@@ -731,7 +731,11 @@ typedef struct BtLive {
     bool fixWait;              // that frame's newest sample waited (Touch_pen's jump): the core used the one before
     int8_t back;               // at the buttons, a lit stroke released off them: 1 + the cursor to put back (btTake)
     uint8_t jump;              // the blue SOUL's jump for this stroke (btBlue): 0 none or spent, 1 its chance, 2 jumping
+    // Appended: Omega Flowey (btOmRoom): the data file the ids were found for, its heart's and buttons' objects.
+    const void* omData;
+    int16_t omHeart, omButton;
 } BtLive;
+#line 735
 
 // The pen log (lead 11-08): test builds write the pen's samples to the log as one [pen] line a while after the pen
 // lifts, at most every BT_PEN_EVERY frames, so a player's log carries the console's samples. Public builds compile
@@ -977,6 +981,9 @@ bool Battletouch_view(Runner* runner, CtrBottomView* out); // the view, and the 
 #endif
 // take2's menu read (unit M): btRead_menu, then English ITEM's rectangles kept out of the edge strips (the file's end).
 static __attribute__((noinline, noclone, section(BT_FILL))) void btReadT(Runner* runner, TouchMenu* m, int32_t* slot);
+static void btReadOm(Runner* runner, TouchMenu* m, int32_t* slot); // Omega (the file's end): btReadT's wrap
+static void btSoulOm(Runner* runner, TouchMenu* m);                 // and btRead_soul2's
+#line 980
 BT_CODE2 CtrInputEdges Battletouch_take2(const CtrInputMap* map, uint32_t held, uint32_t down, bool enabled, bool suppressHeld,
                                          CtrInputStats* stats) {
     CtrInputEdges e = btRawTake(map, held, down, enabled, suppressHeld, stats);
@@ -1059,11 +1066,11 @@ BT_CODE2 CtrInputEdges Battletouch_take2(const CtrInputMap* map, uint32_t held, 
 #ifdef CTRPORT_TOUCH_TEST
         if (!shown && BT_SCRIPTED) shown = btTestView(runner, &view);
 #endif
-        if (shown) btReadT(runner, &m, &slot);
+        if (shown) btReadOm(runner, &m, &slot);
         // The slot's reader knows red only: read every SOUL kind again.
         if (m.ctx == TOUCH_CTX_DEFENCE && btMode() == 2) {
             m.soul = TOUCH_SOUL_NONE;
-            btRead_soul2(runner, &m);
+            btSoulOm(runner, &m);
         }
         int32_t x = (int32_t) (view.roomX0 + ((float) px + 0.5f) * view.roomPerPx);
         int32_t y = (int32_t) (view.roomY0 + ((float) py + 0.5f) * view.roomPerPx);
@@ -1125,7 +1132,7 @@ BT_CODE2 CtrInputEdges Battletouch_take2(const CtrInputMap* map, uint32_t held, 
 __attribute__((naked, noinline, section(".text.battletouch_late")))
 CtrInputEdges __wrap_CtrInput_take(BT_UNUSED const CtrInputMap* map, BT_UNUSED uint32_t held, BT_UNUSED uint32_t down,
                                    BT_UNUSED bool enabled, BT_UNUSED bool suppressHeld, BT_UNUSED CtrInputStats* stats) {
-    __asm__("b Battletouch_take\n"); // btTake (the file's end), then Battletouch_take2
+    __asm__("b Battletouch_tapTake\n"); // btTapTake, then btTakeM, btTake (the file's end), take2
 }
 
 // ===[ Options: the Controls page's Battles row, and the Battles page (Layout, Stylus, Back) ]===
@@ -3095,6 +3102,199 @@ static BT_CODEM CtrInputEdges btTakeM(const CtrInputMap* map, uint32_t held, uin
 }
 __asm__(".global Battletouch_take\n.set Battletouch_take, btTakeM\n");
 
+// ===[ The tap switch, and the story screens' taps (maintainer 11-15, GO #51) ]===
+//
+// maintainer: a stylus tap from one page's submenu to another button flickers. The box showed the main menu's "*" alone
+// (the cascade's rest step, the flavor writer restarted: his "black"), then over the new list, and the buttons'
+// colours changed between (actflicker matrix, 19 switches, 4 Azahar arms).
+// - No rest before the button (fix 1): the cascade's last cancel reaches the buttons, and its rest take (the core's
+//   `rest` branch, nothing sent) is where the button's Confirm now goes, as the core would send it on the take after:
+//   the released button written as the cursor (silent, as take2's writes), Z merged as btTake merges a tap (pressed
+//   this take, let go the next through tPrev), and the cascade over. As the fastest keys (X, then Right+Z on the next
+//   frame; pcref btact_pckeys K1): the tap takes as many frames as the keys. A cancel after a cancel keeps its rest (a
+//   key press needs a release between). Not with a key of the player's held on this take or the last (the core's own
+//   next take decides then), nor unless the menu is at the buttons with the target choosable.
+// - The bottom held (fix 2): the frames a tap switch is under way (the cascade, then the take its Z goes to the game,
+//   or a button tapped at the buttons) show a mix of two pages, as the PC's keys do (pcref btact_pckeys: the "*" over
+//   the new list, "Muffet" over "Check"). Keys stay as the PC is; on a tap the bottom screen keeps its last picture
+//   until the new page's first (CtrRenderer_tapHold: this frame's end only), which appears on the frame it would.
+//   A target only: a re-tap of the open button goes back to the buttons, whose typing the keys show too (no hold).
+//   Bounded by the core: a cascade sends at most four cancels and ends on one that changes nothing.
+// - The story screens (maintainer 11-15: a tap does not close New Home's story text): rooms that look like a battle but
+//   have no battle controller and no dialoguer, so neither the battle's taps nor touchui's reach them. New Home's
+//   story encounters (room_storybattle: obj_storybattle_gen's balloon writers), the first Flowey (room_floweybattle:
+//   obj_floweybattle1) and Flowey's regret (room_flowey_regret: obj_endflowey_regret). Their text is OBJ_WRITER's,
+//   which reads Z alone (Z at a typed page: the next, or the end); X is read only by the room's own skip
+//   (scr_textskip: New Home's when the ini's Tale is set, or in its Flowey part; the first Flowey's), which writes the
+//   string position only. So a pen-down is one press, as the battle's speech tap (battletouchtap rule a), and only
+//   where a writer takes it (c26rev5 BT51-1): Z while a live writer (OBJ_WRITER or a child) waits for it (halt 1: the
+//   next page; 2 and 4: the end; obj_base_writer's Other_10), else X and Z while the first types (halt 0, its page not
+//   all shown: btTyping's test); nothing with no writer, with one in any other state, or while a choice is up (a
+//   writer at halt 5, an obj_choicer) or an obj_anybt is alive (review Q4). The game decides, so the tap skips where
+//   the keys skip. Not with a key of the player's held, nor on a sample take2 did not give the battle's core (BT51-2):
+//   an input cut (Options, HOME, sleep) or the extension's claim (ctr_touch_ext.h) lets the pen go there and never
+//   reaches take2's `L->scope = scope`, which this take's marker reads. Flowey's end choice (room_flowey_endchoice)
+//   and the dates choose with Z: no taps there.
+// - The setting Off (BT51-L1): take2 returns before the core, so nothing the core left armed holds the bottom.
+// The take wrap (__wrap_CtrInput_take) branches here; btTakeM (Battletouch_take) keeps its code. The tap switch's
+// code and constants are an AAC input (.aacout.text/.rodata.btswitch, aacout.cmake; 11-15), with
+// ctr_renderer.c's hold and ctr_gpu_queue.c's setter: release Old's late text keeps its floor. The story screens'
+// code and constants (u3 r5, 11-15: a unit never grows a tenant before the reclaim block) are their own input,
+// .aacout.text.btstory, appended after the block: btswitch keeps N11's bytes (btTapTake as there), and the wrap's
+// alias goes to btTapTakeU, which wraps btTapTake.
+#if defined(ENABLE_WAD16) // AAC tenants carry an explicit guard (test_aacslot_shared.py)
+#define BT_CODES __attribute__((noinline, noipa, used, section(".aacout.text.btswitch")))
+#define BT_ROS __attribute__((section(".aacout.rodata.btswitch")))
+#else
+#define BT_CODES __attribute__((noinline, noipa, used))
+#define BT_ROS
+#endif
+// The story screens' code (BT_CODEU) and constants (BT_TEXTRO) are one text-only input, .aacout.text.btstory: dev
+// links N8a's two readonly inputs in late text, so a non-empty rodata input after them would sit at another address
+// in dev than in release (check_devonly_aac; storyentry, 11-15). The name's tail ends GCC's own flags in an ARM
+// assembler comment (@), so the constants share the code's "ax" section.
+#if defined(ENABLE_WAD16) // AAC tenants carry an explicit guard (test_aacslot_shared.py)
+#ifdef __arm__
+#define BT_CODEU __attribute__((noinline, noipa, used, section(".aacout.text.btstory")))
+#define BT_TEXTRO __attribute__((section(".aacout.text.btstory,\"ax\",%progbits @")))
+#else
+#define BT_CODEU __attribute__((noinline, noipa, used))
+#define BT_TEXTRO // host tests: plain .rodata
+#endif
+#else
+#define BT_CODEU __attribute__((noinline, noipa, used))
+#define BT_TEXTRO
+#endif
+static const char btStoryRooms[] BT_TEXTRO = "room_storybattle\0room_floweybattle\0room_flowey_regret\0";
+static const char btStoryNot[] BT_TEXTRO = "obj_anybt\0obj_choicer\0"; // any one alive: no story tap
+#ifdef CTRPORT_TOUCH_TEST
+static const char btSkipLog[] BT_ROS = "[touch] f=%lu norest write=%d\n";
+static const char btStoryLog[] BT_TEXTRO = "[touch] f=%lu story key=%lu\n";
+#endif
+void CtrRenderer_tapHold(Renderer* renderer, bool on);
+CtrInputEdges Battletouch_take(const CtrInputMap* map, uint32_t held, uint32_t down, bool enabled, bool suppressHeld,
+                               CtrInputStats* stats);
+static BT_CODEU bool btStoryTap(Runner* runner) {
+    const Room* room = runner->currentRoom;
+    if (bt.names == nullptr || !bt.names->named || room == nullptr || room->name == nullptr) return false;
+    if (btFirst(runner, bt.names->obj[O_BC]) != nullptr) return false;
+    for (const char* n = btStoryRooms; *n != '\0'; n += strlen(n) + 1) {
+        if (strcmp(room->name, n) == 0) return true;
+    }
+    return false;
+}
+// A story screen's pen-down key (above): Z, X and Z, or 0 for none. Read on an admitted pen-down only, so the object
+// names are found then (no state of its own).
+static BT_CODEU uint32_t btStoryKey(Runner* runner) {
+    if (!btStoryTap(runner) || runner->instancesByObject == nullptr) return 0u;
+    const DataWin* dw = runner->dataWin;
+    for (const char* n = btStoryNot; *n != '\0'; n += strlen(n) + 1) {
+        for (uint32_t i = 0; dw->objt.count > i; i++) {
+            if (dw->objt.objects[i].name != nullptr && strcmp(dw->objt.objects[i].name, n) == 0) {
+                if (btFirst(runner, (int32_t) i) != nullptr) return 0u;
+                break;
+            }
+        }
+    }
+    Instance** list = runner->instancesByObject[bt.names->obj[O_WRITER]];
+    bool wait = false;
+    for (ptrdiff_t i = 0; arrlen(list) > i; i++) {
+        if (list[i]->destroyed || !list[i]->active) continue;
+        int32_t halt = btInt(btSlot4(&list[i]->selfVars, bt.names->id[S_HALT]), -1, false);
+        if (halt == 5) return 0u; // a choice
+        wait = wait || halt == 1 || halt == 2 || halt == 4;
+    }
+    return wait ? TOUCH_KEY_Z : btTyping(runner) ? (TOUCH_KEY_X | TOUCH_KEY_Z) : 0u;
+}
+static uint32_t btStoryKeyOm(Runner* runner); // Omega (the file's end): btStoryKey's wrap
+#line 3184
+static BT_CODES CtrInputEdges btTapTake(const CtrInputMap* map, uint32_t held, uint32_t down, bool enabled,
+                                        bool suppressHeld, CtrInputStats* stats) {
+    BtLive* L = bt.live;
+    bool rest0 = L != nullptr && L->s.mode == TOUCH_CASCADE && L->s.rest;
+    uint32_t ePrev = L != nullptr ? L->ePrev : 0u;
+    CtrInputEdges e = Battletouch_take(map, held, down, enabled, suppressHeld, stats);
+    L = bt.live;
+    Runner* runner = bt.runner;
+    if (L == nullptr || runner == nullptr) return e;
+    TouchState* s = &L->s;
+    bool hold = s->mode == TOUCH_CASCADE && s->target >= 0;
+    bool go = hold && rest0 && !s->rest && ((L->ePrev | ePrev) & TOUCH_KEY_ABANDON) == 0;
+    if (go || (L->tPrev & TOUCH_KEY_Z) != 0) {
+        TouchMenu m;
+        int32_t slot;
+        btRead_menu(runner, &m, &slot);
+        bool buttons = m.ctx == TOUCH_CTX_MENU && m.atButtons;
+        if (go && buttons && (m.valid >> s->target & 1u) != 0) {
+            if (slot >= 0) btWrite(runner, slot, s->target, false);
+            e.held |= TOUCH_KEY_Z;
+            e.pressed |= TOUCH_KEY_Z;
+            e.released &= ~TOUCH_KEY_Z;
+            L->tPrev |= TOUCH_KEY_Z;
+            s->mode = s->pen ? TOUCH_DEAD : TOUCH_IDLE;
+#ifdef CTRPORT_TOUCH_TEST
+            logInfo(btSkipLog, (unsigned long) bt.frame, (int) s->target);
+#endif
+        }
+        // The stylus's Z to the game at the buttons (this one, the core's, or a button tapped there): its frame held.
+        if (buttons && (L->tPrev & TOUCH_KEY_Z) != 0) hold = true;
+    }
+    CtrRenderer_tapHold(runner->renderer, hold);
+    return e;
+}
+// u3's take (the wrap's alias, below): btTapTake (N11's: the core's take, then the tap switch's hold) inside the story
+// screens' admission marker, then the setting Off's release of the hold and the story screens' pen-down key. Where a
+// key can come (no battle controller) the tap switch neither reads nor writes the stylus's Z, so merging it after
+// btTapTake is what merging it before was; with the setting Off the core does not step, so btTapTake's hold is
+// released here before the frame's end, as before.
+static BT_CODEU CtrInputEdges btTapTakeU(const CtrInputMap* map, uint32_t held, uint32_t down, bool enabled,
+                                         bool suppressHeld, CtrInputStats* stats) {
+    BtLive* L = bt.live;
+    uint32_t ePrev = L != nullptr ? L->ePrev : 0u, tPrev = L != nullptr ? L->tPrev : 0u; // last take's, as btTake's
+    // A pen-down can come this take: the core idle with the pen up, and nothing that cuts the take (take2's `cut`).
+    uint32_t apt0 = L != nullptr ? __atomic_load_n(&L->apt, __ATOMIC_ACQUIRE) : 0u;
+    bool idle = L != nullptr && !L->s.pen && L->s.mode == TOUCH_IDLE && (enabled || BT_SCRIPTED) && !suppressHeld
+                && apt0 == L->aptSeen && !__atomic_load_n(&L->away, __ATOMIC_ACQUIRE);
+    // The admission marker (BT51-2): take2 sets L->scope only on a sample it gives the core (neither cut nor claimed),
+    // and reads it only with the pen down or a press under way, which idle rules out until that set. Put back if unset.
+    BtScope scope0 = {0};
+    if (idle) {
+        scope0 = L->scope;
+        L->scope.runner = nullptr;
+    }
+    CtrInputEdges e = btTapTake(map, held, down, enabled, suppressHeld, stats);
+    bool admitted = false;
+    if (idle) {
+        admitted = L->scope.runner != nullptr;
+        if (!admitted) L->scope = scope0;
+    }
+    L = bt.live;
+    Runner* runner = bt.runner;
+    if (L == nullptr || runner == nullptr) return e;
+    if (btMode() == 0) {
+        CtrRenderer_tapHold(runner->renderer, false); // BT51-L1
+        return e;
+    }
+    TouchState* s = &L->s;
+    uint32_t key = 0u;
+    if (admitted && s->pen && L->aptSeen == apt0 && !__atomic_load_n(&L->away, __ATOMIC_ACQUIRE)
+        && (L->ePrev & TOUCH_KEY_ABANDON) == 0)
+        key = btStoryKeyOm(runner);
+    if (key != 0u) {
+        // The story screens' pen-down: one press, merged as btTake merges a tap.
+        uint32_t z = L->tPrev & TOUCH_KEY_Z & ~key;
+        e.held = (e.held & ~z) | key;
+        e.pressed = (e.pressed & ~(z | key)) | (key & ~ePrev);
+        e.released = (e.released & ~key) | (z & (ePrev | tPrev));
+        L->tPrev = (L->tPrev & ~z) | key;
+#ifdef CTRPORT_TOUCH_TEST
+        logInfo(btStoryLog, (unsigned long) bt.frame, (unsigned long) key);
+#endif
+    }
+    return e;
+}
+__asm__(".global Battletouch_tapTake\n.set Battletouch_tapTake, btTapTakeU\n");
+
 // After take2 and btBlue, past btTakeM's guard (the runner, the names bound to this data file, the setting on, a
 // BtLive). ePrev and tPrev: btTakeM's, the buttons' and the stylus's holds as the last take left them.
 static BT_CODEM void btTurned(BtLive* L, CtrInputEdges* e, uint32_t ePrev, uint32_t tPrev) {
@@ -3222,6 +3422,140 @@ static BT_CODEM void btTurned(BtLive* L, CtrInputEdges* e, uint32_t ePrev, uint3
 #endif
 }
 
+// ===[ Omega Flowey with the stylus (change battletouch, chg-stylus-move-all-soul-scenes-1115; maintainer 11-15) ]===
+// "the stylus doesnt work at all in omega flowey": room_floweyx has no battle controller, so btRead_menu answers OFF
+// and the core does nothing there. With touch on, battlesplit's Omega unit (z_battlesplit.c's end) puts the fight on
+// the bottom screen; here the pen drives it as a battle's defence and text:
+// - The SOUL (obj_vsflowey_heart while its "move" is 1, the player's turn to move it): a defence with a red SOUL, the
+//   core's follow law ("draw", not teleport: maintainer 11-15, "waiting for the soul to move is a part of the decision"),
+//   at the heart's own speed (its Step moves 4 px a frame per held arrow), centred on its sprite's box. Menus and SOUL
+//   only, as every SOUL; with Menus the defence follows nothing (soul NONE), as a battle's.
+// - The buttons (obj_centeract_parent's children): the game lights one (image_index 1) while the SOUL touches it and
+//   takes Z on it at its next Begin Step. A pen-down inside a lit button is one Z and nothing more (maintainer's choice
+//   screens: drag the heart onto a button, then tap inside it): this take's context is the core's TAP (one Z on the
+//   pen-down, the stroke dead until the lift), so the SOUL does not move under it. Elsewhere the pen-down grabs the
+//   SOUL. Not with a key of the player's held (the core's abandon).
+// - The talk (OBJ_WRITER's text) while no heart moves: a pen-down is what the writer takes, as on the story screens
+//   (btStoryKey: Z at a typed page, X and Z while it types, nothing at a choice).
+// The same calls, other targets: take2 calls btReadOm in place of btReadT and btSoulOm in place of btRead_soul2, and
+// btTapTakeU btStoryKeyOm in place of btStoryKey. take2's code still moves (8 B longer in late text): GCC built it
+// knowing the old callees, which it cannot know of these (lead 11-15). Each wrapper makes the old call itself, first
+// (btReadT) or in every other room (the other two). The objects are found once per data file into BtLive's appended
+// fields. Code and constants are a new AAC input (.aacout.text.btomega, text only: the constants share the code's
+// section as BT_TEXTRO's do, since dev links N8a's readonly inputs in late text), appended after the reclaim block
+// (aacout.cmake).
+#if defined(ENABLE_WAD16) // AAC tenants carry an explicit guard (test_aacslot_shared.py)
+#ifdef __arm__
+#define BT_CODEOM __attribute__((noinline, noipa, used, section(".aacout.text.btomega")))
+#define BT_ROOM __attribute__((section(".aacout.text.btomega,\"ax\",%progbits @")))
+#else
+#define BT_CODEOM __attribute__((noinline, noipa, used))
+#define BT_ROOM // host tests: plain .rodata
+#endif
+#else
+#define BT_CODEOM __attribute__((noinline, noipa, used))
+#define BT_ROOM
+#endif
+#define BT_OM_HEART 13 // offsets in btOmNames
+#define BT_OM_BUTTON (BT_OM_HEART + 19)
+#define BT_OM_MOVE (BT_OM_BUTTON + 21)
+static const char btOmNames[] BT_ROOM = "room_floweyx\0obj_vsflowey_heart\0obj_centeract_parent\0move";
+_Static_assert(sizeof btOmNames == BT_OM_MOVE + sizeof "move", "btOmNames' offsets");
+// In Omega Flowey's room with no battle controller and its two objects found (once per data file): true.
+static BT_CODEOM bool btOmRoom(Runner* runner, BtLive* L) {
+    const Room* room = runner->currentRoom;
+    if (L == nullptr || room == nullptr || room->name == nullptr || strcmp(room->name, btOmNames) != 0) return false;
+    if (runner->instancesByObject == nullptr || btFirst(runner, bt.names->obj[O_BC]) != nullptr) return false;
+    DataWin* dw = runner->dataWin;
+    if (L->omData != dw) {
+        L->omData = dw;
+        L->omHeart = L->omButton = -1;
+        for (uint32_t i = 0; dw->objt.count > i && 0x7fffu > i; i++) {
+            const char* n = dw->objt.objects[i].name;
+            if (n == nullptr) continue;
+            if (strcmp(n, btOmNames + BT_OM_HEART) == 0) L->omHeart = (int16_t) i;
+            if (strcmp(n, btOmNames + BT_OM_BUTTON) == 0) L->omButton = (int16_t) i;
+        }
+    }
+    return L->omHeart >= 0 && L->omButton >= 0;
+}
+// The heart while the player moves it ("move" 1), or nullptr.
+static BT_CODEOM Instance* btOmHeart(Runner* runner, BtLive* L) {
+    Instance* h = btFirst(runner, L->omHeart);
+    if (h == nullptr || h->objectIndex != L->omHeart) return nullptr;
+    VMContext* ctx = runner->vmContext;
+    ptrdiff_t at = shgeti(ctx->varNameMap, (char*) (btOmNames + BT_OM_MOVE));
+    return 0 > at || btInt(btSlot4(&h->selfVars, ctx->varNameMap[at].value), 0, false) != 1 ? nullptr : h;
+}
+// An instance's sprite box in room px (as the game draws it: origin, size, scale); false without a sprite.
+static BT_CODEOM bool btOmBox(Runner* runner, const Instance* h, float* box) {
+    DataWin* dw = runner->dataWin;
+    if (0 > h->spriteIndex || (uint32_t) h->spriteIndex >= dw->sprt.count) return false;
+    const Sprite* sp = &dw->sprt.sprites[h->spriteIndex];
+    float x0 = h->x - (float) sp->originX * h->imageXscale, x1 = x0 + (float) sp->width * h->imageXscale;
+    float y0 = h->y - (float) sp->originY * h->imageYscale, y1 = y0 + (float) sp->height * h->imageYscale;
+    box[0] = x0 < x1 ? x0 : x1;
+    box[1] = y0 < y1 ? y0 : y1;
+    box[2] = x0 < x1 ? x1 : x0;
+    box[3] = y0 < y1 ? y1 : y0;
+    return true;
+}
+// take2's menu read: btReadT, then Omega's defence, or its TAP on a pen-down inside a lit button.
+static BT_CODEOM void btReadOm(Runner* runner, TouchMenu* m, int32_t* slot) {
+    btReadT(runner, m, slot);
+    BtLive* L = bt.live;
+    if (m->ctx != TOUCH_CTX_OFF || !btOmRoom(runner, L) || btOmHeart(runner, L) == nullptr) return;
+    m->ctx = TOUCH_CTX_DEFENCE;
+    CtrBottomView v;
+    const TouchPen* p = &L->pen;
+    if (!p->pen || L->s.pen || L->s.mode != TOUCH_IDLE || !CtrLayout_bottomView(runner, &v)) return;
+    // The pen-down's place as take2 maps it (the sample Touch_pen chose).
+    int32_t i = p->wait ? 1 : 0;
+    float x = v.roomX0 + ((float) p->x[i] + 0.5f) * v.roomPerPx, y = v.roomY0 + ((float) p->y[i] + 0.5f) * v.roomPerPx;
+    Instance** list = runner->instancesByObject[L->omButton]; // its children too
+    for (ptrdiff_t k = 0; arrlen(list) > k; k++) {
+        const Instance* b = list[k];
+        float box[4];
+        if (b->destroyed || !b->active || (int32_t) b->imageIndex != 1 || !btOmBox(runner, b, box)) continue;
+        if (x >= box[0] && box[2] > x && y >= box[1] && box[3] > y) {
+            m->ctx = TOUCH_CTX_TAP;
+            return;
+        }
+    }
+}
+// take2's SOUL read: Omega's heart in its room (red, 4 px a frame), else btRead_soul2.
+static BT_CODEOM void btSoulOm(Runner* runner, TouchMenu* m) {
+    BtLive* L = bt.live;
+    if (!btOmRoom(runner, L)) {
+        btRead_soul2(runner, m);
+        return;
+    }
+    Instance* h = btOmHeart(runner, L);
+    float box[4];
+    if (h == nullptr || !btOmBox(runner, h, box)) return;
+    m->soul = TOUCH_SOUL_RED;
+    m->soulX = (int32_t) ((box[0] + box[2]) * 8.0f); // the centre, times 16
+    m->soulY = (int32_t) ((box[1] + box[3]) * 8.0f);
+    m->soulStep = 4 * 16;
+}
+// btTapTakeU's pen-down key: Omega's talk while no heart moves, else btStoryKey.
+static BT_CODEOM uint32_t btStoryKeyOm(Runner* runner) {
+    BtLive* L = bt.live;
+    if (!btOmRoom(runner, L)) return btStoryKey(runner);
+    if (btOmHeart(runner, L) != nullptr) return 0u;
+    Instance** w = runner->instancesByObject[bt.names->obj[O_WRITER]]; // its children too
+    uint32_t key = 0u;
+    for (ptrdiff_t k = arrlen(w); k-- > 0;) {
+        if (w[k]->destroyed || !w[k]->active) continue;
+        int32_t h = btInt(btSlot4(&w[k]->selfVars, bt.names->id[S_HALT]), -1, false);
+        if (h == 5) return 0u; // a writer's choice: the game's own keys
+        if (h == 1 || h == 2 || h == 4) key = TOUCH_KEY_Z; // a typed page: the next, or the end
+    }
+    if (key == 0u && btTyping(runner)) key = TOUCH_KEY_X | TOUCH_KEY_Z; // typing: the page at once
+    return key;
+}
+
+#line 3382
 // ===[ Battle layout: Original, 3DS Mode, Top screen, with the game on either screen (battletouch18, 11-10) ]===
 //
 // maintainer 11-10: battles should go on the top screen with the game on the bottom one. Every change to earlier code keeps

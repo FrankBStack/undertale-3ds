@@ -19,10 +19,12 @@ PREFIX = 'Flowery_dispatch_'
 WRAPPER = 'Flowery_wrap_'
 CONDITION = r'(?:eq|ne|cs|cc|mi|pl|vs|vc|hi|ls|ge|lt|gt|le|al)?'
 LATE = re.compile(r'^\.(?:text|rodata|data|bss)\.late\.perfflowery$')
-LATE_LANES = {'dlgtop4': re.compile(r'^\.aacout\.(?:text|rodata)\.dlgtop4$|^\.text\.late\.dlgtop4$|^\.bss\.dlgtop4$|^\.text_dlgretire_late$'),
+LATE_LANES = {'dlgtop4': re.compile(r'^\.aacout\.(?:text|rodata)\.dlgtop4$|^\.text\.late\.dlgtop4$|^\.bss\.dlgtop4$|^\.text_dlgretire_late$|^\.text_dlgcloseblack_late$|^\.aacout\.text\.latereclaim_dlg$'),
               'dlgflash': re.compile(r'^\.text_dlgflash$|^\.rodata\.dlgflash_in_text$|^\.data_dlgflash$'),
               'dlgwhite': re.compile(r'^\.text_dlgwhite$'),
-              'gameoverscreen': re.compile(r'^\.(?:text|rodata|bss)_gameoverscreen$'),
+              # asgsmart F1u's fold (ctr_gameoverscreen.inc's UT_COLD_TEXT(asgfuse): .aacout.text.asgfuse on Old,
+              # .text_asgfuse on New) comes with the game-over unit's sections; utwindow_compile.py checks and installs it.
+              'gameoverscreen': re.compile(r'^\.(?:text|rodata|bss)_gameoverscreen$|^\.text_asgfuse$|^\.aacout\.text\.asgfuse$'),
               'perfflowery': re.compile(r'^\.(?:text|rodata|data|bss)\.late\.perfflowery$|^\.text\.drpix_late$'),
               # DELTARUNE New's tower face retention (vine_new_retain.inc), its own late sections, and climbnoise's
               # Azahar-only free of the tower textures there (cnTowerFree, its own line in late_reserve.ld), change flowerhw's

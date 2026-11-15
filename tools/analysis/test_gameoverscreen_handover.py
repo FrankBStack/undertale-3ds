@@ -11,7 +11,7 @@ from gameoverscreen_frozen import FREEZE,frozen
 
 BASE='ecbcd6e1a4590f085a11dfd72286d22c9b096913'  # read from committed excerpts (gameoverscreen_frozen)
 assert BASE==FREEZE
-HELPER_SHA='a0bb7c0111c4254f0eba541240dc671061091a5629e2820453d2132ba622d980'
+HELPER_SHA='62448c29dd2ad1b56d7b875b81dfb6e3ad8f7d480c0b95f40c731cd4caf59f3b'
 
 def fixture(mutant=None):
     go=(SOURCE/'ctr_gameoverscreen.inc').read_text()

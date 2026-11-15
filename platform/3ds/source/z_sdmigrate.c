@@ -72,7 +72,24 @@ static struct {
 #else
 #define SM_CARVE_BOTTOMPAINT 0
 #endif
-#define SM_CARVE_BYTES (SM_CARVE_BONEGATE + SM_CARVE_BOXCACHE + SM_CARVE_BOTTOMPAINT)
+#if defined(ENABLE_WAD16)
+#define SM_CARVE_MSGLOCK 16 // msglock's state (ctr_audio_system.c msglockGame, msglockDropped, msglockOv and
+                           // msglockOvCount, .bss.msglock_late)
+#else
+#define SM_CARVE_MSGLOCK 0
+#endif
+#if defined(ENABLE_WAD16) && defined(CTRPORT_HAVE_TREMOR)
+// soulahead's state (ctr_soulahead.inc soulAhead, .bss.soulahead_late: 48 B, 8-aligned for its u64s), the last tenant,
+// with the pad before it: hf starts 8-aligned, so the pad is the tenants above it mod 8 (UT Old 4 B, New 0 B).
+// late_reserve.ld asserts the block keeps SM_BSS_BYTES.
+#define SM_CARVE_SOULAHEAD_AT (sizeof(hf) + SM_CARVE_BONEGATE + SM_CARVE_BOXCACHE + SM_CARVE_BOTTOMPAINT + \
+                               SM_CARVE_MSGLOCK)
+#define SM_CARVE_SOULAHEAD (48 + (8 - SM_CARVE_SOULAHEAD_AT % 8) % 8)
+#else
+#define SM_CARVE_SOULAHEAD 0
+#endif
+#define SM_CARVE_BYTES (SM_CARVE_BONEGATE + SM_CARVE_BOXCACHE + SM_CARVE_BOTTOMPAINT + \
+                        SM_CARVE_MSGLOCK + SM_CARVE_SOULAHEAD)
 static unsigned char smSpare[SM_BSS_BYTES - sizeof(hf) - SM_CARVE_BYTES] __attribute__((used, section(".bss.sdmigrate_spare")));
 
 #ifdef ENABLE_WAD17

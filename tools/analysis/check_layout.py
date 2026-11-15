@@ -47,15 +47,17 @@ import sys
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from layout_objects import read_objects, compare_objects, waiver_file, inventory_lines, cswtch_renames  # noqa: E402
+import aac_capacity  # noqa: E402
 
 DEVKITARM_BIN = Path('C:/devkitPro/devkitARM/bin')
 FROZEN = ('.fatalflush', '.vidfix', '.heapfrag', '.heapfrag_rodata')
 LANE_LATE = ('.late.text', '.late.rodata', '.late.data', '.late.bss')
 RESERVES = ('text', 'rodata', 'data')
-AAC_CAPACITIES = {'text': 43396, 'rodata': 23532}
-# The capacities a slot may have: UNDERTALE New keeps 43,396 B of AAC text, UNDERTALE Old has 80,260 B since the
-# Old 1.0 envelope (relready-resize.md, dv8q). A layout pair must still have the same extent on both sides.
-AAC_CAPACITY_SETS = {'text': (43396, 80260), 'rodata': (23532,)}
+AAC_CAPACITIES = {'text': aac_capacity.TEXT['n3ds'], 'rodata': aac_capacity.RODATA}
+# The capacities a slot may have (aac_capacity.py): UNDERTALE New 59,780 B of AAC text since N10 rider R9 (43,396 B
+# before), UNDERTALE Old 80,260 B since the Old 1.0 envelope (relready-resize.md, dv8q). A layout pair must still
+# have the same extent on both sides, so a pair across R9 fails here by design (accepted once, review decision 11-15).
+AAC_CAPACITY_SETS = {'text': aac_capacity.TEXT_KNOWN, 'rodata': (aac_capacity.RODATA,)}
 PAGE = 0x1000
 
 

@@ -440,7 +440,9 @@ PT_CODE static void ptBoundary(uint32_t before) {
     __atomic_store_n(&pt.open, false, __ATOMIC_RELEASE);
     CtrAudioSystem* ca = *CtrLoadmix_legacy.target;
     if (!(command & 1u) || ca == NULL) return;
-    for (unsigned i = 0; i < VOICE_COUNT; i++) pt.snap[i] = ca->voices[i].serial;
+    // Before the first sound (a boot's first window) every voice's serial is 0, and so is the first play's: a value
+    // no play gives soon stands for them, or that sound would count as playing at the open and start unheld.
+    for (unsigned i = 0; i < VOICE_COUNT; i++) pt.snap[i] = ca->serialCounter != 0 ? ca->voices[i].serial : UINT32_MAX;
     __atomic_store_n(&pt.open, true, __ATOMIC_RELEASE);
 }
 

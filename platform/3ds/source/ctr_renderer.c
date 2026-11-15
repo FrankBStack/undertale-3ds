@@ -2771,11 +2771,13 @@ static void makeCommandRoom(CtrRenderer* r);
 // battlesplit22 (the Split's top margin, this file's end): the body is CtrRenderer_bsProphecy22's, which also keeps
 // a split frame's batches that reach above the view; padded to its old size there, so nothing moves. Its callers
 // see what they saw: a leaf that reads *r and changes r0, r2 and r3 (the call keeps every other
-// register the caller may hold across it, VFP d0-d7 too), so the compiler builds them as before.
+// register the caller may hold across it, VFP d0-d7 too), so the compiler builds them as before. The call goes
+// through CtrRenderer_bsNapProphecy (the ghost's draw above the view, this file's end), which is bsProphecy22 but
+// while that draw has the projection moved.
 static __attribute__((noinline)) bool prophecyBatches(const CtrRenderer* r) {
     register const CtrRenderer* a __asm__("r0") = r;
     register uint32_t p __asm__("r0");
-    __asm__("push {r1, r3, ip, lr}\n\tvpush {d0-d7}\n\tbl CtrRenderer_bsProphecy22\n\tvpop {d0-d7}\n\tpop {r1, r3, ip, lr}"
+    __asm__("push {r1, r3, ip, lr}\n\tvpush {d0-d7}\n\tbl CtrRenderer_bsNapProphecy\n\tvpop {d0-d7}\n\tpop {r1, r3, ip, lr}"
             : "=r"(p)
             : "0"(a), "m"(*r)
             : "r2", "r3", "cc");
@@ -23666,6 +23668,44 @@ __attribute__((noipa, noinline, section(".text.late.engfix"))) static void scree
     r->displayDirty = false;
 }
 
+#if defined(ENABLE_WAD16)
+// ===[ battletouch's tap hold (change battletouch, maintainer 11-15, GO #51) ]===
+//
+// A stylus switch between battle menu pages (z_battletouch.c's btTapTake) keeps the bottom screen's picture for the
+// frames between the two pages. Each take calls this with this frame's answer. On: at this frame's end (C3D_FrameEnd's
+// hook, called before its transfers; otherwise unused) the bottom screen's target is marked undrawn, so this frame
+// neither transfers to nor flips the bottom screen, and it keeps the picture last flipped there (the buffer on screen
+// is not written: no transfer). The next frame's transfer goes to the same back buffer and flips as usual. The top
+// screen is untouched, and so is every other frame: the hook removes itself, and a take that holds nothing removes a
+// hook a skipped frame end left (CtrGpu_frameEndBehind calls it too, on a frame with no transfers: no effect).
+// Only while the game's frames flip the top screen (CtrScreens_pacerGame GFX_TOP): the bottom's flips are then in no
+// pacing count, so no held-frame gate counts these frames or loses a real hold in them; with the game on the bottom
+// screen nothing is held. Dev builds (CTRPORT_BTH_LOG) log each held frame ("pace: tap hold bottom", its game
+// frame). Code and constants: the AAC slot's btswitch input (aacout.cmake), with z_battletouch.c's.
+#ifdef CTRPORT_BTH_LOG
+static const char bthLog[] __attribute__((section(".aacout.rodata.btswitch"))) = "pace: tap hold bottom f=%ld\n";
+#endif
+// The hook is set through ctr_gpu_queue.c's CtrGpu_frameEndHookBts (AAC slot), not C3D_FrameEndHook.
+void CtrGpu_frameEndHookBts(void (*hook)(void*), void* param);
+static __attribute__((noinline, noipa, section(".aacout.text.btswitch"))) void bthEnd(void* p) {
+    extern uint8_t CtrScreens_pacerGame;
+    CtrGpu_frameEndHookBts(nullptr, nullptr);
+    CtrRenderer* r = (CtrRenderer*) p;
+    C3D_RenderTarget* b = r->bottomTarget;
+    if (b == nullptr || !b->used || !b->linked || b->screen != GFX_BOTTOM || CtrScreens_pacerGame != GFX_TOP) return;
+    b->used = false;
+#ifdef CTRPORT_BTH_LOG
+    logInfo(bthLog, (long) (r->base.runner != nullptr ? r->base.runner->frameCount : -1));
+#endif
+}
+void CtrRenderer_tapHold(Renderer* renderer, bool on);
+__attribute__((noinline, noipa, used, section(".aacout.text.btswitch"))) void CtrRenderer_tapHold(Renderer* renderer,
+                                                                                                 bool on) {
+    if (on) CtrGpu_frameEndHookBts(bthEnd, renderer);
+    else CtrGpu_frameEndHookBts(nullptr, nullptr);
+}
+#endif
+
 #ifdef ENABLE_WAD17
 // ===[ surface_copy with a recorded surface (engfix item 6) ]===
 //
@@ -25148,6 +25188,7 @@ static uint8_t utaGateOn __attribute__((section(".bss.late.utasgore")));
 #ifdef CTRPORT_ASG_PROBE
 extern uint8_t utaOff;
 extern uint32_t utaWhy[48];
+extern uint32_t utaGateProbe; // asgsmart: the gate under test (ctr_asgprobe.c, utagate.txt)
 #endif
 static inline __attribute__((always_inline)) bool utaTakes(const CtrRenderer* r) {
 #ifdef CTRPORT_ASG_PROBE
@@ -25155,13 +25196,18 @@ static inline __attribute__((always_inline)) bool utaTakes(const CtrRenderer* r)
 #endif
     if (!asgRun.open || r->addHold.mode != ADD_HOLD_HELD || r->frame != asgRun.endFrame) return false;
     if (utaGateFrame != r->frame) {
+#ifdef CTRPORT_ASG_PROBE
+        utaGateOn = utaGateCalls >= utaGateProbe;
+#else
         utaGateOn = utaGateCalls >= UTA_GATE_CALLS;
+#endif
         utaGateCalls = 0;
         utaGateFrame = r->frame;
     }
     utaGateCalls++;
 #ifdef CTRPORT_ASG_PROBE
     if (!utaGateOn) utaWhy[41]++;
+    utaWhy[42]++; // asgsmart: every counted call, gate on or off
 #endif
     return utaGateOn;
 }
@@ -25787,6 +25833,7 @@ uint64_t utaStampT[6] __attribute__((section(".bss.late.utasgore"))), utaTicks[6
 // (<game dir>/utaoff.txt, read by the probe; utaTakes tests it): the same build measured with and without the path.
 uint32_t utaWhy[48] __attribute__((section(".bss.late.utasgore")));
 uint8_t utaOff __attribute__((section(".bss.late.utasgore")));
+uint32_t utaGateProbe __attribute__((section(".bss.late.utasgore"))); // asgsmart: the gate under test
 #define UTA_NO(n) (utaWhy[n]++, false)
 #else
 #define UTA_COUNT(n) ((void) 0)
@@ -30849,6 +30896,9 @@ BS_CODE void CtrRenderer_bsLayer(Renderer* renderer, int32_t layer) {
     s->target = want;
     if (r->inFrame && r->boundSurface == id && r->boundTarget != nullptr && r->boundTarget != want) {
         flushBatch(r);
+#if defined(CTRPORT_ASG_PROBE) && !defined(ENABLE_WAD17) && !defined(CTRPORT_RENDER_TIMING) && ASG_FORCE_SPLIT == 0
+        utaWhy[43]++; // asgsmart: a layer switch, in the probe's frame lines ("43:"): its run splits
+#endif
         r->boundTarget = want;
         // Present samples both: leaving the surface splits the frame first, as after any draw on it.
         r->boundTargetDrawn = true;
@@ -32379,7 +32429,7 @@ refused: // this batch is not kept (the frame's earlier records stay, and a late
 }
 
 // prophecyBatches' body, then the record of a batch it says flushBatch draws on another path. Called from
-// prophecyBatches' asm only (which keeps the registers its callers count on).
+// CtrRenderer_bsNapProphecy only (prophecyBatches' asm calls that: the ghost's draw above the view, below).
 bool CtrRenderer_bsProphecy22(const CtrRenderer* r);
 BS22_CODE __attribute__((used)) bool CtrRenderer_bsProphecy22(const CtrRenderer* r) {
     bool p = (r->shaderFx == SHADER_FX_PROPHECY || r->shaderFx == SHADER_FX_LEGEND || r->shaderFx == SHADER_FX_TEXSCROLL ||
@@ -32648,4 +32698,513 @@ void __wrap_CtrRenderer_bsStripCopy14(Renderer* renderer, int32_t rows, int32_t 
 // Game-over presentation unit: separate helper pass only, after the ordinary tail.
 #if defined(ENABLE_WAD16) && defined(CTRPORT_GAMEOVERSCREEN_HELPER)
 #include "ctr_gameoverscreen.inc"
+#endif
+
+// ===[ The Split's flash (change battlesplit2, 11-14; the top Split's flash) ]===
+// A split frame's cover draws (z_battlesplit.c's COVER class: a draw that covers the view goes on both layers) light
+// the whole PC screen, but on the top screen only the band showed them: the rows above and below it and the columns
+// beside it stayed black (a white flash was a lit box in the middle). Here, after the present, those rows and columns
+// take each such draw again, in the frame's order: a game rectangle of its colour and alpha, through the alpha byte's
+// stub as the game's own rectangles (ABQ(ctrDrawRectangle): the band's byte, c26rev6 FLASHFILL-1), blended as the
+// game's normal blend, on each eye (its shd_ripple path is DELTARUNE's: UNDERTALE sets no shader). The band is not
+// drawn over (it already has them), and what the margin holds (black, the top margin's strip of battlesplit22 and
+// 14c/14f) is under them as the game's own frame is under them on PC. z_battlesplit.c keeps the draws (bsFl's notes)
+// and calls this in place of CtrRenderer_bsPresent5 (through its --wrap: a call inside this file would not take it).
+// A paused present (Options open: the same game frame again) gets the same draws.
+// Once (c26rev6 FLASHFILL-2 and -6): a cover reaching above the view is in a batch battlesplit22 keeps, and its present
+// would draw it on the strip above the band too. A frame with notes is presented by CtrRenderer_bsFlashPresent22 in
+// place of __wrap_CtrRenderer_bsPresent5: that body as it stands (the pause, 14c's and 14f's strip, the clear, the
+// state, the ring's and the command buffer's room, the copy), but each record is drawn again as its primitives that
+// hold no note's vertex: each run of them a draw of its own, in their order, straight from where it lies in the ring,
+// under the record's blend, filter and textures (a record with none of the notes' vertices: the one draw the present
+// makes). A primitive (a quad, else a triangle) with any note's vertex is left out whole (a cover not on whole
+// primitives, FLASHFILL-4's misaligned case: the art's other primitives are drawn). The ring is used as the present
+// uses it (FLASHFILL-6): each record's room is made by the present's own check and start-over, for the whole record;
+// each run is copied where its vertices lie in the present's copy of the record (after reserveBatch's padding: runs of
+// whole primitives from the record's start keep a quad batch's alignment), and the ring left at that copy's end. So
+// the ring after each record is the present's, the same records are drawn or refused, less the covers.
+// Which vertices (c26rev6 FLASHFILL-3): the note's, in the ring's generation it stamped (vertexCount - vertexUsed),
+// taken before anything is drawn again (a start-over in the replay changes the difference). A start-over of the whole
+// ring since (makeVertexRoom after running the frame so far: vertexLimit the whole ring again) leaves the cover in no
+// record the present draws (bs22Record drops the records at that change, the present's ring check refuses them), so
+// its numbers are not looked for: they are other art's now. A start-over into the part the frame before used
+// (vertexLimit frameVertexStart: at most one a frame, none after a whole one) writes below the frame's first vertex
+// only, where none of the frame's earlier vertices lie: the numbers hold. A start-over during the cover: its vertices
+// from from to the old part's end, in the first generation, and from 0 to to, in the second.
+// The fill comes after the frame: art the game drew after the cover onto the strip is under it there, as on the rest
+// of the margin.
+// Appended, in the AAC slot (.aacout.text.bsflash, aacout.cmake: the last text input); extern and noipa, so nothing
+// this file compiled before changes. The present is -O2, as bs22FromStash: -Os calls to bindTarget made the dlgtop
+// pass (utwindow_compile.py) keep bindTarget out of line, an undefined bindTarget at link (build turn #22).
+#ifdef ENABLE_WAD16 // AAC tenants carry an explicit guard (test_aacslot_shared.py)
+#ifdef __3DS__
+// Where the ring is: the next vertex, and vertexCount - vertexUsed (it changes only when the ring starts over).
+__attribute__((noinline, noipa, optimize("Os"), section(".aacout.text.bsflash")))
+void CtrRenderer_bsFlashMark(Renderer* renderer, uint32_t mark[2]) {
+    const CtrRenderer* r = (const CtrRenderer*) renderer;
+    mark[0] = r->vertexCount;
+    mark[1] = r->vertexCount - r->vertexUsed;
+}
+
+#if defined(NDEBUG) && !defined(CTRPORT_RENDER_TIMING)
+// Note i's vertices in a record the present can draw, part 0: from from to to, or (a start-over during the cover) to
+// the old part's end; part 1 (only then): 0 to to. False: none (no part 1; or the whole ring started over since).
+bool CtrRenderer_bsFlashPart(const CtrRenderer* r, const CtrBsFlash* flash, uint32_t i, uint32_t part, uint32_t ab[2]);
+__attribute__((noinline, noipa, optimize("Os"), section(".aacout.text.bsflash")))
+bool CtrRenderer_bsFlashPart(const CtrRenderer* r, const CtrBsFlash* flash, uint32_t i, uint32_t part, uint32_t ab[2]) {
+    bool whole = flash->gen[i][0] == flash->gen[i][1];
+    if ((part != 0 && whole) || (flash->gen[i][part] != r->vertexCount - r->vertexUsed && r->vertexLimit == VERTEX_CAPACITY))
+        return false;
+    ab[0] = part == 0 ? flash->from[i] : 0;
+    ab[1] = part == 0 && !whole ? UINT32_MAX : flash->to[i];
+    return true;
+}
+
+// Whether vertices [a, b) hold any of the notes' (cut: [from, to) pairs, cuts of them).
+bool CtrRenderer_bsFlashCut(const uint32_t (*cut)[2], uint32_t cuts, uint32_t a, uint32_t b);
+__attribute__((noinline, noipa, optimize("Os"), section(".aacout.text.bsflash")))
+bool CtrRenderer_bsFlashCut(const uint32_t (*cut)[2], uint32_t cuts, uint32_t a, uint32_t b) {
+    for (uint32_t i = 0; cuts > i; i++)
+        if (b > cut[i][0] && cut[i][1] > a) return true;
+    return false;
+}
+
+// __wrap_CtrRenderer_bsPresent5 with the frame's notes (c26rev6 FLASHFILL-6): its body as it stands but for the census
+// and diagnostic lines and the replay, where each record is drawn as its runs of primitives that hold no note's
+// vertex (CtrRenderer_bsFlashCut), each run as the present draws a record.
+void CtrRenderer_bsFlashPresent22(Renderer* renderer, int32_t band, int32_t topDy, int32_t bottomDy, const CtrBsFlash* flash);
+__attribute__((noinline, noipa, optimize("Os"), section(".aacout.text.bsflash")))
+void CtrRenderer_bsFlashPresent22(Renderer* renderer, int32_t band, int32_t topDy, int32_t bottomDy, const CtrBsFlash* flash) {
+    CtrRenderer* r = (CtrRenderer*) renderer;
+    uint32_t f = r->frame + 1;
+    flushBatch(r);
+    Runner* runner = r->base.runner;
+    uint32_t game = runner != nullptr ? (uint32_t) runner->frameCount + 1 : 0;
+    bool again = game == bs22.game && f == bs22.shown + 1;
+    bs22.game = game;
+    bs22.shown = f;
+    uint32_t n = bs22.frame == f && r->symTex == bs22.sym && CtrRenderer_bs22Ring(r, bs22.ring) ? bs22.n : 0;
+#ifdef CTRPORT_BS_MARGIN_CENSUS
+    bs22RoomNote(r, n);
+#endif
+    bs22.frame = 0;
+    if (again) {
+        if (bs22.rows != 0) {
+            if (bs22.stash != nullptr) CtrRenderer_bs22FromStash(renderer, bs22.rows, bs22.top);
+            else CtrRenderer_bsStripCopy14(renderer, bs22.rows, bs22.top);
+        }
+        goto present;
+    }
+    if (bs22.strip == f) {
+        if (n != 0) BS22_COUNT(5);
+        if (bs22.stash == nullptr && r->vertexUsed != bs22.used) bs22.rows = 0;
+        goto present;
+    }
+    bs22.rows = 0;
+    bs22.stash = nullptr;
+    if (n == 0) goto present;
+    // The notes' vertices, in the ring as the records left it (before any start-over below).
+    uint32_t cut[CTR_BS_FLASH_MAX * 2][2], cuts = 0;
+    for (uint32_t i = 0; flash->n > i && CTR_BS_FLASH_MAX > i; i++)
+        for (uint32_t part = 0; 2 > part; part++)
+            if (CtrRenderer_bsFlashPart(r, flash, i, part, cut[cuts])) cuts++;
+    uint32_t ring = bs22.ring;
+    int32_t rows = topDy;
+    float yy = r->projection.r[1].y, yw = r->projection.r[1].w;
+    float ya = (-1.0f - yw) / yy, yb = (rows / 120.0f - 1.0f - yw) / yy;
+    if ((uint32_t) rows - 1 >= TOP_SCREEN_H - 1 || r->palNextB != nullptr || r->batchQuads || r->projection.r[1].x != 0.0f ||
+        yy == 0.0f || !CtrRenderer_bs22Plain(r) || !CtrRenderer_bsStripClear14(renderer, -1.0e5f, ya < yb ? ya : yb, 1.0e5f, ya < yb ? yb : ya)) {
+        BS22_COUNT(6);
+        goto present;
+    }
+    const CtrSurface* app = &r->surfaces[r->boundSurface];
+    CtrRect was = r->scissor;
+    bool wasOn = r->scissorEnabled;
+    int8_t filter = r->filterOverride;
+    C3D_Mtx proj = r->projection;
+    int32_t y = app->height * (TOP_SCREEN_H - rows) / TOP_SCREEN_H;
+    r->scissorEnabled = true;
+    r->scissor = (CtrRect) { 0, y, app->width, app->height - y };
+    r->projection = bs22.proj;
+    r->projection.r[1].w -= 2.0f;
+    bs22.replaying = true;
+    applyAllState(r);
+#ifdef CTRPORT_BS_MARGIN_CENSUS
+    uint32_t drew = 0;
+#endif
+    for (uint32_t i = 0; n > i && CtrRenderer_bs22Ring(r, ring); i++) {
+        const Bs22Rec* e = &bs22.rec[i];
+        uint32_t k = 0;
+        while (e->units > k && e->tex[k]->data == e->texData[k]) k++;
+        if (k != e->units || gpuCmdBuf == nullptr || CtrRenderer_bs22Hash(&r->vertices[e->start], e->count) != e->hash) {
+            BS22_COUNT(7);
+            continue;
+        }
+        if (r->vertexCount + e->count + 3 > r->vertexLimit) {
+            if (r->vertexLimit != VERTEX_CAPACITY || e->count + 3 > r->frameVertexStart) {
+                BS22_COUNT(7);
+                continue;
+            }
+            flushVertexCache(r);
+            CtrGpu_waitIdle();
+            r->vertexLimit = r->frameVertexStart;
+            r->vertexCount = r->batchStart = r->vertexFlushed = 0;
+        }
+        // Where the present's copy of the record would lie (reserveBatch's padding for a quad batch: its quad indices
+        // are there, and the room is), and its end: the ring is left there, as the present leaves it.
+        uint32_t at = r->vertexCount, p = e->quads ? 4u : 3u, t = e->start + e->count;
+        if (e->quads && r->quadIndices != nullptr && r->quadIndexOk) at += (4u - (at & 3u)) & 3u;
+        // Its runs: from a, the primitives (p vertices, the last one what is left) up to one with a note's vertex.
+        for (uint32_t a = e->start, b = a; t > a; a = b) {
+            while (t > b && !CtrRenderer_bsFlashCut(cut, cuts, b, t - b > p ? b + p : t)) b = t - b > p ? b + p : t;
+            uint32_t count = b - a;
+            const CtrVertex* from = &r->vertices[a];
+            // Then the left-out primitives: the next run starts after them.
+            while (t > b && CtrRenderer_bsFlashCut(cut, cuts, b, t - b > p ? b + p : t)) b = t - b > p ? b + p : t;
+            if (count == 0) continue;
+            asrCommandRoom(r);
+            uint32_t w = e->word;
+            setBlendFunc(r, (GPU_BLENDEQUATION) (w & 0xFF), (GPU_BLENDEQUATION) (w >> 8 & 0xFF), (GPU_BLENDFACTOR) (w >> 16 & 0xF),
+                         (GPU_BLENDFACTOR) (w >> 20 & 0xF), (GPU_BLENDFACTOR) (w >> 24 & 0xF), (GPU_BLENDFACTOR) (w >> 28));
+            r->filterOverride = (int8_t) e->filter;
+            // The run where its vertices would lie in the present's copy (whole primitives from the record's start: a
+            // quad run is aligned there, no padding of its own).
+            r->vertexUsed += at + (a - e->start) - r->vertexCount;
+            r->vertexCount = r->batchStart = at + (a - e->start);
+            CtrVertex* v = reserveBatch(r, e->tex[0], count, false, e->quads ? count / 4u : 0u);
+            if (v == nullptr) goto done;
+            if (e->quads && !r->batchQuads) memset(v, 0, count * sizeof(CtrVertex));
+            else memmove(v, from, count * sizeof(CtrVertex));
+            for (k = 1; e->units > k; k++) r->batchTexes[k] = e->tex[k];
+            r->batchTexCount = e->units;
+            flushBatch(r);
+#ifdef CTRPORT_BS_MARGIN_CENSUS
+            drew++;
+#endif
+        }
+        r->vertexUsed += at + e->count - r->vertexCount;
+        r->vertexCount = r->batchStart = at + e->count;
+    }
+done:
+#ifdef CTRPORT_BS_MARGIN_CENSUS
+    if (drew != 0) BS22_COUNT(4);
+#endif
+    r->filterOverride = filter;
+    r->scissorEnabled = wasOn;
+    r->scissor = was;
+    r->projection = proj;
+    bs22.replaying = false;
+    applyAllState(r);
+    CtrRenderer_bsStripCopy14(renderer, topDy, topDy);
+    bs22.top = (int16_t) topDy;
+    bs22.rows = (int16_t) rows;
+present:
+    __real_CtrRenderer_bsPresent5(renderer, band, topDy, bottomDy);
+}
+#endif
+
+__attribute__((noinline, noipa, optimize("O2"), section(".aacout.text.bsflash")))
+void CtrRenderer_bsPresentFlash(Renderer* renderer, int32_t band, int32_t topDy, int32_t bottomDy, CtrBsFlash* flash) {
+    CtrRenderer* r = (CtrRenderer*) renderer;
+    bool before = r->skipPresent;
+#if defined(NDEBUG) && !defined(CTRPORT_RENDER_TIMING)
+    if (flash != nullptr && flash->n != 0) CtrRenderer_bsFlashPresent22(renderer, band, topDy, bottomDy, flash);
+    else
+#endif
+        __wrap_CtrRenderer_bsPresent5(renderer, band, topDy, bottomDy);
+    // Only a present that drew (CtrRenderer_bsPresent's checks set skipPresent then).
+    if (flash == nullptr || flash->n == 0 || before || !r->skipPresent) return;
+    CtrSurface* s = bsApp(r);
+    if (s == nullptr) return;
+    // The band's place, as CtrRenderer_bsPresent clamps it.
+    int32_t w = s->width / 2, h = s->height / 2;
+    if (0 >= band || band > h) band = h;
+    if (0 > topDy || topDy + band > TOP_SCREEN_H) topDy = 0;
+    // floorf((topW - w) * 0.5f) as bsPresent takes it: both are whole, so the shift floors alike. The rectangles are
+    // GameMaker's (ctrDrawRectangle: the far row and column included): the band is columns x0..x1-1, rows y0..y1-1. The
+    // strip (battlesplit22's copy above the band) is the band's columns, rows 0..y0-1.
+    int32_t left = (r->topW - w) >> 1;
+    float x0 = (float) left, x1 = (float) (left + w), y0 = (float) topDy, y1 = (float) (topDy + band);
+    float right = (float) (r->topW - 1), bottom = (float) (TOP_SCREEN_H - 1);
+    C3D_RenderTarget* was = r->boundTarget;
+    for (int32_t eye = 0; 2 > eye; eye++) {
+        C3D_RenderTarget* target = eye == 0 ? r->topTarget : r->stereoActive ? r->topRightTarget : nullptr;
+        if (target == nullptr) continue;
+        bindTarget(r, target, -1);
+        copyState(r);
+        screenProjection(r);
+        C3D_AlphaBlend(GPU_BLEND_ADD, GPU_BLEND_ADD, GPU_SRC_ALPHA, GPU_ONE_MINUS_SRC_ALPHA, GPU_ONE, GPU_ONE_MINUS_SRC_ALPHA);
+        for (uint32_t i = 0; flash->n > i && CTR_BS_FLASH_MAX > i; i++) {
+            uint32_t c = flash->color[i];
+            float a = flash->alpha[i];
+            ABQ(ctrDrawRectangle)(renderer, 0.0f, 0.0f, right, y0 - 1.0f, c, a, false);  // above the band
+            ABQ(ctrDrawRectangle)(renderer, 0.0f, y1, right, bottom, c, a, false);       // below it
+            ABQ(ctrDrawRectangle)(renderer, 0.0f, y0, x0 - 1.0f, y1 - 1.0f, c, a, false); // its left
+            ABQ(ctrDrawRectangle)(renderer, x1, y0, right, y1 - 1.0f, c, a, false);      // its right
+        }
+        flushBatch(r);
+    }
+    if (was != nullptr) bindTarget(r, was, -1);
+}
+#endif
+#endif
+
+// ===[ The ghost's draw above the view (change battlesplit2, 11-14; R2 on Mad Dummy's D) ]===
+// In Mad Dummy's Split the ghost comes down from above the top screen (z_battlesplit.c's end). Wholly above the view, its
+// quads go no further than the cull (quadOutsideView, the bp/e5x and utk/utfl fast paths: each tests the game's
+// projection), so battlesplit22 never sees them for the top margin. Here its drawSprite runs once with the projection
+// moved down by the view (clip y less 2: battlesplit22's replay shift), so the culls take the rows above the view as in
+// it; its vertices go into the ring as they are (room coordinates), and battlesplit22 keeps the batch as a record when
+// it is drawn and replays it on the strip under its scissor, as it does the ghost's quads that cross the view's top.
+// - What is pending is drawn first, and room made in the ring and the command buffer for a fine item's four tiles
+//   (asgRoomSlow). The draw can still draw a batch of its own: flushBatch, when its texture changes (c26rev6's
+//   NAPD-1; the ghost's frame 0 crosses a tile row of its page). Every draw the renderer makes is flushBatch's (its
+//   draw*Batch, drawWithTexture, drawBothEyes; but battlesplit17's ballast, at present). Its branches but the multi-
+//   texture, pair and one-texture ones are refused here (BS_NAP_OWN_DRAW: shrink, layer, shader, shoujo, colour mask,
+//   palette surface and CRT passes, which also draw no record) and none of those three uploads the projection; before
+//   them flushBatch asks prophecyBatches, whose asm calls CtrRenderer_bsNapProphecy. On the half view under the moved
+//   projection, that has CtrRenderer_bsProphecy22 (bs22Record) look at the batch under the game's projection (put back
+//   for the call), as after the move, and puts the GPU's projection back as it was before the move (a frame split or a
+//   copy may have uploaded the moved one): the batch is drawn as the game's projection places it, wholly above the
+//   view (clip y over 1 at every vertex, as admitted below: nothing on the screen), and battlesplit22 keeps it to replay, as a batch
+//   drawn after the move. Nothing is drawn under the moved projection. Another target, or the half view under another
+//   projection (a copy's, a sample's own), is as without the draw.
+// - The grid's map and the projection come back bitwise, on the one way out (a map worked out in the draw follows the
+//   moved projection: 240 rows on, an even number, so the grid's pixels are the same); the projection's uniforms as
+//   they were before the move. bsNapStray counts what is not as above (a census build logs the first): the half view
+//   under a game projection other than the moved one, a refused branch's state after the draw.
+// - Only onto the half view battlesplit22 records, under the game's upright projection (no depth in its y or w), eyes not
+//   split, and only a sprite whose whole quad (ctrDrawSprite's, unturned) that projection places above the view, its
+//   lowest edge over 1.5 of the viewport's pixels above it: the grid moves a quad down 1.5 at most, the native offset
+//   half a pixel, and a row is drawn when the quad covers its centre, half a pixel in; so no vertex the draw makes,
+//   wherever it is drawn, reaches the view. z_battlesplit.c asks it of the room's camera, which is not the projection
+//   (c26rev6's NAPD-2: the engine's view widened, a free camera, a game's own matrix). False: not drawn, nothing
+//   touched (the caller draws it as it would have).
+// Appended, in the AAC slot (.aacout.text.bsnap, aacout.cmake: the last text input); extern and noipa, so nothing this
+// file compiled before changes.
+#ifdef ENABLE_WAD16 // AAC tenants carry an explicit guard (test_aacslot_shared.py)
+#ifdef __3DS__
+bool CtrRenderer_bsNapDraw(Renderer* renderer, void (*draw)(Renderer*, int32_t, float, float, float, float, float, float, float, uint32_t, float),
+                           int32_t tpagIndex, float x, float y, float originX, float originY, float xscale, float yscale, float angleDeg,
+                           uint32_t color, float alpha);
+#if defined(NDEBUG) && !defined(CTRPORT_RENDER_TIMING)
+// flushBatch's branches the draw is refused under (each before prophecyBatches, or one that can upload the projection).
+#define BS_NAP_OWN_DRAW(r) ((r)->shrink.batchMode | (r)->layer.mode | (r)->shaderFx | (r)->shoujoBands | (r)->colorMask | (r)->palSurfPass | (r)->crtPass)
+// While the ghost's draw is on (bsNapSave, else nullptr): the game's projection and the GPU's uniforms before the move,
+// the moved projection, the target.
+typedef struct {
+    C3D_Mtx proj, moved;
+    C3D_FVec unif[4];
+    const void* target;
+} BsNapSave;
+static BsNapSave* bsNapSave __attribute__((section(".bss_bsnap_late,\"aw\",%nobits @")));
+static uint32_t bsNapStray __attribute__((section(".bss_bsnap_late,\"aw\",%nobits @")));
+// prophecyBatches' body (its asm's call): CtrRenderer_bsProphecy22, which also records the batch flushBatch is about to
+// draw. While the ghost's draw is on: the record under the game's projection, and the GPU's projection as before the
+// move.
+bool CtrRenderer_bsNapProphecy(const CtrRenderer* r);
+__attribute__((noinline, noipa, used, optimize("Os"), section(".aacout.text.bsnap")))
+bool CtrRenderer_bsNapProphecy(const CtrRenderer* r) {
+    BsNapSave* s = bsNapSave;
+    // Another target (a copy's, a sample's: its own projection) is as without the draw; so is the half view under a
+    // projection other than the moved one, which none of the draw's ways set (counted).
+    if (s == nullptr || r->boundTarget != s->target || memcmp(&r->projection, &s->moved, sizeof(C3D_Mtx)) != 0) {
+        if (s != nullptr && r->boundTarget == s->target && r->gameProjection) bsNapStray++;
+        return CtrRenderer_bsProphecy22(r);
+    }
+    CtrRenderer* w = (CtrRenderer*) r;
+    w->projection = s->proj;
+    bool p = CtrRenderer_bsProphecy22(r);
+    w->projection = s->moved;
+    if (!r->gameProjection) return p; // a draw of the renderer's own, under its own projection: as it is
+    C3D_FVec* u = &C3D_FVUnif[GPU_VERTEX_SHADER][r->projectionLoc];
+    if (memcmp(u, s->unif, sizeof(s->unif)) != 0) {
+        memcpy(u, s->unif, sizeof(s->unif));
+        for (int32_t i = 0; 4 > i; i++) C3D_FVUnifDirty[GPU_VERTEX_SHADER][r->projectionLoc + i] = true;
+    }
+    return p;
+}
+__attribute__((noinline, noipa, optimize("Os"), section(".aacout.text.bsnap")))
+bool CtrRenderer_bsNapDraw(Renderer* renderer, void (*draw)(Renderer*, int32_t, float, float, float, float, float, float, float, uint32_t, float),
+                           int32_t tpagIndex, float x, float y, float originX, float originY, float xscale, float yscale, float angleDeg,
+                           uint32_t color, float alpha) {
+    CtrRenderer* r = (CtrRenderer*) renderer;
+    const BsGpu* g = bsGpu;
+    const C3D_Mtx* m = &r->projection;
+    if (!r->inFrame || g == nullptr || g->target == nullptr || r->boundTarget != g->appTarget || !r->gameProjection || bs22.replaying ||
+        bsNapSave != nullptr || r->stereoActive || BS_NAP_OWN_DRAW(r) != 0 || m->r[0].y != 0.0f || m->r[1].x != 0.0f ||
+        m->r[3].x != 0.0f || m->r[3].y != 0.0f || m->r[3].w != 1.0f || !(0.0f > m->r[1].y) || m->r[1].z != 0.0f || m->r[3].z != 0.0f)
+        return false;
+    const DataWin* dw = renderer->dataWin;
+    if (angleDeg != 0.0f || dw == nullptr || 0 > tpagIndex || dw->tpag.count <= (uint32_t) tpagIndex || 0 >= r->viewport.h) return false;
+    const TexturePageItem* t = &dw->tpag.items[tpagIndex];
+    float e0 = y + ((float) t->targetY - originY) * yscale, e1 = e0 + (float) t->targetHeight * yscale;
+    if (!(m->r[1].y * (e0 > e1 ? e0 : e1) + m->r[1].w > 1.0f + 3.0f / (float) r->viewport.h)) return false;
+    asgRoomSlow(r);
+    BsNapSave s;
+    s.proj = r->projection;
+    s.target = r->boundTarget;
+    __typeof__(r->gridMap) grid = r->gridMap;
+    C3D_FVec* u = &C3D_FVUnif[GPU_VERTEX_SHADER][r->projectionLoc];
+    memcpy(s.unif, u, sizeof(s.unif));
+    uint32_t stray = bsNapStray;
+    r->projection.r[1].w -= 2.0f;
+    s.moved = r->projection;
+    bsNapSave = &s;
+    draw(renderer, tpagIndex, x, y, originX, originY, xscale, yscale, angleDeg, color, alpha);
+    bsNapSave = nullptr;
+    r->projection = s.proj;
+    r->gridMap = grid;
+    if (memcmp(s.unif, u, sizeof(s.unif)) != 0) {
+        memcpy(u, s.unif, sizeof(s.unif));
+        for (int32_t i = 0; 4 > i; i++) C3D_FVUnifDirty[GPU_VERTEX_SHADER][r->projectionLoc + i] = true;
+    }
+    if (BS_NAP_OWN_DRAW(r) != 0) bsNapStray++;
+#ifdef CTRPORT_BS_MARGIN_CENSUS
+    if (stray == 0 && bsNapStray != 0) logInfo(BS22_STR("bsnap: a batch the projection's move may have reached, frame %u\n"), (unsigned) r->frame);
+#endif
+    (void) stray;
+    return true;
+}
+#else
+// Without battlesplit22 (debug and timing builds) there is no margin to draw it on.
+__attribute__((noinline, noipa, optimize("Os"), section(".aacout.text.bsnap")))
+bool CtrRenderer_bsNapDraw(Renderer* renderer, void (*draw)(Renderer*, int32_t, float, float, float, float, float, float, float, uint32_t, float),
+                           int32_t tpagIndex, float x, float y, float originX, float originY, float xscale, float yscale, float angleDeg,
+                           uint32_t color, float alpha) {
+    return false;
+}
+#endif
+#endif
+#endif
+
+// ===[ The Split's flash on the bottom's empty rows (change battlesplit2, 11-15; the gap fill) ]===
+// maintainer, 11-15: "both screens should flash white as mettaton fades out". On PC a cover lights the whole screen; on the
+// Split's bottom screen the layer's lifted rows did, but present leaves some rows with nothing drawn on them (black):
+// - (c)'s two pieces (CtrRenderer_bsPresent5: a seam row and a lift below it): the lift's rows above the seam, seam -
+//   lift to seam - 1 (156..195 at the menu lift 40), and any row past the layer's end below the seam;
+// - one piece (CtrRenderer_bsPresent): a lifted bottom's rows past the layer's end, a lowered one's first rows.
+// Here, after the flash's present (CtrRenderer_bsPresentFlash, the call it is given) and only when that present drew
+// (skipPresent set by it, not before), each of the frame's notes is put on those rows as the top margins take them: a
+// game rectangle of its colour and alpha (far edge included) through the alpha byte's stub, under the normal blend, the
+// batch flushed and the target before bound again. Every frame with a note, whatever the scene; the rows come from the
+// frame's own lift and seam, so a per-attack lift moves them and lift 0 (one piece, the whole layer) has none. The
+// layer is UNDERTALE's 320 columns (its 640-wide surface at half): no column is left empty. The bottom yielded to
+// another owner is not drawn on. Present only: nothing the game reads changes.
+// Appended, in the AAC slot (.aacout.text.bsgap, aacout.cmake: the last text input); z_battlesplit.c's bsPresentFl
+// calls it in place of CtrRenderer_bsPresentFlash (the same call, only the target differs: bsflash keeps its bytes).
+// -O2, as the flash's present: -Os calls to bindTarget change how the file's other callers take it (bindTarget.part.0,
+// which the build's passes reroute in; at -Os here dlgtopShown called the whole bindTarget).
+#ifdef ENABLE_WAD16 // AAC tenants carry an explicit guard (test_aacslot_shared.py)
+#ifdef __3DS__
+__attribute__((noinline, noipa, optimize("O2"), section(".aacout.text.bsgap")))
+void CtrRenderer_bsPresentGap(Renderer* renderer, int32_t band, int32_t topDy, int32_t bottomDy, CtrBsFlash* flash) {
+    CtrRenderer* r = (CtrRenderer*) renderer;
+    bool before = r->skipPresent;
+    CtrRenderer_bsPresentFlash(renderer, band, topDy, bottomDy, flash);
+    if (before || !r->skipPresent || flash == nullptr || flash->n == 0 || r->bottomTarget == nullptr || r->bottomYielded) return;
+    CtrSurface* s = bsApp(r);
+    if (s == nullptr) return;
+    int32_t h = s->height / 2, seam = CtrBattlesplit_seam(), lift = -bottomDy, end = h + bottomDy;
+    // The empty rows, two runs [g[k][0], g[k][1]): bsPresent5's test for two pieces, else bsPresent's one piece.
+    int32_t g[2][2];
+    if (seam > 0 && lift > 0 && seam > lift) {
+        end = h;
+        g[0][0] = seam - lift;
+        g[0][1] = seam;
+    } else {
+        g[0][0] = 0;
+        g[0][1] = bottomDy > 0 ? bottomDy : 0;
+    }
+    g[1][0] = BOTTOM_SCREEN_H > end ? end : BOTTOM_SCREEN_H;
+    g[1][1] = BOTTOM_SCREEN_H;
+    if (g[0][0] >= g[0][1] && g[1][0] >= g[1][1]) return;
+    C3D_RenderTarget* was = r->boundTarget;
+    bindTarget(r, r->bottomTarget, -1);
+    copyState(r);
+    screenProjection(r);
+    C3D_AlphaBlend(GPU_BLEND_ADD, GPU_BLEND_ADD, GPU_SRC_ALPHA, GPU_ONE_MINUS_SRC_ALPHA, GPU_ONE, GPU_ONE_MINUS_SRC_ALPHA);
+    for (uint32_t i = 0; flash->n > i && CTR_BS_FLASH_MAX > i; i++)
+        for (int32_t k = 0; 2 > k; k++)
+            if (g[k][1] > g[k][0])
+                ABQ(ctrDrawRectangle)(renderer, 0.0f, (float) g[k][0], (float) (BOTTOM_SCREEN_W - 1), (float) (g[k][1] - 1), flash->color[i],
+                                      flash->alpha[i], false);
+    flushBatch(r);
+    if (was != nullptr) bindTarget(r, was, -1);
+}
+#endif
+#endif
+
+// G47's arena drawn higher (change battlesplit2, 11-15; z_battlesplit.c's end, option (i)).
+// CtrRenderer_bs47Shift: the game's projection moved by dy room px on y for the draws from here on (dy 0: as it was),
+// keep (17 floats, the caller's: its battle's Bs) holding the projection before the move and the move,
+// only on the application surface's arena layer, bound in a frame with the game's projection up. The projection itself
+// is changed (kept aside as it was), so every path that uploads it again mid-frame (the viewport's, a vertex buffer
+// start-over's) uploads the moved one; a projection the game set since (another surface, its own) is never taken back:
+// it is the one the moved copy no longer matches. CtrRenderer_bs47Clip: the top layer's (the application surface's own
+// half view) scissor kept to its rows above rows, inside the game's, in the fields battlesplit17's cut uses
+// (CtrRenderer_bsClip17(renderer, 0) takes it off). Appended, in the AAC slot (.aacout.text.bsg47, the last input).
+#ifdef ENABLE_WAD16 // AAC tenants carry an explicit guard (test_aacslot_shared.py)
+#ifdef __3DS__
+typedef struct {
+    C3D_Mtx base; // the projection before the move
+    float dy;     // the move, 0 none
+} Bs47Keep;
+_Static_assert(sizeof(Bs47Keep) == 17 * sizeof(float) && _Alignof(Bs47Keep) == _Alignof(float), "z_battlesplit.c's Bs47 keep[17]");
+
+static inline __attribute__((always_inline)) void bs47Moved(C3D_Mtx* m, float dy) {
+    for (int32_t i = 0; 4 > i; i++) m->r[i].w += m->r[i].y * dy;
+}
+
+__attribute__((noinline, noipa, section(".aacout.text.bsg47"))) void CtrRenderer_bs47Shift(Renderer* renderer, float dy, float* keep) {
+    CtrRenderer* r = (CtrRenderer*) renderer;
+    BsGpu* g = bsGpu;
+    Bs47Keep* k = (Bs47Keep*) (void*) keep;
+    bool on = false;
+    if (k->dy != 0.0f) {
+        C3D_Mtx m = k->base;
+        bs47Moved(&m, k->dy);
+        on = memcmp(&m, &r->projection, sizeof m) == 0;
+    }
+    if (g == nullptr || !r->inFrame || !r->gameProjection || r->boundTarget == nullptr || r->boundTarget != g->target) dy = 0.0f;
+    if (on && dy == k->dy) return;
+    if (!on && dy == 0.0f) {
+        k->dy = 0.0f;
+        return;
+    }
+    flushBatch(r);
+    if (on) r->projection = k->base;
+    k->dy = 0.0f;
+    if (dy != 0.0f) {
+        k->base = r->projection;
+        bs47Moved(&r->projection, dy);
+        k->dy = dy;
+    }
+    if (r->inFrame && r->gameProjection) uploadProjection(r, &r->projection);
+}
+
+__attribute__((noinline, noipa, section(".aacout.text.bsg47"))) bool CtrRenderer_bs47Clip(Renderer* renderer, int32_t rows) {
+    CtrRenderer* r = (CtrRenderer*) renderer;
+    BsGpu* g = bsGpu;
+    if (g == nullptr || g->clip17 || !r->inFrame || r->boundTarget == nullptr || r->base.runner == nullptr) return false;
+    if (r->boundSurface != r->base.runner->applicationSurfaceId || r->boundTarget != g->appTarget) return false;
+    CtrSurface* s = bsApp(r);
+    if (s == nullptr) return false;
+    flushBatch(r);
+    bool wasOn = r->scissorEnabled;
+    CtrRect was = r->scissor;
+    CtrRect cut = { 0, 0, s->width, s->height };
+    if (wasOn) cut = was;
+    int32_t y1 = s->height * rows / 240;
+    if (cut.y + cut.h > y1) cut.h = y1 - cut.y;
+    if (0 > cut.h) cut.h = 0;
+    g->clipWasOn17 = wasOn;
+    g->clipWas17 = was;
+    g->clip17 = true;
+    r->scissorEnabled = true;
+    r->scissor = cut;
+    applyViewport(r);
+    return true;
+}
+#endif
 #endif

@@ -38,3 +38,16 @@ must equal P5-1's two inputs. Release scripts are unchanged. `late_order.py`
 checks all four against CMake; `test_devonly_aac.py` covers the emitter, the link
 check and the budgets, and `check_devonly_aac.py` proves a dev link against its
 release and the previous dev build.
+
+Its `per_model` key lists the units placed through `platform/3ds/source/ctr_place.h`
+(lead ruling 11-14, audit F3-1). `UT_COLD_TEXT(unit)` puts code in the AAC text slot
+as `.aacout.text.<unit>` on UNDERTALE Old (dev and release alike) and in late text as
+`.text_<unit>` on UNDERTALE New and in DELTARUNE. `UT_COLD_RODATA(unit)` puts constants
+in the AAC rodata slot as `.aacout.rodata.<unit>` on both UNDERTALE models and in late
+rodata as `.rodata_<unit>` in DELTARUNE. For each kind a unit uses, register both
+names: the AAC name in `aac_<kind>` (and aacout.cmake), and exactly one late selector,
+`*(.<kind>_<unit>)` or `KEEP(*(.<kind>_<unit>))`, in that kind's late list (and
+late_reserve.ld). Each model links one name; the other matches nothing there.
+`late_order.py` fails when a name is missing on either side, when a macro use names
+an unregistered unit or kind, when a registered kind has no use, and when a source
+outside the header spells a registered unit's section by hand.

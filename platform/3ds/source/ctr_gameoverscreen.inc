@@ -6,6 +6,7 @@
 #include "stb_ds.h"
 #include "ctr_battletouch.h"
 #include "ctr_bottom_view.h"
+#include "ctr_place.h"
 
 #define GO_CODE __attribute__((noinline, noipa, used, optimize("Os"), section(".text_gameoverscreen")))
 enum { GO_ROOM, GO_HEART, GO_FAKE, GO_DEFEATED, GO_SHARD, GO_LOGO, GO_UNFADER, GO_FADER };
@@ -204,4 +205,32 @@ GO_CODE void CtrGameover_pendingRoom(Runner* runner) {
     }
     __real_Runner_handlePendingRoomChange(runner);
 }
+
+// asgsmart F1u (11-14): utkDrawSprite and this unit's two sprite entries as one call. utwindow_compile.py points the
+// alpha stub's target word for utkDrawSprite (abqTargets slot 25) here, so the stub's alpha adaptation still comes
+// first. Whatever game over could act on (its active state, or the current object being either heart) goes to
+// utkDrawSprite whole, before the gate counts. Otherwise goDrawSprite would only hand the call on unchanged, so this
+// makes its two calls direct: utkDrawSprite's rejection branch as it is, and its plain body. The renderer's gate and
+// draws are reached by their assembler names in the combined assembly; utwindow_compile.py checks each one.
+// Timing and forced-split builds keep the old path (their utaTakes differs, or UTK_DRAW_SPRITE is ctrDrawSprite).
+#if !defined(CTRPORT_RENDER_TIMING) && ASG_FORCE_SPLIT == 0
+__attribute__((noinline, noipa, used)) UT_COLD_TEXT(asgfuse)
+void CtrGameover_fuseSprite(Renderer* renderer, int32_t tpagIndex, float x, float y, float originX, float originY,
+                            float xscale, float yscale, float angleDeg, uint32_t color, float alpha) {
+    const CtrRenderer* r = (const CtrRenderer*) renderer;
+    Runner* runner = renderer->runner;
+    Instance* inst = runner != nullptr && runner->vmContext != nullptr ? runner->vmContext->currentInstance : nullptr;
+    if ((go.flags & GO_ACTIVE) != 0 || (inst != nullptr && (inst->objectIndex == go.id[GO_HEART] || inst->objectIndex == go.id[GO_FAKE]))) {
+        utkDrawSprite(renderer, tpagIndex, x, y, originX, originY, xscale, yscale, angleDeg, color, alpha);
+        return;
+    }
+    if (0 > tpagIndex || (uint32_t) tpagIndex >= r->originalTpagCount ||
+        (r->smart.active && r->smart.itemState != nullptr && (r->smart.itemState[tpagIndex] & ITEM_FINE) != 0) || !utkPlainState(r)) {
+        if (utaTakes(r)) aslFineSprite(renderer, tpagIndex, x, y, originX, originY, xscale, yscale, angleDeg, color, alpha);
+        else ctrDrawSprite(renderer, tpagIndex, x, y, originX, originY, xscale, yscale, angleDeg, color, alpha);
+        return;
+    }
+    utkDrawSpriteBody(renderer, tpagIndex, x, y, originX, originY, xscale, yscale, angleDeg, color, alpha);
+}
+#endif
 #endif

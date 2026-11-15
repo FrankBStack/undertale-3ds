@@ -190,6 +190,46 @@ def test_old_plain_dev_free_floor(tmp_path):
         assert ('protected reserve' in text) == (target == 'o3ds')
 
 
+RELEASE_RESERVE = 'AAC text: Old release lists inside the 16,384 B dev reserve'
+
+
+@pytest.mark.parametrize('filler,ok', [(80260 - 16384, True), (80260 - 16384 + 4, False)])
+def test_old_release_lists_must_leave_the_dev_reserve(tmp_path, filler, ok):
+    """audit F3-1 T7 (lead 11-14): an Old release link keeps the 16,384 B dev reserve too, so a release-only compose
+    fails at its own link, not first at the next dev link. ASSERT only: the slot still pads to its fixed end."""
+    script = configure(tmp_path, devonly=False, aac_inputs=['.aacout.text.fill'],
+                       extra='set(CTRPORT_AACOUT_FIXTURE_NO_FRAME_HOLES TRUE)\n')
+    assert script.read_text(encoding='utf-8').count(RELEASE_RESERVE) == 1
+    other = OTHER + '.section .aacout.text.fill,"ax",%progbits\n.space ' + str(filler) + '\n'
+    result, output = link(tmp_path, script, objects(tmp_path, other=other))
+    if ok:
+        assert result.returncode == 0, result.stderr
+        s = symbols(output)
+        assert s['__aacout_text_end'] - s['__aacout_text_used_end'] == 16384
+        assert s['__aacout_text_end'] - s['__aacout_text_start'] == 80260
+    else:
+        assert result.returncode != 0
+        assert RELEASE_RESERVE in result.stderr
+
+
+def test_release_reserve_is_old_release_only(tmp_path):
+    for name, devonly, target, extra in (('new', False, 'n3ds', ''), ('olddev', True, 'o3ds', ''),
+                                         ('aacslot', False, 'o3ds', 'set(CTRPORT_AACSLOT_TEST ON)\n'),
+                                         ('newdev', True, 'n3ds', '')):
+        sub = tmp_path / name
+        sub.mkdir()
+        text = configure(sub, devonly=devonly, target=target, extra=extra).read_text(encoding='utf-8')
+        assert RELEASE_RESERVE not in text, name
+    old = tmp_path / 'old'
+    old.mkdir()
+    release = configure(old, devonly=False).read_text(encoding='utf-8')
+    # One line added after the overflow ASSERT of the text slot, none in rodata; the rest of the script is unchanged.
+    line = '        ASSERT(__aacout_text_start + 80260 - __aacout_text_used_end >= 16384, "' + RELEASE_RESERVE + '");\n'
+    assert release.count(line) == 1
+    assert release.index('"AAC text slot overflow");\n' + line) > 0
+    assert line not in release.split('__aacout_rodata_start')[1]
+
+
 SOURCE = ROOT / 'platform/3ds/source'
 # z_ballast.c's compile as the real ballast build's (CMakeLists.txt: -Os and its section options, CTRPORT_BALLAST).
 BALLAST_CC = ['-c', '-Os', '-std=gnu99', '-march=armv6k', '-mfloat-abi=hard', '-mtp=soft', '-mword-relocations',
