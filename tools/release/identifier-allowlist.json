@@ -147,7 +147,7 @@
     {
       "member": "platform/3ds/source/ctr_audio_system.c",
       "class": "engine-lookups",
-      "sha256": "128d990aeb29953832efe4c16b90757c8c7a08a7d80f91f0c15ae2e69dcce848",
+      "sha256": "768b12ca47a67332e568953064e18c01030ef922bc4666ce8c4a5eff264dbd9b",
       "justification": "One sound lookup name: the game-over music fence recognises this stream by its name at runtime.",
       "evidence_sha256": [
         "9b7906afa34fd7378c77b13fc0e94b5b9afac4944fce6a70064bf387c8751674"
@@ -309,8 +309,8 @@
     {
       "member": "platform/3ds/source/z_btlentry.c",
       "class": "engine-lookups",
-      "sha256": "dffe1129fd268ecfce2a3fd171cd9ee161e6f85ac034411128a22f7d04033e58",
-      "justification": "Two object names tell that a battle is starting, one that its soul is still flying to its place (no tile installs or code copies while it moves), two object names and one room name that a story battle is starting (its room's own planned tiles are read instead of a battle group's), and eight door object names that a door is fading out, so the planned tiles and code of the battle or of the door's destination can be read before the room change (textures and code only).",
+      "sha256": "5d0632a7907d84ab2028e3b17fe525bc916c838e015de8cd46f95610189d9f19",
+      "justification": "Two object names tell that a battle is starting, one that its soul is still flying to its place (no tile installs or code copies while it moves, but in a story battle's flight, a few milliseconds a frame), two object names and one room name that a story battle is starting (its room's own planned tiles are read instead of a battle group's), and eight door object names that a door is fading out, so the planned tiles and code of the battle or of the door's destination can be read before the room change (textures and code only).",
       "evidence_sha256": [
         "fe3633cd79e49914f03da92f7758c5dbce0eba1f6e9e18512ae1aadd4d361396"
       ]
@@ -552,7 +552,7 @@
     {
       "member": "tools/roomplan/build_plan.py",
       "class": "roomplan-tool",
-      "sha256": "d4aa41b16699072525b70e2a345b04f0b21e161bafbb74b3eba348c032baa405",
+      "sha256": "4e8e39e115b38f8e7f578b4b32ce3604974475fe8fca2c75d626034392748a85",
       "justification": "Roomplan schema fields, format limits and lookup names build hash-gated plans from player data.",
       "evidence_sha256": [
         "c177adae24d12a729595cc4e2f5accacc41f933cf4b52caba433eae2b8cf9f0d"
@@ -570,7 +570,7 @@
     {
       "member": "tools/roomplan/codeclose.py",
       "class": "roomplan-tool",
-      "sha256": "283f07ea1df3f1dbcf8239d3d59e09319c2c1519a3c76fe3bb6b2d1a08a53052",
+      "sha256": "5c25449a08046e6958803a4d8b5b5e49015aa5947ece8e57c19916cdc3e70c8c",
       "justification": "Roomplan schema fields, format limits and lookup names build hash-gated plans from player data.",
       "evidence_sha256": [
         "018b40448f3b186586198befb34d049e1e0a5f5d80e646d358a5cb3caa020ff2"
@@ -814,7 +814,7 @@
     {
       "member": "platform/3ds/source/z_battlesplit.c",
       "class": "engine-lookups",
-      "sha256": "b51ed986918af842143c40bd31639fcd4d915439abe89d6282a0399b41c192cf",
+      "sha256": "4947c357bc4c0f1d6d5f768fb26799afd26d0dcc536d0adb4b6d39756571dd14",
       "justification": "battlesplit (lead approved 2026-11-08): names used only as runtime lookups, as z_battletouch.c: battle object names (bullets and their parents, the SOUL and its shots, the battle controller, the target and name bars, the text writer, the box borders, the faders, and the fight-specific objects of its encounter tables) sort a battle's draws between the two screens; the battle room names and the battle group variable find the rooms and the fight; with touch on, Omega Flowey's room and the room after it pick the screen that fight is drawn on (the Omega unit, lead 2026-11-15); no game text, art or generated code; exported with UNDERTALE only. The exact names are bound by the evidence hash and listed in the commit that added this entry.",
       "evidence_sha256": [
         "ef079571c9ea70a3d5f04deff2c381b30551c2b4d3493bfba37cae937b53a388"
@@ -1195,10 +1195,10 @@
     {
       "member": "platform/3ds/source/z_battletouch.c",
       "class": "engine-lookups",
-      "sha256": "586c1fa74015683125d4d890faa1d9b3e4d7faeaf68c9fe89a60c4013fc61341",
-      "justification": "battletouch (lead approved 2026-11-08; the game-over room lookup added for r1c, lead approved 2026-11-14): battle object names used only as runtime lookups for stylus hit areas and the SOUL's position, and the game-over room's name, compared with the current room's so that a tap there presses Z; the three story screens' room names (a tap there presses what the writer takes) and two battle object names (no story tap while either is alive), lead approved 2026-11-15; Omega Flowey's room name, its heart's object name (with that heart's variable, read by name) and its buttons' parent object name, so that the pen moves that heart and presses a lit button there (the Omega unit, lead 2026-11-15); no game text or art. The battle menu's and the SOUL's variables are read by name the same way; UNDERTALE only, compiled empty for DELTARUNE.",
+      "sha256": "c7d277a73fdf69e781e4f2181a3b7f42b312a71085db1ce0cf773df11f06c628",
+      "justification": "battletouch (lead approved 2026-11-08; the game-over room lookup added for r1c, lead approved 2026-11-14): battle object names used only as runtime lookups for stylus hit areas and the SOUL's position, and the game-over room's name, compared with the current room's so that a tap there presses Z; the three story screens' room names (a tap there presses what the writer takes) and two battle object names (no story tap while either is alive), lead approved 2026-11-15; Omega Flowey's room name, its heart's object name (with that heart's variable, read by name) and its buttons' parent object name, so that the pen moves that heart and presses a lit button there (the Omega unit, lead 2026-11-15); the two-button choice screens' heart object name (the choice's buttons' object name is the story screens' one above), so that the pen moves that heart and a tap on a lit button presses Z there (btchoice, lead 2026-11-15); no game text or art. The battle menu's and the SOUL's variables are read by name the same way; UNDERTALE only, compiled empty for DELTARUNE.",
       "evidence_sha256": [
-        "b59a2f483133db3841c5928d8e265ad04d0f2afabca8339b12661319d796e289"
+        "7cb83e48804c305a1fa9dfa40a30882a9dd1b7c9a354c9bb62e7e88672395619"
       ]
     },
     {

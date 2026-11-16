@@ -3450,7 +3450,8 @@ static BS_CODEEXR bool bsRouteAtEx(Renderer* renderer, int32_t want, const float
 // Presentation only: no instance moves, nothing the game reads changes. Objects by index, as in UNDERTALE 1.08's Steam
 // and GOG data (both 1709 objects, the same indices; BS_F_OBJECTS); other data is not moved. Same-size edits only: four
 // calls (bsClearLayerFl's, bsPresentFl's, bsRouteAtEx's, __wrap_CtrRenderer_bsLayer's) name these in place of the
-// functions they call. AAC only (.aacout.text.bsg47, appended last); development builds log (CTRPORT_BS47_LOG). No
+// functions they call. AAC only (.aacout.text.bsg47, appended last), the same input in every build: no log (its dev
+// log, 1,360 B, did not fit the dev-only tail's 8,192 B cap, and nothing read it: dropped, 11-15). No
 // new memory: the state, the renderer's kept projection among it, is the battle's own Bs, in the last of top14's
 // entries (Muffet's draws above row 0, written only for her body's draws, which group 47 has none of; and only read
 // here in a group 47 split), zero from bsMake's calloc at each battle.
@@ -3480,10 +3481,6 @@ typedef struct {
     int8_t move;     // that draw's arena copy is moved
     int8_t clip;     // the top-layer copy's cut is on
     int8_t seen;     // lift holds a value (this battle)
-#ifdef CTRPORT_BS47_LOG
-    int8_t n;
-    int16_t logged[12];
-#endif
     float keep[17];  // CtrRenderer_bs47Shift's: the projection before the move (16), the move (1)
 } Bs47;
 #define BS47_AT (BS_TOPS14 - (int32_t) ((sizeof(Bs47) + sizeof(BsTop14) - 1) / sizeof(BsTop14)))
@@ -3495,40 +3492,15 @@ static BS_CODE47 Bs47* bs47Of(Bs* bs) {
     return (Bs47*) (void*) &bs->top14[BS47_AT];
 }
 
-#ifdef CTRPORT_BS47_LOG
-// Once an object a battle: its name, what and where (development builds).
-static BS_CODE47 void bs47Note(Bs* bs, Bs47* s, const char* what, const float* r) {
-    int32_t o = bs->lastObject;
-    for (int32_t k = 0; s->n > k; k++)
-        if (s->logged[k] == o) return;
-    if (s->n < (int8_t) (sizeof(s->logged) / sizeof(s->logged[0]))) s->logged[s->n++] = (int16_t) o;
-    DataWin* dw = bs->renderer->dataWin;
-    const char* name = 0 <= o && dw != nullptr && dw->objt.count > (uint32_t) o ? dw->objt.objects[o].name : nullptr;
-    if (r == nullptr) logInfo("battlesplit G47: %s %s\n", name != nullptr ? name : "?", what);
-    else logInfo("battlesplit G47: %s %s (%d,%d to %d,%d)\n", name != nullptr ? name : "?", what, (int) r[0], (int) r[1], (int) r[2], (int) r[3]);
-}
-#endif
-
 // Whether this draw's arena copy is moved (r: its place; nullptr, or r[0] > r[2], when not known).
 static BS_CODE47 int32_t bs47Moves(Bs* bs, Bs47* s, int32_t want, const float* r) {
-    (void) s; // the log's (development builds)
+    (void) s; // unused (the development log's bs47WhyLog reads the same)
     if ((want & BS_CLASS) == BS_COVER) return 0;
     int32_t o = bs->lastObject;
     float seam = bs->viewTop + (bs->viewBottom - bs->viewTop) * ((float) BS_C_SEAM / 240.0f);
     bool known = r != nullptr && r[2] >= r[0];
-    if (o == BS47_CONTROLLER || o == BS47_HPLABEL || o == BS47_SOUL || (BS47_FIGHTBT <= o && BS47_SPAREBT >= o)) {
-#ifdef CTRPORT_BS47_LOG
-        if (!known) bs47Note(bs, s, "draws with no place: not moved", r);
-#endif
+    if (o == BS47_CONTROLLER || o == BS47_HPLABEL || o == BS47_SOUL || (BS47_FIGHTBT <= o && BS47_SPAREBT >= o))
         return known && seam > r[1] ? 1 : 0;
-    }
-#ifdef CTRPORT_BS47_LOG
-    // Neither the HUD's nor the fight's own (her generators and spears 264..272, the borders, the box's text, FIGHT's
-    // target): a draw in the HUD rows from one is named, so the HUD's list is known whole.
-    bool own = (264 <= o && 272 >= o) || (759 <= o && 762 >= o) || o == 784 || o == 735 || o == 739;
-    if (!own && known && r[3] > seam) bs47Note(bs, s, "draws in the HUD rows: moved", r);
-    if (!known) bs47Note(bs, s, "draws with no place: moved", r);
-#endif
     return 1;
 }
 
@@ -3555,13 +3527,6 @@ static BS_CODE47 void bs47Clear(Renderer* renderer) {
         int32_t want = !(c >= (float) BS47_LEAST) ? 0 : c >= (float) BS47_MOST ? BS47_MOST : (int32_t) (c + 0.5f); // a NaN: 0
         lift = want;
     }
-#ifdef CTRPORT_BS47_LOG
-    // An L change while a spear or arrow is alive is named: only the box's last frames into an attack (or out) may.
-    bool flying = bsLive(runner, BS47_SPEAR) != nullptr || bsLive(runner, BS47_RISESPEAR) != nullptr || bsLive(runner, BS47_ARROW) != nullptr;
-    if (!s->seen || lift != s->lift)
-        logInfo("battlesplit G47: frame %d: lift %d to %d (shots %s)\n", (int) runner->frameCount, s->seen ? (int) s->lift : -1,
-                (int) lift, flying ? "alive" : "none");
-#endif
     s->seen = 1;
     s->lift = (int16_t) lift;
     s->on = 1;
@@ -3631,6 +3596,189 @@ static BS_CODE47 void bs47Layer(Renderer* renderer, int32_t layer) {
         s->move = (int8_t) bs47Moves(bs, s, bs->lastWant, nullptr);
     }
     bs47Apply(renderer, bs, s, layer);
+}
+#endif
+#endif
+
+// ===[ The entry flight across the seam (change soulfly, 11-15; maintainer's report "a tear/glitched look", review decision A) ]===
+// An ordinary entry (spare14[1] 1) whose battle has a lift and a seam (placement (c)) showed its bottom as the battle
+// will: layer rows from the lift to the seam at the screen's top, black below them down to the seam, the rows from the
+// seam down where they are. bsEAt lifts the flying SOUL only above the seam, so no frame could show it in the black
+// band: crossing it the SOUL was cut in two pieces |lift| rows apart, or drawn |lift| rows low, and then went back up
+// (Azahar, N11 dev, f243-f246 of bat_snow, bat_water and bat_papyrus). In the entry the bottom holds the SOUL alone, so
+// when it lands at or below the seam its frames run with no lift: bsEAt then reads no seam and no lift (its drop leaves
+// the lift out, as before for such a landing; its layer row is its screen row) and present shows the bottom unlifted in
+// one piece. The rows it lands on and every frame's timing stay, and nothing the game reads changes.
+// - Each begin frame (layout's chain18 calls CtrBattlesplit_entrySF in place of CtrBattlesplit_entryNap): the entry's
+//   lift is put back first, so the entry, its hand-over and the chain see it as before; then, while the frame's entry
+//   still flies (spare14[1] 1, lift and seam) with a live SOUL whose target row is at or below the seam, the lift is
+//   kept in spare14[1] (BS_SF_MARK | -lift, nonzero: bsClearLayerE's test) and the place's bottomDy is 0 to present.
+// - A SOUL landing above the seam never crosses the band and flies as before, as does the battle from its first room
+//   frame (the hand-over sets spare14[1] 0 with the lift put back).
+// - No call edge in this file's call graph: the three callees are reached by their assembler names.
+// - Placed by ctr_place.h's UT_COLD_TEXT(soulfly): the AAC text slot on Old (.aacout.text.soulfly, after bsg47), late
+//   text on New (.text_soulfly, after bschoice).
+#ifdef ENABLE_WAD16
+#ifdef __3DS__
+#include "ctr_place.h"
+#define BS_CODESF __attribute__((noinline, noipa, optimize("Os"))) UT_COLD_TEXT(soulfly)
+#define BS_SF_MARK 0x80u
+extern float bsEShareSF(VMContext* vm, Instance* inst, float* ty) __asm__("bsEShare");
+extern int32_t bsSeamSF(void) __asm__("CtrBattlesplit_seam");
+extern void bsEntryNapSF(Renderer* renderer) __asm__("CtrBattlesplit_entryNap");
+
+void CtrBattlesplit_entrySF(Renderer* renderer);
+BS_CODESF void CtrBattlesplit_entrySF(Renderer* renderer) {
+    Bs* bs = bsState.bs;
+    if (bs != nullptr && (bs->spare14[1] & BS_SF_MARK) != 0) {
+        bs->place.bottomDy = (int16_t) -(int32_t) (bs->spare14[1] & (BS_SF_MARK - 1u));
+        bs->spare14[1] = 1;
+    }
+    bsEntryNapSF(renderer);
+    bs = bsState.bs;
+    Runner* runner = renderer != nullptr ? renderer->runner : nullptr;
+    int32_t lift = bs != nullptr ? -(int32_t) bs->place.bottomDy : 0;
+    if (bs == nullptr || bs->spare14[1] != 1 || 0 >= lift || lift >= (int32_t) BS_SF_MARK || runner == nullptr ||
+        runner->instancesByObject == nullptr)
+        return;
+    int32_t seam = bsSeamSF();
+    float perPx = (bs->viewBottom - bs->viewTop) / 240.0f;
+    if (seam == 0 || !(0.0f < perPx)) return;
+    Instance** list = runner->instancesByObject[BS_E_SOUL];
+    for (ptrdiff_t j = 0; arrlen(list) > j; j++) {
+        Instance* heart = list[j];
+        if (heart->destroyed || heart->objectIndex != BS_E_SOUL) continue;
+        float ty;
+        bsEShareSF(runner->vmContext, heart, &ty);
+        if ((ty - bs->viewTop) / perPx >= (float) seam) {
+            bs->spare14[1] = (uint8_t) (BS_SF_MARK | (uint32_t) lift);
+            bs->place.bottomDy = 0;
+        }
+        return;
+    }
+}
+#endif
+#endif
+
+// ===[ bshinge: the hinge rows (change battlesplit2, 11-15; the band-unit ruling, Part 1: the table and the knob) ]===
+// maintainer, 11-12: split battles should account for the physical gap between the screens. The hinge rows: how many rows
+// of the screens' pitch lie between the top screen's last row and the bottom screen's first, on each model, one byte a
+// model in the system's model order below (the hinge table, 11-15: placeholders until the maintainer's hingecal picks on
+// his consoles). settings.ini's hinge_rows (0 to 160; 0: none) sets them for one console; the options menu does not show
+// it. CtrBattlesplit_hingeRows (ctr_battlesplit.h) gives the rows in effect: the file's line as read at boot, else the
+// model's (an unknown model: 0). Read with battletouch's settings read (at boot, and again before each save), and kept
+// through the display's rewrite of the file, which keeps only its own keys: the line goes back as the file had it at
+// the read just before (none if it had none). Nothing here draws; the crossing that uses the rows is its own unit.
+// Two same-size edits (ctr_wrap_chain.h: battletouch's settings read and save name CtrBattlesplit_hingeLoad and
+// CtrBattlesplit_hingeSave in place of the hint's read and the display's rewrite, which they call first). AAC only
+// (.aacout.text.bshinge); its paired constants input stays empty: the key and the table are in the code. Late state:
+// six bytes (.bss_bshinge_late).
+#ifdef ENABLE_WAD16 // AAC tenants carry an explicit guard (test_aacslot_shared.py)
+#ifdef __3DS__
+#include <3ds.h>
+#define BS_CODEH __attribute__((noinline, noipa, optimize("Os"), section(".aacout.text.bshinge")))
+// The hinge rows of the six models, in the system's model order (CFG_MODEL_3DS to CFG_MODEL_N2DSXL).
+#define BS_HINGE6(a, b, c, d, e, f)                                                                                              \
+    ((uint64_t) (a) | (uint64_t) (b) << 8 | (uint64_t) (c) << 16 | (uint64_t) (d) << 24 | (uint64_t) (e) << 32 | (uint64_t) (f) << 40)
+//                        Old 3DS, Old 3DS XL, New 3DS, Old 2DS, New 3DS XL, New 2DS XL
+#define BS_HINGES BS_HINGE6(109, 82, 97, 34, 80, 88)
+#define BS_HINGE_MOST 160 // the most hinge_rows takes
+// The key, packed little-endian: its first eight characters, then its last two.
+#define BS_HINGE_KEY0 0x6F725F65676E6968ULL
+#define BS_HINGE_KEY1 0x7377u
+static struct {
+    int16_t file; // hinge_rows as settings.ini had it at the last read, -1 none
+    int16_t rows; // the hinge rows in effect
+    uint8_t read; // 1: rows set
+} bsHinge __attribute__((section(".bss_bshinge_late,\"aw\",%nobits @")));
+
+// The key's i-th character (0 to 9).
+static BS_CODEH char bsHingeKey(int32_t i) {
+    return (char) (8 > i ? BS_HINGE_KEY0 >> (8 * i) : BS_HINGE_KEY1 >> (8 * (i - 8)));
+}
+
+// A settings.ini line "key = N" (spaces optional) for this key: N, else -1 (another line, or N past BS_HINGE_MOST).
+static BS_CODEH int32_t bsHingeLine(const char* p) {
+    while (*p == ' ' || *p == '\t') p++;
+    for (int32_t i = 0; 10 > i; i++, p++) {
+        if (*p != bsHingeKey(i)) return -1;
+    }
+    while (*p == ' ' || *p == '\t') p++;
+    if (*p++ != '=') return -1;
+    while (*p == ' ' || *p == '\t') p++;
+    int32_t n = 0, digits = 0;
+    for (; '0' <= *p && *p <= '9' && 4 > digits; p++, digits++) n = n * 10 + (*p - '0');
+    while (*p == ' ' || *p == '\t' || *p == '\r' || *p == '\n') p++;
+    return digits != 0 && *p == '\0' && BS_HINGE_MOST >= n ? n : -1;
+}
+
+// The model's hinge rows (0 for a model the table does not know, or no answer).
+static BS_CODEH int32_t bsHingeModel(void) {
+    u8 model = 0xFF;
+    if (R_SUCCEEDED(cfguInit())) {
+        if (R_FAILED(CFGU_GetSystemModel(&model))) model = 0xFF;
+        cfguExit();
+    }
+    return 6 > model ? (int32_t) (BS_HINGES >> (8u * model) & 0xFFu) : 0;
+}
+
+// battletouch's settings read (ctr_wrap_chain.h: after battletouch's line): the hint's read, then the file's hinge_rows;
+// the first time, the hinge rows in effect: the file's, else the model's.
+void Battletouch_loadHint(CtrDisplaySettings* settings, const char* path, CtrDisplayCaps caps);
+void CtrBattlesplit_hingeLoad(CtrDisplaySettings* settings, const char* path, CtrDisplayCaps caps);
+BS_CODEH void CtrBattlesplit_hingeLoad(CtrDisplaySettings* settings, const char* path, CtrDisplayCaps caps) {
+    Battletouch_loadHint(settings, path, caps);
+    char mode[2] = { 'r', '\0' };
+    int32_t value = -1;
+    FILE* f = fopen(path, mode);
+    if (f != nullptr) {
+        char line[128];
+        while (fgets(line, sizeof(line), f) != nullptr) {
+            int32_t n = bsHingeLine(line);
+            if (0 <= n) value = n;
+        }
+        fclose(f);
+    }
+    bsHinge.file = (int16_t) value;
+    if (bsHinge.read != 0) return;
+    bsHinge.read = 1;
+    bsHinge.rows = (int16_t) (0 <= value ? value : bsHingeModel());
+}
+
+// battletouch's save (ctr_wrap_chain.h): the display's rewrite, then hinge_rows as the file had it at the read just
+// before (screens read the file again before each save).
+void __real_CtrDisplay_save(const CtrDisplaySettings* settings, const char* path);
+void CtrBattlesplit_hingeSave(const CtrDisplaySettings* settings, const char* path);
+BS_CODEH void CtrBattlesplit_hingeSave(const CtrDisplaySettings* settings, const char* path) {
+    __real_CtrDisplay_save(settings, path);
+    int32_t n = bsHinge.file;
+    if (0 > n || BS_HINGE_MOST < n) return;
+    char line[20], mode[2] = { 'a', '\0' };
+    int32_t i = 0;
+    for (; 10 > i; i++) line[i] = bsHingeKey(i);
+    line[i++] = ' ';
+    line[i++] = '=';
+    line[i++] = ' ';
+    if (n >= 100) line[i++] = (char) ('0' + n / 100);
+    if (n >= 10) line[i++] = (char) ('0' + n / 10 % 10);
+    line[i++] = (char) ('0' + n % 10);
+    line[i++] = '\n';
+    line[i] = '\0';
+    FILE* f = fopen(path, mode);
+    if (f == nullptr) return;
+    fputs(line, f);
+    fclose(f);
+}
+
+// The hinge rows in effect (ctr_battlesplit.h). Before the boot read (none in a normal run: screens read the file at
+// boot), the model's, kept.
+BS_CODEH int CtrBattlesplit_hingeRows(void) {
+    if (bsHinge.read == 0) {
+        bsHinge.read = 1;
+        bsHinge.file = -1;
+        bsHinge.rows = (int16_t) bsHingeModel();
+    }
+    return bsHinge.rows;
 }
 #endif
 #endif

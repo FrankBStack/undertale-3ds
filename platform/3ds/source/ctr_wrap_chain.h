@@ -504,8 +504,10 @@ void Battletouch_step(struct Runner* runner);
 // names are its code now (once a session: nothing read from or written to settings.ini for it), and the save goes
 // straight on to the display's rewrite.
 #define CTR_STEP_AFTER_BATTLETOUCH Battletouch_stepHint
-#define CTR_BENCHFIDLOAD_AFTER_BATTLETOUCH Battletouch_loadHint
-#define CTR_DISPLAYSAVE_AFTER_BATTLETOUCH __real_CtrDisplay_save
+// The hinge rows (change battlesplit2, 11-15: z_battlesplit.c's end) take the read and the save: the read's link calls
+// the hint's, the save's the display's rewrite, then each its own line (the calls change target only).
+#define CTR_BENCHFIDLOAD_AFTER_BATTLETOUCH CtrBattlesplit_hingeLoad
+#define CTR_DISPLAYSAVE_AFTER_BATTLETOUCH CtrBattlesplit_hingeSave
 void Battletouch_stepHint(struct Runner* runner); // the other two are declared in z_battletouch.c, their only caller
 #endif
 

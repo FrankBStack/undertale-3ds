@@ -2404,6 +2404,18 @@ SECTIONS
        doesn't name (Flowey's ending) is a battle's first room for the move up (z_battlesplit.c's bsTouchRoomCh;
        UNDERTALE only); append only. */
     *(.text_bschoice)
+    /* soulfly (11-15): the entry flight across the seam on an unlifted bottom (z_battlesplit.c's
+       CtrBattlesplit_entrySF, called by layout's chain18); UNDERTALE New only: on Old, UT_COLD_TEXT puts it in
+       the AAC text slot (.aacout.text.soulfly, aacout.cmake); empty in DELTARUNE; append only. */
+    *(.text_soulfly)
+    /* samestart (audiomain 11-15, UT; ctr_samestart.inc): the second of two same-step plays starts on the first's
+       DSP frame; append only. UNDERTALE New only: on Old, UT_COLD_TEXT puts it in the AAC text slot
+       (.aacout.text.samestart, aacout.cmake). */
+    *(.text_samestart)
+    /* btchoice (battletouch, 11-15, drag then tap on the two-button choice screens; z_battletouch.c's
+       btChHeart, btReadCh, btSoulCh): append only. UNDERTALE Old places it in the AAC text slot instead
+       (UT_COLD_TEXT, .aacout.text.btchoice, aacout.cmake). */
+    *(.text_btchoice)
     *(.repack_test)
     *(.repack_test_ro)
   }
@@ -2681,6 +2693,8 @@ SECTIONS
     *(.rodata_sfxlate)
     *(.rodata_sfxboost)
     *(.rodata_reclaim_menutime)
+    /* btchoice's names, DELTARUNE only (UT_COLD_RODATA: UNDERTALE uses .aacout.rodata.btchoice); append only. */
+    *(.rodata_btchoice)
     __late_rodata_end = ABSOLUTE(.);
   }
   /* 8 KiB (at first 4 KiB): late code's constants are mostly log formats; heapfrag's are 472 B, and
@@ -3037,6 +3051,9 @@ SECTIONS
     /* soulahead (audiomain 11-15, UT with Tremor): ctr_soulahead.inc's 48 B, carved the same way, last (z_sdmigrate.c
        SM_CARVE_SOULAHEAD also holds the 8-alignment pad before it), so no tenant above moves. */
     KEEP(*(.bss.soulahead_late))
+    /* samestart (audiomain 11-15, UT): ctr_samestart.inc's 292 B state, carved the same way after soulahead
+       (z_sdmigrate.c SM_CARVE_SAMESTART; 4-aligned after soulahead's 8-aligned end, so no pad). */
+    KEEP(*(.bss.samestart_late))
     KEEP(*z_sdmigrate.o(.bss.sdmigrate_spare))
     __sdmigrate_block_end = .;
     *z_sdmigrate.o(.bss .bss.* COMMON)
@@ -3544,6 +3561,8 @@ SECTIONS
     *(.bss_bsflash_late)
     /* battlesplit2 nap: Napstablook's way down in Mad Dummy's Split (UNDERTALE only). */
     *(.bss_bsnap_late)
+    /* battlesplit2 hinge: the hinge rows in effect and settings.ini's line (UNDERTALE only). */
+    *(.bss_bshinge_late)
     /* ballast (build.sh ballast test builds only, empty in every release build): z_ballast.c's state, last, so a
        ballast build keeps every late static's address of the release build. Keep this line last in late .bss; new
        appends go above this comment. Its code and constants are in the AAC slots (aacout.cmake). */

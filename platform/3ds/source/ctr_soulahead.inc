@@ -37,20 +37,32 @@
 //  - A play's take of this link's file is recorded in flowhitch's latest cues at the take itself (the open's
 //    read-ahead start, right after it in openStream), from its own stream's voice, as flowhitch's open link records a
 //    cold open: another open before the next wait (another stream context) no longer hides it, and the order is the
-//    cold opens' order.
+//    cold opens' order. Only the warning's take is recorded (r4, below).
+//
+// r4 (N13, from the #77 hardware rows fhd77): the takes of the SOUL songs and the jingle are not recorded in flowhitch's
+// latest cues. A take opens in no time, so the sound's form is still unknown then (the probe has not called it too long
+// to cache), and the record's test (a streamed sound is recorded only once the guard shed it) let them in; their cold
+// opens without this link took long enough for the probe to call them streamed, and were never recorded. Four of them
+// between the third SOUL and the guard's shed of the first repeat cue pushed that cue out of flowhitch's four latest, so
+// its next play opened cold (Old 2DS 182.1 ms at +356 s, 0.2 ms from flowhitch's spare without this link). The warning
+// is a cue (5.1 s): its later plays come from flowhitch's spares, as without this link, so its take is still recorded.
+// r5 (lead 11-15, N13 compose): the test is an appended input's (.aacout.text.soulahead2, soulaheadRecentWarn), so
+// soulaheadOpened keeps its bytes but for its call's target and no later tail tenant moves.
 //  - The room: the game thread notes each room change in the runner (Physics_initRoom, before the new room's
 //    instances run) with the voices' serial count then. An open whose voice was asked for before the latest room
 //    change (a lower serial) is the room before's: it names nothing, whenever the opener opens it or sees the change.
 //
 // Opener thread only, as all of the spare's statics (the room's two words are the game thread's). They are reached
 // through address words loaded inside the functions (bootahead's pattern): a new C reference to flowend's statics
-// reorders the file's late code. Code in an AAC text tail input (.aacout.text.soulahead, aacout.cmake), no constants;
+// reorders the file's late code. Code in AAC text tail inputs (.aacout.text.soulahead and r5's .aacout.text.soulahead2
+// after samestart's, aacout.cmake), no constants;
 // its state (48 B) is late bss (.bss.soulahead_late). Two calls are wrapped (CMakeLists.txt, UNDERTALE with Tremor), so
 // openStream and the runner keep their code. The file names are FNV-1a hashes of the data's names before the extension
 // (RoomPlan_fnv1a, as flowend's song table).
 #ifdef ENABLE_WAD16 // AAC tenants carry an explicit guard (test_aacslot_shared.py)
 #ifdef CTRPORT_HAVE_TREMOR
 #define SOULAHEAD_CODE __attribute__((noinline, noipa, optimize("Os"), section(".aacout.text.soulahead")))
+#define SOULAHEAD2_CODE __attribute__((noinline, noipa, optimize("Os"), section(".aacout.text.soulahead2"))) // r5's append
 #define SOULAHEAD_ADDR(type, name) ({ type* at_; __asm__ volatile("ldr %0, 1f\n\tb 2f\n1:\t.word " #name "\n2:" : "=r"(at_) : : "memory"); at_; })
 #define SOULAHEAD_PART1 0x5638720Au // the fight's first phase song
 #define SOULAHEAD_WARN 0xCC92EECBu // the SOUL warning
@@ -150,7 +162,7 @@ SOULAHEAD_CODE static bool soulaheadWant(CtrAudioSystem* ca, const char* last, u
 // A play took this link's file from the spare, so flowhitch's open link (which records a cue's or a shed sound's play
 // as its latest, for the shed cues' spares) did not see it: recorded here as that link records it, si being the sound
 // of its stream's voice. The SOUL warning is such a sound, and its later plays come from flowhitch's spares (0.0-1.2
-// ms in the bench logs).
+// ms in the bench logs). Called for the warning's take only (r4, through soulaheadRecentWarn).
 SOULAHEAD_CODE static void soulaheadRecent(CtrAudioSystem* ca, int32_t si) {
     if (si < 0 || (uint32_t) si >= ca->soundCount) return;
     bool marked = false; // flowhitchMarked's test: the guard shed it this room
@@ -254,10 +266,15 @@ SOULAHEAD_CODE static void soulaheadStep(CtrAudioSystem* ca) {
     }
 }
 
+// r4: only the warning's take is recorded (the header). r5: an appended input's, soulaheadOpened's call retargeted.
+SOULAHEAD2_CODE static void soulaheadRecentWarn(CtrAudioSystem* ca, int32_t si) {
+    if (soulAhead.mine == SOULAHEAD_WARN) soulaheadRecent(ca, si);
+}
+
 // Opener thread, right after a stream's file opened (openStream's read-ahead start, wrapped): the open's voice and its
 // file, for soulaheadStep. A take of this link's file from the spare (the stream's decoder holds the spare's Tremor
-// state) is recorded as flowhitch's open link records a cold open, from the stream's voice, before any other open.
-// Decoders of no stream context are left alone.
+// state) is recorded as flowhitch's open link records a cold open, from the stream's voice, before any other open, when
+// it is the warning's (r4). Decoders of no stream context are left alone.
 SOULAHEAD_CODE static void soulaheadOpened(CtrAudioSystem* ca, CtrDecoder* d) {
     SoulAhead* s = &soulAhead;
     uintptr_t off = (uintptr_t) d - (uintptr_t) &ca->streams[0].decoder;
@@ -273,7 +290,7 @@ SOULAHEAD_CODE static void soulaheadOpened(CtrAudioSystem* ca, CtrDecoder* d) {
     s->openLive = voice && !__atomic_load_n(&sc->stopRequested, __ATOMIC_RELAXED);
     const CtrDecoder* spare = SOULAHEAD_ADDR(const CtrDecoder, flowendAhead);
     if (s->mine != 0 && *SOULAHEAD_ADDR(uint8_t, flowendAheadState) == 0 && d->kind == CTR_DECODER_VORBIS && d->vf.vi == spare->vf.vi) {
-        soulaheadRecent(ca, voice ? ca->voices[vi].soundIndex : -1);
+        soulaheadRecentWarn(ca, voice ? ca->voices[vi].soundIndex : -1); // r4: the warning's take only
         s->mine = 0;
     }
 }

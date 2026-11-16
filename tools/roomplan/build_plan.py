@@ -122,6 +122,20 @@ BOOT_AHEAD_MODELS = ('o3ds',)
 # global.battlegroup is never one of them); the story's room load loads the save's level's (z_utstall.c's bootahead
 # block, BOOTAHEAD_LEVEL_SUB). The level-6 picture's sprites were loaded at draw time, a shown frame of 83-109 ms on
 # Azahar. A level with any sprite missing (another data.win) gets no scene.
+# UNDERTALE's New Home story battles (change storyentry, 11-15): one room (the story battle room) holds 18 of them, and the
+# object placed there picks its monsters by global.flag[450] (codeclose.flag_cases: `if flag[450] == K` creates them),
+# which the corridor's trigger sets before the encounter animation starts. The room's own scene (its record and whole
+# set) has one encounter's monsters; the others' art was read from the SD card on the room change frame, with the soul
+# frozen mid-flight on screen (maintainer, 11-08 and 11-15; play-session log review). Each K gets a
+# scene of the room, sub STORY_SUB + K: the room scene's tiles and code, then the art K's monsters and what their Create
+# events create can draw (codeclose.create_chain_art) that the room scene lacks, at LATER. Only btlentry's read-ahead
+# takes them (z_btlentry.c's btTarget, through z_storyentry.c, which reads flag[450] as the game will); every other
+# loader picks the room scene as before (global.battlegroup is never one of these). A K whose art the room scene
+# already has gets no scene. Old models only (STORY_MODELS, --model): btlentry is UNDERTALE Old's.
+STORY_FLAG = ('flag', 450)
+STORY_SUB = 0x8100
+STORY_KEYS = 256
+STORY_MODELS = ('o3ds',)
 MENU_ROOM = 3
 MENU_LEVEL_SUB = 0x8000
 MENU_LEVELS = {
@@ -452,6 +466,39 @@ def menu_levels(info, closure, room):
     return out
 
 
+def story_encounters(info, closure, code_closure, room, tiles, model=None):
+    """UNDERTALE Old: [(sub, extra tiles)] for the room's story battles (STORY_FLAG), each K's art (sorted (LATER, page,
+    tile)) that tiles lack, only for a K with some; [] for any other room, another model, without the closures, when
+    any object placed in the room tests the flag in another shape (flag_cases: no guess), or when the VM's name map
+    would not give the runtime the global's slot (codeclose.global_var_id: z_storyentry.c reads the flag by name).
+    Any room qualifies whose placed objects' Create tests the flag only as `== K` cases; no room number is named. Census
+    (test_story_encounters.py, Steam and GOG): only the story battle room (309) does, with 15 scenes."""
+    if (closure is None or code_closure is None or not hasattr(code_closure, 'flag_case_objects') or
+            (model is not None and model not in STORY_MODELS) or not 0 <= room < len(code_closure.insts_by_room) or
+            code_closure.global_var_id(STORY_FLAG[0]) is None):
+        return []
+    cases = {}
+    for o in sorted({o for o, _cc in code_closure.insts_by_room[room] if o >= 0}):
+        for k, objs in code_closure.flag_case_objects(o, *STORY_FLAG).items():
+            if not 0 <= k < STORY_KEYS:
+                return []
+            cases.setdefault(k, set()).update(objs)
+    have = {(p, t) for _df, p, t in tiles}
+    out = []
+    for k in sorted(cases):
+        extra = set()
+        for s in sorted(code_closure.create_chain_art(cases[k])):
+            if 0 <= s < len(closure.sprite_items):
+                for item in closure.sprite_items[s]:
+                    page, ts = info.item_tiles(item)
+                    if page is not None:
+                        extra.update((page, t) for t in ts)
+        extra -= have
+        if extra:
+            out.append((STORY_SUB + k, [(LATER, p, t) for p, t in sorted(extra)]))
+    return out
+
+
 def capped(info, tiles, cap=CAP_BYTES):
     out, total = [], 0
     for df, p, t in tiles:
@@ -569,6 +616,8 @@ def build(info, record, closure=None, code_closure=None, model=None):
             tiles += observed_own_art(info, closure, code_closure, room, tiles)
             if extra or tiles:
                 scenes.append(encode_scene(info, room, NO_SUB, tiles, extra, cap))
+                for sub, more in story_encounters(info, closure, code_closure, room, tiles, model):
+                    scenes.append(encode_scene(info, room, sub, tiles + more, extra, cap))
             continue
         group = by_room[room]
         whole = [s for s in group if s['sub'] < 0]
@@ -582,13 +631,15 @@ def build(info, record, closure=None, code_closure=None, model=None):
             tiles += hidden_backgrounds(info, closure, code_closure, room, tiles)
             tiles += placed_art(info, closure, code_closure, room, {(p, t) for _df, p, t in tiles})
             tiles += observed_own_art(info, closure, code_closure, room, tiles)
-            scenes.append(encode_scene(info, room, NO_SUB,
-                tiles + boot_ahead(info, closure, by_room, room, tiles, model, code_closure), code, cap))
+            tiles += boot_ahead(info, closure, by_room, room, tiles, model, code_closure)
+            scenes.append(encode_scene(info, room, NO_SUB, tiles, code, cap))
             keep = keep_tiles(info, s)
             if keep:
                 scenes.append(encode_scene(info, room, KEEP_SUB, keep, []))
             for sub, level in menu_levels(info, closure, room):
                 scenes.append(encode_scene(info, room, sub, level, [], cap))
+            for sub, more in story_encounters(info, closure, code_closure, room, tiles, model):
+                scenes.append(encode_scene(info, room, sub, tiles + more, code, cap))
         elif subs:
             # New outlier fights must not shrink an established first-battle preload.
             frame_groups = record.get('battle_frame_groups', {}).get(str(room))

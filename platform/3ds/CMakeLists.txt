@@ -2082,6 +2082,13 @@ target_link_options(ctrport PRIVATE -Wl,--wrap=CtrMemory_linearAllocOnce)
 # keep the DSP's on/off state in a flag (no check reads the audio system, which a worker can outlive). Wrapped, so
 # their callers keep their code; only the call target changes.
 target_link_options(ctrport PRIVATE -Wl,--wrap=ndspChnReset,--wrap=ndspChnWaveBufClear,--wrap=ndspSetCallback,--wrap=ndspExit)
+# samestart (UNDERTALE; source/ctr_samestart.inc): a sound played twice in one step starts its second play on the
+# first's DSP frame (the second piece's window moves by the frames it is late). Wrapped, so uta's code and every
+# other caller keep their code; only the call target changes. ndspiUpdateChn (libctru's channel publication, called by
+# ndspThreadMain and ndspInitialize in another object of libctru) is wrapped to run under uta's lock and be counted.
+if(GAME_WAD_DEFINE STREQUAL "ENABLE_WAD16")
+    target_link_options(ctrport PRIVATE -Wl,--wrap=ndspChnWaveBufAdd,--wrap=ndspiUpdateChn)
+endif()
 # Azahar only: every new VRAM block is touched (source/ctr_vram_touch.c, late code). Wrapped, so the allocator entries
 # in source/ctr_memory_lock.c and the renderer's tile copies stay as they were.
 target_link_options(ctrport PRIVATE
@@ -2258,8 +2265,6 @@ if(CTRPORT_GAME STREQUAL "undertale")
         # (the same call; dimlight's wrapper still answers it).
         set_property(SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/source/ctr_renderer.c" APPEND PROPERTY COMPILE_DEFINITIONS
             "gspLcdInit=CtrBattlesplit_lcdInitBsr")
-        # G47's arena move (battlesplit2, 11-15; z_battlesplit.c's end) logs its lift and any draw it cannot place.
-        set_property(SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/source/z_battlesplit.c" APPEND PROPERTY COMPILE_DEFINITIONS CTRPORT_BS47_LOG)
     endif()
     set_property(SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/source/ctr_renderer.c" APPEND PROPERTY COMPILE_DEFINITIONS
         "CtrKeeplit_setDisplay=CtrDimlight_setDisplay")
@@ -2929,6 +2934,16 @@ if(CTRPORT_GAME STREQUAL "undertale")
     target_link_libraries(ctrport PRIVATE ctru m benchromfs_mount swkbd_late ctru)
 endif()
 target_link_options(ctrport PRIVATE "-Wl,-Map=${CMAKE_CURRENT_BINARY_DIR}/release-link.map")
+# release-link.objects: the sha256 of this ELF, its map and each object file it loaded, so check_devonly_aac.py
+# --release-objdir can prove an object directory is this link's (c26rev8 BS13-1). change builds only, not the player's.
+if(NOT "$ENV{CTRPORT_PLAYER_BUILD}" STREQUAL "1")
+    set_property(TARGET ctrport APPEND PROPERTY LINK_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/link_objects.cmake")
+    add_custom_command(TARGET ctrport POST_BUILD
+        COMMAND "${CMAKE_COMMAND}" "-DELF=$<TARGET_FILE:ctrport>" "-DMAP=${CMAKE_CURRENT_BINARY_DIR}/release-link.map"
+                "-DDIR=${CMAKE_CURRENT_BINARY_DIR}" "-DOUT=${CMAKE_CURRENT_BINARY_DIR}/release-link.objects"
+                -P "${CMAKE_CURRENT_SOURCE_DIR}/link_objects.cmake"
+        VERBATIM)
+endif()
 
 # Hot-text alignment pad. On the Old models, whose 16 KB 4-way
 # I-cache has no L2 behind it, shifting the hot code by a few cache lines cost up to 2.4% fps.
@@ -3407,6 +3422,8 @@ endif()
 # the battle's code too, and wraps main.c's DataWin_moveBytecodeToFile call for the bytecode file's path.
 set_source_files_properties("${CMAKE_CURRENT_SOURCE_DIR}/source/z_btlentry.c" PROPERTIES COMPILE_OPTIONS
     "-Os;-fno-builtin-printf;-fno-builtin-puts;-fno-builtin-putchar;-fno-builtin-fprintf;-fno-builtin-fputs;-fno-tree-switch-conversion;-fno-jump-tables")
+set_source_files_properties("${CMAKE_CURRENT_SOURCE_DIR}/source/z_storyentry.c" PROPERTIES COMPILE_OPTIONS
+    "-Os;-fno-builtin-printf;-fno-builtin-puts;-fno-builtin-putchar;-fno-builtin-fprintf;-fno-builtin-fputs;-fno-tree-switch-conversion;-fno-jump-tables")
 if(CTRPORT_GAME STREQUAL "undertale" AND CTRPORT_TARGET STREQUAL "o3ds" AND NOT CTRPORT_ROOMPLAN_RECORDER)
     set_property(SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/source/z_btlentry.c" APPEND PROPERTY COMPILE_DEFINITIONS CTRPORT_FLOWSTREAM_READ)
     target_link_options(ctrport PRIVATE -Wl,--wrap=CtrFlowstream_collect,--wrap=CtrFlowstream_readHeader,--wrap=CtrFlowstream_readMallinfo,--wrap=CtrFlowstream_readMalloc
@@ -3435,9 +3452,15 @@ if(CTRPORT_GAME STREQUAL "undertale" AND CTRPORT_TARGET STREQUAL "o3ds" AND NOT 
             CTRPORT_TILENAMES)
     endif()
     # bthand (change tilemiss, 11-08; z_btlentry.c's end): that call goes to bthand's first, which hands btlentry's
-    # finished reads to the battle room's load and then calls utfade A's (the same size).
+    # finished reads to the battle room's load and then calls utfade A's (the same size). storyentry (change storyentry,
+    # 11-15; z_btlentry.c's end): it goes to storyentry's first, which places btlentry's code read and makes room for
+    # its tiles, then calls bthand's (the same size).
     set_property(SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/source/ctr_textures.c" APPEND PROPERTY COMPILE_DEFINITIONS
-        CtrRoomload_prefetchRoom=CtrBtHand_roomLoad)
+        CtrRoomload_prefetchRoom=CtrStoryEntry_roomLoad)
+    # storyentry: source/z_storyentry.c (btlentry's pick of a New Home story battle's encounter scene, and the room
+    # making) compiles only here; every other build compiles it empty.
+    set_property(SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/source/z_storyentry.c" APPEND PROPERTY COMPILE_DEFINITIONS
+        CTRPORT_STORYENTRY)
     # r220 F1: btlentry's calls of the reader's CtrTileReader_finished go to utfade A's (the same size, in its slot), so
     # its once-a-frame installs never take a door read; utfade A reaches the reader's own by its assembler name.
     set_property(SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/source/z_btlentry.c" APPEND PROPERTY COMPILE_DEFINITIONS

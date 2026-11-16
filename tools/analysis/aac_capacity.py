@@ -14,8 +14,18 @@ RODATA is the AAC rodata slot, both models (the 23,530 B vendor payload plus its
 Historical proofs keep their own literals on purpose, because they check frozen inputs from before R9:
 check_aacout_layout.py (the retired vendor payload, 43,396 B), check_touchquiz_aac.py, check_touchui_dv8q.py and
 test_touch_sampler_owner.py.
+
+OLD_DEVONLY_TAIL is plain dev's dev-only AAC text tail cap; OLD_PLAIN_FREE is what plain Old dev keeps free after it
+(4,096 B since the 11-15 N13 ruling L2, was 8,192 B); OLD_RESERVE, their sum, is the protected AAC text reserve every
+UNDERTALE Old link keeps after its production lists (lead 11-14, audit F3-1 T7). Release measures it at dev's production
+end: the release-only latereclaim block and its phase pad do not count (lead 11-15, N13 ruling L1).
 """
 TEXT = {'o3ds': 80260, 'n3ds': 59780}
+OLD_DEVONLY_TAIL = 8192
+OLD_PLAIN_FREE = 4096
+OLD_RESERVE = OLD_DEVONLY_TAIL + OLD_PLAIN_FREE
+# The reserve before the 11-15 N13 L1/L2 rulings: frozen links (N12 and earlier) carry it in their latereclaim ASSERT.
+OLD_RESERVE_RETIRED = 16384
 TEXT_RETIRED = (43396,)
 TEXT_KNOWN = tuple(sorted(set(TEXT.values()) | set(TEXT_RETIRED)))
 RODATA = 23532

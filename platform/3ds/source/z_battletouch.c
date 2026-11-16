@@ -82,6 +82,9 @@ bool __wrap_benchfidOverride(CtrDisplaySettings* settings, const char* line, Ctr
 void __real_CtrDisplay_save(const CtrDisplaySettings* settings, const char* path);
 void __wrap_CtrDisplay_save(const CtrDisplaySettings* settings, const char* path);
 void Battletouch_loadHint(CtrDisplaySettings* settings, const char* path, CtrDisplayCaps caps); // the hint (file end)
+// The hinge rows' links (z_battlesplit.c's end, ctr_wrap_chain.h): the read's calls the hint's, the save's the display's.
+void CtrBattlesplit_hingeLoad(CtrDisplaySettings* settings, const char* path, CtrDisplayCaps caps);
+void CtrBattlesplit_hingeSave(const CtrDisplaySettings* settings, const char* path);
 void Battletouch_saveHint(const CtrDisplaySettings* settings, const char* path);
 // --ini touch_hint (the stylus hint, file end), then the settings' other keys (__real_benchfidOverride).
 bool Battletouch_hintOverride(CtrDisplaySettings* settings, const char* line, CtrDisplayCaps caps);
@@ -734,6 +737,9 @@ typedef struct BtLive {
     // Appended: Omega Flowey (btOmRoom): the data file the ids were found for, its heart's and buttons' objects.
     const void* omData;
     int16_t omHeart, omButton;
+    // Appended: the choice screens (btChHeart): the data file the ids were found for, the heart's and buttons' objects.
+    const void* chData;
+    int16_t chHeart, chButton;
 } BtLive;
 #line 735
 
@@ -983,6 +989,8 @@ bool Battletouch_view(Runner* runner, CtrBottomView* out); // the view, and the 
 static __attribute__((noinline, noclone, section(BT_FILL))) void btReadT(Runner* runner, TouchMenu* m, int32_t* slot);
 static void btReadOm(Runner* runner, TouchMenu* m, int32_t* slot); // Omega (the file's end): btReadT's wrap
 static void btSoulOm(Runner* runner, TouchMenu* m);                 // and btRead_soul2's
+static void btReadCh(Runner* runner, TouchMenu* m, int32_t* slot); // the choice screens (the file's end): btReadOm's wrap
+static void btSoulCh(Runner* runner, TouchMenu* m);                 // and btSoulOm's
 #line 980
 BT_CODE2 CtrInputEdges Battletouch_take2(const CtrInputMap* map, uint32_t held, uint32_t down, bool enabled, bool suppressHeld,
                                          CtrInputStats* stats) {
@@ -1066,11 +1074,11 @@ BT_CODE2 CtrInputEdges Battletouch_take2(const CtrInputMap* map, uint32_t held, 
 #ifdef CTRPORT_TOUCH_TEST
         if (!shown && BT_SCRIPTED) shown = btTestView(runner, &view);
 #endif
-        if (shown) btReadOm(runner, &m, &slot);
+        if (shown) btReadCh(runner, &m, &slot);
         // The slot's reader knows red only: read every SOUL kind again.
         if (m.ctx == TOUCH_CTX_DEFENCE && btMode() == 2) {
             m.soul = TOUCH_SOUL_NONE;
-            btSoulOm(runner, &m);
+            btSoulCh(runner, &m);
         }
         int32_t x = (int32_t) (view.roomX0 + ((float) px + 0.5f) * view.roomPerPx);
         int32_t y = (int32_t) (view.roomY0 + ((float) py + 0.5f) * view.roomPerPx);
@@ -3133,8 +3141,8 @@ __asm__(".global Battletouch_take\n.set Battletouch_take, btTakeM\n");
 //   writer at halt 5, an obj_choicer) or an obj_anybt is alive (review Q4). The game decides, so the tap skips where
 //   the keys skip. Not with a key of the player's held, nor on a sample take2 did not give the battle's core (BT51-2):
 //   an input cut (Options, HOME, sleep) or the extension's claim (ctr_touch_ext.h) lets the pen go there and never
-//   reaches take2's `L->scope = scope`, which this take's marker reads. Flowey's end choice (room_flowey_endchoice)
-//   and the dates choose with Z: no taps there.
+//   reaches take2's `L->scope = scope`, which this take's marker reads. The two-button choice screens (Flowey's end
+//   choice, Asgore's FIGHT/MERCY): no taps here, their own unit (btchoice, the file's end); the dates choose with Z.
 // - The setting Off (BT51-L1): take2 returns before the core, so nothing the core left armed holds the bottom.
 // The take wrap (__wrap_CtrInput_take) branches here; btTakeM (Battletouch_take) keeps its code. The tap switch's
 // code and constants are an AAC input (.aacout.text/.rodata.btswitch, aacout.cmake; 11-15), with
@@ -3553,6 +3561,95 @@ static BT_CODEOM uint32_t btStoryKeyOm(Runner* runner) {
     }
     if (key == 0u && btTyping(runner)) key = TOUCH_KEY_X | TOUCH_KEY_Z; // typing: the page at once
     return key;
+}
+
+// ===[ The choice screens with the stylus (change battletouch btchoice, ask-touch-choice-screens-1115; maintainer 11-15) ]===
+// maintainer 11-15 02:35: on the two-button choice screens the pen drags the heart onto a button, lifts, and the next tap
+// inside that lit button confirms (one Z); 02:36: the heart travels at its own speed ("waiting for the soul to move is
+// a part of the decision"). The game has one such kind: two button objects (one object, named in btChNames) with a
+// moving heart (the other), made by Asgore's ending (FIGHT, MERCY; the battle room, its battle controller still
+// alive) and Flowey's end choice (FIGHT, MERCY; Flowey's last room, no battle controller). The heart's Step moves it
+// global.sp a frame per held arrow; a button's Collision with it sets `on`, its Step shows image_index 1 while `on`
+// lasts and takes Z then as the choice. So, while that heart moves (movement 1) and a button is alive, wherever the
+// room:
+// - the screen is a defence with a red SOUL, the heart's box centre, step global.sp: a pen-down grabs it and the
+//   core holds the arrows toward the pen (Menus and SOUL only, as every SOUL; with Menus it follows nothing);
+// - a pen-down inside a lit button (image_index 1) is the core's TAP: one Z, the stroke dead until the lift, the heart
+//   not moved. The game takes that Z on the lit button. A tap on an unlit one grabs the heart, as anywhere else;
+//   so does a tap on a lit one while a key of the player's is held (pressed now, or held at the last take).
+// Every key works as before (the core's abandon: a key of the player's held lets the stroke go). Not the dates (their
+// heart roams the picture, no buttons) nor the rooms with that heart and no button (the first Flowey's).
+// The same calls, other targets: take2 calls btReadCh in place of btReadOm and btSoulCh in place of btSoulOm; each makes
+// the old call first (btReadCh) or whenever no choice screen is up (btSoulCh). The objects are found once per data file
+// into BtLive's appended fields. Placed per model (ctr_place.h, late-order.json per_model): code in the AAC text
+// slot on UNDERTALE Old and appended late text on New; its names in the AAC rodata slot on both models.
+#include "ctr_place.h"
+#define BT_CODECH __attribute__((noinline, noipa, used)) UT_COLD_TEXT(btchoice)
+#define BT_CH_BUTTON 14 // offset in btChNames
+static const char btChNames[] UT_COLD_RODATA(btchoice) = "obj_fakeheart\0obj_anybt";
+_Static_assert(sizeof btChNames == BT_CH_BUTTON + 10, "btChNames' offsets"); // the button object's 9 + NUL
+// The choice screen's heart: the fakeheart while it moves (movement 1) and a button is alive; else nullptr.
+static BT_CODECH Instance* btChHeart(Runner* runner, BtLive* L) {
+    if (L == nullptr || runner->instancesByObject == nullptr) return nullptr;
+    DataWin* dw = runner->dataWin;
+    if (L->chData != dw) {
+        L->chData = dw;
+        L->chHeart = L->chButton = -1;
+        for (uint32_t i = 0; dw->objt.count > i && 0x7fffu > i; i++) {
+            const char* n = dw->objt.objects[i].name;
+            if (n == nullptr) continue;
+            if (strcmp(n, btChNames) == 0) L->chHeart = (int16_t) i;
+            if (strcmp(n, btChNames + BT_CH_BUTTON) == 0) L->chButton = (int16_t) i;
+        }
+    }
+    if (0 > L->chHeart || 0 > L->chButton || btFirst(runner, L->chButton) == nullptr) return nullptr;
+    Instance* h = btFirst(runner, L->chHeart);
+    if (h == nullptr || h->objectIndex != L->chHeart) return nullptr;
+    return btInt(btSlot4(&h->selfVars, bt.names->id[S_MOVEMENT]), 0, false) == 1 ? h : nullptr;
+}
+// take2's menu read: btReadOm, then, with a choice screen up on the bottom screen, its defence (whatever the battle's
+// read made of it), or its TAP on a pen-down inside a lit button. With the game on top (no bottom view: Top screen, or
+// the relative touchpad's battle) the battle's read stays: the buttons are not under the pen there.
+static BT_CODECH void btReadCh(Runner* runner, TouchMenu* m, int32_t* slot) {
+    btReadOm(runner, m, slot);
+    BtLive* L = bt.live;
+    CtrBottomView v;
+    if (btChHeart(runner, L) == nullptr || !CtrLayout_bottomView(runner, &v)) return;
+    *m = (TouchMenu) {0};
+    *slot = -1;
+    m->ctx = TOUCH_CTX_DEFENCE;
+    const TouchPen* p = &L->pen;
+    // A key of the player's held since the last take: no TAP (the core abandons on a fresh press only; c26rev6
+    // BTCHOICE-1). The pen-down then grabs the heart, as anywhere else.
+    if (!p->pen || L->s.pen || L->s.mode != TOUCH_IDLE || (L->ePrev & TOUCH_KEY_ABANDON) != 0u) return;
+    // The pen-down's place as take2 maps it (the sample Touch_pen chose).
+    int32_t i = p->wait ? 1 : 0;
+    float x = v.roomX0 + ((float) p->x[i] + 0.5f) * v.roomPerPx, y = v.roomY0 + ((float) p->y[i] + 0.5f) * v.roomPerPx;
+    Instance** list = runner->instancesByObject[L->chButton];
+    for (ptrdiff_t k = 0; arrlen(list) > k; k++) {
+        const Instance* b = list[k];
+        float box[4];
+        if (b->destroyed || !b->active || (int32_t) b->imageIndex != 1 || !btOmBox(runner, b, box)) continue;
+        if (x >= box[0] && box[2] > x && y >= box[1] && box[3] > y) {
+            m->ctx = TOUCH_CTX_TAP;
+            return;
+        }
+    }
+}
+// take2's SOUL read: the choice screen's heart (red, global.sp a frame), else btSoulOm.
+static BT_CODECH void btSoulCh(Runner* runner, TouchMenu* m) {
+    Instance* h = btChHeart(runner, bt.live);
+    if (h == nullptr) {
+        btSoulOm(runner, m);
+        return;
+    }
+    float box[4];
+    if (!btOmBox(runner, h, box)) return;
+    const RValue* sp = btSlot4(&runner->vmContext->globalScopeInstance->selfVars, bt.names->id[G_SP]);
+    m->soul = TOUCH_SOUL_RED;
+    m->soulX = (int32_t) ((box[0] + box[2]) * 8.0f); // the centre, times 16
+    m->soulY = (int32_t) ((box[1] + box[3]) * 8.0f);
+    m->soulStep = sp != nullptr && sp->type == RVALUE_REAL ? (int32_t) (sp->real * 16.0 + 0.5) : btInt(sp, 0, false) * 16;
 }
 
 #line 3382

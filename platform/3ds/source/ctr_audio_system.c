@@ -11908,3 +11908,5 @@ MSGLOCK_CODE bool CtrMsglock_postLines(void* vp, uint32_t count, void (*fill)(vo
 #include "ctr_bootahead.inc"
 // soulahead (change audiomain, 11-15): the first SOUL fight's cold opens, its own link after bootahead's.
 #include "ctr_soulahead.inc"
+// samestart (change audiomain, 11-15): two plays of one sound in one step start on one DSP frame.
+#include "ctr_samestart.inc"

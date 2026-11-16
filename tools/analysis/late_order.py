@@ -185,7 +185,7 @@ def check(text, registry):
 
 
 def aac_inputs(text, kind):
-    """Exact names in the ordered CMake list, before generated linker selectors."""
+    """Exact names in emitted order (hole, production, release-only reclaim lists), before linker selectors."""
     if kind not in ('text', 'rodata'):
         raise ValueError('unknown AAC slot kind: ' + kind)
     text = re.sub(r'#[^\n]*', '', text)
@@ -195,7 +195,11 @@ def aac_inputs(text, kind):
     holes = re.findall(r'^set\(aacout_' + kind + r'_hole_inputs[ \t]*\n(.*?)^\)', text, re.M | re.S)
     if len(holes) > 1:
         raise ValueError('duplicate AAC hole input list')
-    return (holes[0].split() if holes else []) + blocks[0].split()
+    # Release-only reclaim inputs (N8a's rodata pair) are emitted after every production input (lead 11-16, N13 A).
+    reclaim = re.findall(r'^set\(aacout_' + kind + r'_reclaim_inputs[ \t]*\n(.*?)^\)', text, re.M | re.S)
+    if len(reclaim) > 1:
+        raise ValueError('duplicate AAC reclaim input list')
+    return (holes[0].split() if holes else []) + blocks[0].split() + (reclaim[0].split() if reclaim else [])
 
 
 def check_aac(text, registry):

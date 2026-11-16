@@ -611,33 +611,33 @@ static BT_R6 void btNames(const DataWin* dw) {
 static BT_R6 Instance** btList(const Runner* runner, int32_t o) {
     return 0 <= o && runner->instancesByExactObject != nullptr ? runner->instancesByExactObject[o] : nullptr;
 }
-
+bool CtrStoryEntry_flight(void); // z_btlentry.c's end (storyentry): a story battle's flight, then true
 static BT_R6 bool btMoving(const Runner* runner) {
     btNames(runner->dataWin);
     Instance** list = btList(runner, bt.flier);
     for (ptrdiff_t i = 0; arrlen(list) > i; i++) {
-        if (list[i]->speed != 0.0f) return true;
+        if (list[i]->speed != 0.0f) return CtrStoryEntry_flight();
     }
     return false;
 }
 
-// The scene to read ahead, or null: a story battle's room's own scene (group -1), else btlentry's battle group scene.
+// The scene to read ahead, or null: a story battle's (its encounter's scene, else its room's own), else btlentry's
+// battle group scene.
+const uint8_t* CtrStoryEntry_scene(Runner* runner, const uint8_t* plan, int32_t room, int32_t* group); // z_storyentry.c
 static BT_R6 const uint8_t* btTarget(Runner* runner, const uint8_t* plan, int32_t* group) {
     bool battle = btStarting(runner); // looks up the alert (bt.objects[1])
     btNames(runner->dataWin);
-    if (arrlen(btList(runner, bt.story)) > 0 || (battle && arrlen(btList(runner, bt.early)) > 0 && arrlen(btList(runner, bt.objects[1])) > 0)) {
-        *group = -1;
-        RoomPlanHeader h;
-        memcpy(&h, plan, sizeof(h));
-        size_t at = sizeof(h);
-        for (uint32_t k = 0; h.sceneCount > k; k++) {
-            RoomPlanScene scene;
-            memcpy(&scene, plan + at, sizeof(scene));
-            if (scene.sub == ROOMPLAN_NO_SUB && 0 <= bt.storyRoom && scene.room == (uint32_t) bt.storyRoom) return plan + at;
-            at += RoomPlan_sceneSize(&scene);
-        }
-        return nullptr;
-    }
+    if (arrlen(btList(runner, bt.story)) > 0 || (battle && arrlen(btList(runner, bt.early)) > 0 && arrlen(btList(runner, bt.objects[1])) > 0))
+        return CtrStoryEntry_scene(runner, plan, bt.storyRoom, group);
+    // storyentry (change storyentry, 11-15): a New Home story battle reads its encounter's plan scene (sub 0x8100 + flag[450],
+    // build_plan.py story_encounters) when the plan has one, so its monsters' art is read during the soul's flight
+    // with the rest of the room's set; z_storyentry.c picks it, and falls back to the room's own scene (group -1), as
+    // this branch's scan of the plan did here before. The scan moved there whole; these comment lines keep this file's
+    // line numbers, and storyentry's pad (this file's end) keeps .text.btmoving_late at its size, so no later late
+    // symbol moves. Story battle or not is decided as before (its battler object there, or the alert with an early story
+    // battle's object); only which of the story room's scenes is read changes.
+    //
+    //
     if (!battle) return nullptr;
     *group = RoomPlan_utstallGroup(runner);
     return 0 <= *group ? btScene(plan, *group) : nullptr;
@@ -1712,5 +1712,287 @@ BH_TEXT void CtrBtHand_roomLoad(CtrTextureCache* cache, Runner* runner) {
                     (unsigned) noRoom, (double) (svcGetSystemTick() - start) / (double) tick);
     }
     bhUtfadeRoomLoad(cache, runner);
+}
+// ---- storyentry (change storyentry, 11-15; UNDERTALE Old): the battle room's load, before bthand.
+// A New Home story battle's room change comes while the soul still flies (the story battler's room change at about frame
+// 21, the soul's 17-frame flight from about frame 11: on PC it never lands either), so btlentry never placed its code
+// read (round 6's btMoving holds it while the soul moves) and the room change released it: the room load read the same
+// code again from the SD card (ethanlog4 entry 1: 38 groups, 146 KB, 108 ms on the room change frame). And bthand left
+// a finished tile without room in the texture budget or linear memory to the room load, which read it again from the
+// card (playtest logs: 15 of group 48's, 4 of group 58's). So, when the room load starts (ctr_textures.c's
+// CtrTextures_roomLoadedOld calls here, then bthand, then utfade A) and the room is the one btlentry read ahead for:
+//   1. btlentry's reads in flight, its code read too (not a door's: utfade A owns that), are waited for, BH_WAIT_MS at
+//      most (bthand's wait then finds them finished);
+//   2. the code read's groups not yet in memory are placed (btPlaceCode's way, written out: no call to a static of this
+//      file), and the read released;
+//   3. room is made for the finished reads' tiles that bthand will install (CtrStoryEntry_makeRoom, z_storyentry.c:
+//      the eviction the room load's whole set makes a moment later anyway, never a tile of the scene read).
+// The room change frame isn't presented. And before it, during the story battle's flight only (CtrStoryEntry_flight,
+// which btMoving calls, 11-15 A+1/A+2), btlentry's finished reads are installed and its code read placed, BT_INSTALL_MS
+// a frame, so the room change frame has less left to do. Textures and code bytes only: no game state, script, timing
+// the game sees or RNG changes; every tile is the same texels and every code group the same bytes whenever it loads.
+// Its own AAC inputs (aacout.cmake), so late text grows by nothing (btMoving's call of the flight is paid from
+// storyentry's .text.btmoving_late pad); its state is btlentry's bt and utfade A's ua: no bss is added.
+#ifdef ENABLE_WAD16 // AAC inputs: an explicit guard (test_aacslot_shared.py)
+#define ST_TEXT __attribute__((noinline, section(".aacout.text.storyentry")))
+// Constants in the text input (its own name with the assembler flags and a comment mark after it, so the compiler sees
+// another section and takes no type conflict with the code): the AAC rodata slot ends in N8a release-only inputs.
+#define ST_CONST __attribute__((aligned(4), section(".aacout.text.storyentry,\"ax\",%progbits @")))
+#endif
+#line 1735
+#define ST_STR2(x) #x
+#define ST_STR(x) ST_STR2(x)
+#ifndef ST_BTMOVING_PAD
+#define ST_BTMOVING_PAD 132 // btTarget gave up 132 B when its story scan moved to z_storyentry.c (0x448 - 0x3c4); btMoving's
+                            // flight call takes no argument, so btMoving stays 100 B (#96: with one it took 104)
+#endif
+void CtrStoryEntry_roomLoad(CtrTextureCache* cache, Runner* runner);
+bool CtrStoryEntry_flightBody(void);
+bool CtrStoryEntry_makeRoom(CtrTextureCache* cache, const uint8_t* scene, uint64_t bytes, uint32_t floor); // z_storyentry.c
+static const char stLog[] ST_CONST =
+    "Battle entry (storyentry): group %ld: waited %.1f ms; code %u groups (%u KB) placed; %u KB evicted for %u KB of "
+    "read tiles%s; in flight %u tiles installed, %u code groups placed, %.1f ms most a frame, %.1f ms the costliest\n";
+static const char stNoRoom[] ST_CONST = ", still without room";
+
+// .text.btmoving_late's pad: after its functions (subsection 1), before its names, so its size and every later late
+// address stay as they were.
+static ST_TEXT __attribute__((used)) void stBtmovingPad(void) {
+    __asm__(".pushsection .text.btmoving_late, 1\n.space " ST_STR(ST_BTMOVING_PAD) "\n.popsection");
+}
+
+// The code read's groups not yet in memory placed (btPlaceCode's way, written out: no call to a static of this file),
+// and the read released: the bytes placed, and *placed counts the groups.
+static ST_TEXT uint32_t stPlaceCode(CtrTextureCache* cache, CtrTileRead* code, uint32_t* placed) {
+    uint32_t placedBytes = 0;
+    DataWin* dw = cache->dataWin;
+    DataWinCodeBlob* blobs = dw->codeBlobs;
+    uint32_t base = (uint32_t) dw->bytecodeBufferBase;
+    bool allowed = CtrMemory_allowRelief(false);
+    for (uint32_t i = 0; bt.codeGroups > i; i++) {
+        uint32_t g = code->dstSize[i], row = code->dstFormat[i];
+        if (blobs[g].bytes != nullptr) continue; // run meanwhile, so read by the lazy path
+        uint32_t from = blobs[g].absoluteOffset, end = 0;
+        for (uint32_t b = g; dw->codeBlobCount > b && blobs[b].group == g; b++) {
+            uint32_t blobEnd = blobs[b].absoluteOffset + blobs[b].length;
+            if (blobEnd > end) end = blobEnd;
+        }
+        // data_win.c's allocCodeArena, as btArena: with the promotion reserve still free after it, room in the
+        // block list (no growth) and heap relief off.
+        uint8_t* at = nullptr;
+        if (code->headerOk && code->data != nullptr && code->tileAt[row] != CTR_READ_NOT_READ) {
+            uint32_t size = (end - from + 3u) & ~3u;
+            bool own = size > BT_ARENA_BLOCK / 4u;
+            uint32_t take = own ? size : size > dw->codeArenaLeft ? BT_ARENA_BLOCK : 0;
+            uint8_t* block = nullptr;
+            if (take > 0) {
+                stbds_array_header* list = dw->codeArenaBlocks != nullptr ? stbds_header(dw->codeArenaBlocks) : nullptr;
+                struct mallinfo mi = mallinfo();
+                if (list != nullptr && list->capacity > list->length &&
+                    __ctru_heap_size >= (uint32_t) mi.uordblks + CtrTileReader_heapReserve() + take)
+                    block = malloc(take);
+                if (block != nullptr) {
+                    dw->codeArenaBlocks[list->length++] = block; // arrput, with room for it
+                    dw->codeStats.residentBytes += take;
+                }
+            }
+            if (own) {
+                at = block;
+            } else if (take == 0 || block != nullptr) {
+                if (block != nullptr) {
+                    dw->codeArena = block;
+                    dw->codeArenaLeft = BT_ARENA_BLOCK;
+                }
+                at = dw->codeArena;
+                dw->codeArena += size;
+                dw->codeArenaLeft -= size;
+            }
+        }
+        if (at == nullptr) {
+            bt.codeLeft++;
+            continue;
+        }
+        memcpy(at, code->data + code->tileAt[row] + (BT_CODE_HEADER + from - base - code->view.tileOffset[row]), end - from);
+        for (uint32_t b = g; dw->codeBlobCount > b && blobs[b].group == g; b++) blobs[b].bytes = at + (blobs[b].absoluteOffset - from);
+        bt.codePlaced++;
+        bt.codeBytes += end - from;
+        (*placed)++;
+        placedBytes += end - from;
+    }
+    CtrMemory_allowRelief(allowed);
+    CtrTileReader_release(cache->reader, code);
+    bt.codeRead = nullptr;
+    return placedBytes;
+}
+
+// A+1 and A+2 (11-15, review GO; the history: tilemiss round 6 item 1, 81bfb6afc; btlidle's c26rev5 NO-GO, BI-1 and
+// BI-2; the 11-14 slice ruling). A story battle's room change comes mid-flight, so its room load is the hold the player
+// sees (a normal battle's is hidden behind the soul's landing). btMoving (round 6) holds the collector's code placing and
+// slot upkeep while a soul flies and returns true; first it calls here, which for a New Home story battle's flight only
+// does, within BT_INSTALL_MS a frame (one unit, then another only while the frame's time so far plus the costliest unit
+// yet fits; a unit's time is all of it, from before its room is made to after its install or placing):
+//   A+2  btlentry's finished code read placed (stPlaceCode), so the collector's btQueueCode later in this frame queues
+//        the next: the battle room's code is read during the flight, not on the room change frame;
+//   A+1  btlentry's finished tile reads installed (bthand's checks and steps; room made as the room load makes it, never
+//        a tile of the scene; a tile still without room ends the read's flight installs, left to the room load), a read
+//        through released and its slot freed for the collector's next read.
+// Only while every one holds: btlentry's scene is the story room's (bt.storyRoom, the room btTarget's story branch reads
+// for), the room isn't it yet, the story battle's starters are in the room (btTarget's test, read here, not called), and
+// it is btlentry's room visit (a room change or restart clears bt.scene first). A read or code read utfade A owns
+// (ua.read, ua.code) is never touched here (BI-1). Any other battle, and a story battle once in its room, keeps round 6.
+// btMoving calls it by an assembler alias (CtrStoryEntry_flight, after it), as utfade A's CtrUtfadeA_finished: a call
+// edge to a function defined in this file changed the order gcc emits btlentry's late functions in (#96 A2 release
+// Old: the collector and btMoving moved), an external name does not.
+__attribute__((noipa, used)) ST_TEXT bool CtrStoryEntry_flightBody(void) {
+    CtrTextureCache* cache = (CtrTextureCache*) bt.cache;
+    const Runner* runner = cache != nullptr ? cache->runner : nullptr;
+    if (runner == nullptr || cache->reader == nullptr || bt.roomStart != cache->roomStartFrame ||
+        bt.scene == nullptr || 0 > bt.storyRoom || bt.namesOf != runner->dataWin || runner->instancesByExactObject == nullptr)
+        return true;
+    RoomPlanScene s;
+    memcpy(&s, bt.scene, sizeof(s));
+    Instance*** by = runner->instancesByExactObject;
+    bool story = (0 <= bt.story && arrlen(by[bt.story]) > 0) ||
+                 (0 <= bt.early && arrlen(by[bt.early]) > 0 && bt.objectsOf == runner->dataWin && 0 <= bt.objects[1] &&
+                  arrlen(by[bt.objects[1]]) > 0);
+    if (!story || s.room != (uint32_t) bt.storyRoom || s.room == (uint32_t) runner->currentRoomIndex) return true;
+    uint64_t start = svcGetSystemTick(), budget = (uint64_t) BT_INSTALL_MS * (SYSCLOCK_ARM11 / 1000u);
+    uint32_t units = 0;
+    CtrTileRead* code = bt.codeRead;
+    if (code != nullptr && !ua.code && uaFinished(cache->reader, code)) {
+        uint32_t placed = 0;
+        stPlaceCode(cache, code, &placed);
+        uint32_t took = (uint32_t) (svcGetSystemTick() - start);
+        if (took > bt.tileTicks) bt.tileTicks = took;
+        units++;
+    }
+    bool over = false;
+    for (uint32_t k = 0; BT_READS > k && !over; k++) {
+        CtrTileRead* read = bt.read[k];
+        if (read == nullptr || ua.read[k] == read || bt.dropped[k]) continue;
+        CtrPage* page = &cache->pages[bt.page[k]];
+        if (page->read != read || !uaFinished(cache->reader, read)) continue;
+        const CtrPageLayout* layout = &read->view.layout;
+        bool allowed = CtrMemory_allowRelief(false);
+        if (read->headerOk && !page->layoutKnown && (page->tiles = calloc((size_t) (layout->tilesX * layout->tilesY), sizeof(CtrTile))) != nullptr) {
+            page->width = layout->width;
+            page->height = layout->height;
+            page->tileW = layout->tileW;
+            page->tileH = layout->tileH;
+            page->tilesX = layout->tilesX;
+            page->tilesY = layout->tilesY;
+            page->layoutKnown = true;
+        }
+        CtrMemory_allowRelief(allowed);
+        if (read->headerOk && page->layoutKnown && !page->packInfo && page->width == layout->width && page->height == layout->height &&
+            page->tileW == layout->tileW && page->tileH == layout->tileH && page->tilesX == layout->tilesX && page->tilesY == layout->tilesY) {
+            for (int32_t i = 0; page->tilesX * page->tilesY > i; i++) {
+                CtrTile* each = &page->tiles[i];
+                each->format = layout->formats[i];
+                each->offset = read->view.tileOffset[i];
+                each->size = read->view.tileSize[i];
+                each->checksum = read->view.tileChecksum[i];
+            }
+            page->formatsKnown = true;
+            page->packInfo = true;
+            page->cacheFile = CTR_CACHE_FILE_VALID;
+        }
+        uint32_t t = bt.next[k];
+        for (; CTR_PAGE_MAX_TILES > t; t++) {
+            if (!read->want[t]) continue;
+            CtrTile* tile = page->packInfo && t < (uint32_t) (page->tilesX * page->tilesY) ? &page->tiles[t] : nullptr;
+            if (tile == nullptr || tile->valid || tile->reserved || !read->headerOk || read->data == nullptr ||
+                read->tileAt[t] == CTR_READ_NOT_READ || tile->offset != read->view.tileOffset[t] || tile->size != read->view.tileSize[t])
+                continue;
+            uint64_t before = svcGetSystemTick();
+            if (units > 0 && before - start + bt.tileTicks > budget) {
+                over = true;
+                break;
+            }
+            units++;
+            uint32_t bytes = (uint32_t) page->tileW * (uint32_t) page->tileH * CtrPack_texelBytes((CtrTileFormat) tile->format);
+            uint32_t linear = linearSpaceFree();
+            bool room = (cache->residentBytes + bytes <= cache->budgetBytes && linear >= BT_FLOOR && linear - BT_FLOOR >= bytes) ||
+                        CtrStoryEntry_makeRoom(cache, bt.scene, bytes, BT_FLOOR);
+            if (room && !C3D_TexInit(&tile->tex, (u16) page->tileW, (u16) page->tileH, CtrPack_gpuFormat((CtrTileFormat) tile->format))) {
+                room = false;
+            } else if (room && (tile->tex.size != bytes || BT_FLOOR > linearSpaceFree())) { // utfade A's r220 F1: the floor after it too
+                C3D_TexDelete(&tile->tex);
+                room = false;
+            }
+            if (room) {
+                C3D_TexSetFilter(&tile->tex, GPU_NEAREST, GPU_NEAREST);
+                C3D_TexSetWrap(&tile->tex, GPU_CLAMP_TO_EDGE, GPU_CLAMP_TO_EDGE);
+                tile->reserved = true; // btlentry's btReserve: installTile takes it as allocated
+                page->bytes += bytes;
+                cache->residentBytes += bytes;
+                bt.installed += CtrTextures_btlentryInstall(cache, page, (int32_t) t);
+            }
+            uint32_t took = (uint32_t) (svcGetSystemTick() - before);
+            if (took > bt.tileTicks) bt.tileTicks = took;
+            if (!room) {
+                bt.dropped[k] = true; // the rest of this read is the room load's (its room made there, then bthand)
+                break;
+            }
+        }
+        bt.next[k] = (uint16_t) t;
+        if (CTR_PAGE_MAX_TILES == t) { // through: released (a texture reserved and left uninstalled freed), its slot free
+            CtrTextures_btlentryInstall(cache, page, -1);
+            bt.read[k] = nullptr;
+        }
+    }
+    if (units > 0) {
+        uint32_t total = (uint32_t) (svcGetSystemTick() - start);
+        bt.installTicks += total;
+        if (total > bt.maxTicks) bt.maxTicks = total;
+    }
+    return true;
+}
+__asm__(".global CtrStoryEntry_flight\n\t.type CtrStoryEntry_flight, %function\n\t.set CtrStoryEntry_flight, CtrStoryEntry_flightBody");
+
+ST_TEXT void CtrStoryEntry_roomLoad(CtrTextureCache* cache, Runner* runner) {
+    RoomPlanScene s;
+    if (bt.scene != nullptr && bt.cache == cache && cache->reader != nullptr && runner != nullptr &&
+        (memcpy(&s, bt.scene, sizeof(s)), s.room == (uint32_t) runner->currentRoomIndex)) {
+        uint64_t start = svcGetSystemTick(), tick = SYSCLOCK_ARM11 / 1000u;
+        CtrTileRead* code = !ua.code ? bt.codeRead : nullptr;
+        for (;;) {
+            bool waiting = code != nullptr && !uaFinished(cache->reader, code);
+            for (uint32_t k = 0; BT_READS > k; k++) {
+                CtrTileRead* read = bt.read[k];
+                if (read != nullptr && ua.read[k] != read && cache->pages[bt.page[k]].read == read && !uaFinished(cache->reader, read))
+                    waiting = true;
+            }
+            if (!waiting || svcGetSystemTick() - start >= (uint64_t) BH_WAIT_MS * tick) break;
+            svcSleepThread(UA_SLICE_NS);
+        }
+        uint64_t waited = svcGetSystemTick() - start;
+        uint32_t placed = 0, placedBytes = 0;
+        if (code != nullptr && uaFinished(cache->reader, code)) placedBytes = stPlaceCode(cache, code, &placed);
+        // The finished reads' tiles bthand will install (its own tests, before its texture's): their texture bytes.
+        uint64_t want = 0;
+        for (uint32_t k = 0; BT_READS > k; k++) {
+            CtrTileRead* read = bt.read[k];
+            if (read == nullptr || ua.read[k] == read) continue;
+            CtrPage* page = &cache->pages[bt.page[k]];
+            if (page->read != read || !uaFinished(cache->reader, read) || !read->headerOk || read->data == nullptr) continue;
+            const CtrPageLayout* layout = &read->view.layout;
+            for (uint32_t t = bt.next[k]; CTR_PAGE_MAX_TILES > t && (uint32_t) (layout->tilesX * layout->tilesY) > t; t++) {
+                if (!read->want[t] || read->tileAt[t] == CTR_READ_NOT_READ) continue;
+                if (page->packInfo && page->tiles != nullptr && (uint32_t) (page->tilesX * page->tilesY) > t &&
+                    (page->tiles[t].valid || page->tiles[t].reserved))
+                    continue;
+                want += (uint64_t) layout->tileW * (uint64_t) layout->tileH * CtrPack_texelBytes((CtrTileFormat) layout->formats[t]);
+            }
+        }
+        uint32_t before = cache->residentBytes;
+        bool room = want == 0 || CtrStoryEntry_makeRoom(cache, bt.scene, want, BT_FLOOR);
+        if (code != nullptr || want > 0 || bt.maxTicks > 0)
+            logInfo(stLog, (long) bt.group, (double) waited / (double) tick, (unsigned) placed, (unsigned) ((placedBytes + 1023u) / 1024u),
+                    (unsigned) ((before > cache->residentBytes ? before - cache->residentBytes : 0) / 1024u),
+                    (unsigned) ((want + 1023u) / 1024u), room ? stNoRoom + sizeof(stNoRoom) - 1u : stNoRoom, // its NUL: no literal in shared .rodata
+                    (unsigned) bt.installed, (unsigned) (bt.codePlaced - placed), (double) bt.maxTicks / (double) tick,
+                    (double) bt.tileTicks / (double) tick);
+    }
+    CtrBtHand_roomLoad(cache, runner);
 }
 #endif

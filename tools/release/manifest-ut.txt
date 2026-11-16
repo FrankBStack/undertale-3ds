@@ -220,6 +220,7 @@ platform/3ds/hotpin/check_hot.cmake
 platform/3ds/hotpin/check_knfuse_size.cmake
 platform/3ds/late_reserve.ld
 platform/3ds/legal.cmake
+platform/3ds/link_objects.cmake
 platform/3ds/python.sh
 platform/3ds/release_contract.cmake
 platform/3ds/source/ctr_aot_module.c
@@ -302,6 +303,7 @@ platform/3ds/source/ctr_audio_system.c
 platform/3ds/source/ctr_audio_system.h
 platform/3ds/source/ctr_bootahead.inc
 platform/3ds/source/ctr_soulahead.inc
+platform/3ds/source/ctr_samestart.inc
 platform/3ds/source/ctr_loadaudio.inc
 platform/3ds/source/ctr_loadaudio_trace.inc
 platform/3ds/source/ctr_loadaudio_observer.inc
@@ -838,6 +840,8 @@ platform/3ds/source/z_flowstream.c
 platform/3ds/source/z_flowdiag.c
 # btlentry: a battle's planned tiles read during the encounter animation (UNDERTALE Old; compiled empty elsewhere)
 platform/3ds/source/z_btlentry.c
+# storyentry: a New Home story battle's encounter scene read during the soul's flight (UNDERTALE Old; compiled empty elsewhere)
+platform/3ds/source/z_storyentry.c
 # utold partial sprites: draw_sprite_part's partial-tile path (both games)
 platform/3ds/source/ctr_renderer_parts.inc
 # drawbatch: seam copies, one texture for a draw across cache tiles (UNDERTALE only; compiles empty in DELTARUNE)

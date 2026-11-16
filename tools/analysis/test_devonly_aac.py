@@ -13,11 +13,13 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'buildcache'))
+import aac_capacity
 import aacout_compile
 import late_order
 
 ROOT = Path(__file__).resolve().parents[2]
 BIN = Path('C:/devkitPro/devkitARM/bin')
+RESERVE = aac_capacity.OLD_RESERVE  # 12,288 B since 11-15 (N13 ruling L2)
 
 
 def run(command, **kwargs):
@@ -169,33 +171,33 @@ def test_budget_padding_overflow_fails_the_link(tmp_path, extra, budget, label):
 
 def test_old_production_lists_must_leave_the_protected_reserve(tmp_path):
     script = configure(tmp_path, aac_inputs=['.aacout.text.fill'], extra='set(CTRPORT_AACOUT_FIXTURE_NO_FRAME_HOLES TRUE)\n')
-    filler = 80260 - 16384 + 4
+    filler = 80260 - RESERVE + 4
     other = OTHER + '.section .aacout.text.fill,"ax",%progbits\n.space ' + str(filler) + '\n'
     result, _ = link(tmp_path, script, objects(tmp_path, other=other))
     assert result.returncode != 0
-    assert 'Old production lists inside the 16,384 B protected reserve' in result.stderr
+    assert 'Old production lists inside the 12,288 B protected reserve' in result.stderr
 
 
 def test_old_plain_dev_free_floor(tmp_path):
     script = configure(tmp_path)
-    # The tail cap and the reserve leave at least 8,192 B, so the floor fires only if a cap is changed: check it is
+    # The tail cap and the reserve leave at least 4,096 B, so the floor fires only if a cap is changed: check it is
     # emitted for plain Old and absent for the vehicles and New.
     text = script.read_text(encoding='utf-8')
-    assert 'AAC text: Old plain dev under 8,192 B free' in text
+    assert 'AAC text: Old plain dev under 4,096 B free' in text
     for extra, target in (('set(CTRPORT_LABCRASH ON)\n', 'o3ds'), ('set(CTRPORT_BALLAST ON)\n', 'o3ds'), ('', 'n3ds')):
         sub = tmp_path / (target + str(len(extra)))
         sub.mkdir()
         text = configure(sub, target=target, extra=extra).read_text(encoding='utf-8')
-        assert 'Old plain dev under 8,192 B free' not in text
+        assert 'Old plain dev under 4,096 B free' not in text
         assert ('protected reserve' in text) == (target == 'o3ds')
 
 
-RELEASE_RESERVE = 'AAC text: Old release lists inside the 16,384 B dev reserve'
+RELEASE_RESERVE = 'AAC text: Old release lists inside the 12,288 B dev reserve'
 
 
-@pytest.mark.parametrize('filler,ok', [(80260 - 16384, True), (80260 - 16384 + 4, False)])
+@pytest.mark.parametrize('filler,ok', [(80260 - RESERVE, True), (80260 - RESERVE + 4, False)])
 def test_old_release_lists_must_leave_the_dev_reserve(tmp_path, filler, ok):
-    """audit F3-1 T7 (lead 11-14): an Old release link keeps the 16,384 B dev reserve too, so a release-only compose
+    """audit F3-1 T7 (lead 11-14): an Old release link keeps the dev reserve (12,288 B since 11-15) too, so a release-only compose
     fails at its own link, not first at the next dev link. ASSERT only: the slot still pads to its fixed end."""
     script = configure(tmp_path, devonly=False, aac_inputs=['.aacout.text.fill'],
                        extra='set(CTRPORT_AACOUT_FIXTURE_NO_FRAME_HOLES TRUE)\n')
@@ -205,7 +207,7 @@ def test_old_release_lists_must_leave_the_dev_reserve(tmp_path, filler, ok):
     if ok:
         assert result.returncode == 0, result.stderr
         s = symbols(output)
-        assert s['__aacout_text_end'] - s['__aacout_text_used_end'] == 16384
+        assert s['__aacout_text_end'] - s['__aacout_text_used_end'] == RESERVE
         assert s['__aacout_text_end'] - s['__aacout_text_start'] == 80260
     else:
         assert result.returncode != 0
@@ -224,10 +226,111 @@ def test_release_reserve_is_old_release_only(tmp_path):
     old.mkdir()
     release = configure(old, devonly=False).read_text(encoding='utf-8')
     # One line added after the overflow ASSERT of the text slot, none in rodata; the rest of the script is unchanged.
-    line = '        ASSERT(__aacout_text_start + 80260 - __aacout_text_used_end >= 16384, "' + RELEASE_RESERVE + '");\n'
+    line = '        ASSERT(__aacout_text_start + 80260 - __aacout_text_used_end >= 12288, "' + RELEASE_RESERVE + '");\n'
     assert release.count(line) == 1
     assert release.index('"AAC text slot overflow");\n' + line) > 0
     assert line not in release.split('__aacout_rodata_start')[1]
+
+
+
+# ===[ 11-15, N13 ruling L1: Old release measures the dev reserve at dev's production end ]===
+# The real emitter with the latereclaim block enabled (UNDERTALE Old shipping release): a production tenant, then the
+# block (phase pad + dlg/asg/arena, no G100 choice, notice, gofps at their pinned sizes), then a tenant after it.
+RECLAIM_INPUTS = ['.aacout.text.fill', '.aacout.text.latereclaim_dlg', '.aacout.text.latereclaim_asg',
+                  '.aacout.text.latereclaim_arena', '.aacout.text.latereclaim_choice', '.aacout.text.latereclaim_notice',
+                  '.aacout.text.latereclaim_gofps', '.aacout.text.after']
+RECLAIM_EXTRA = ('set(CTRPORT_AACOUT_FIXTURE_NO_FRAME_HOLES TRUE)\nset(CTRPORT_GAME undertale)\n'
+                 'set(CTRPORT_RELEASE_SOURCE_URL https://example.invalid/source)\nset(CTRPORT_LATERECLAIM_CHOICE_BYTES 0)\n')
+
+
+def reclaim_objects(tmp_path, fill, after, impostor=0):
+    """Fixture objects: the block's five inputs at their pinned sizes in their owners' objects, a fill tenant before
+    it and an `after` tenant after it; impostor > 0 adds that many bytes of another object's code under the asg
+    receiving name (a production input the block would wrongly take in)."""
+    other = (OTHER + '.section .aacout.text.fill,"ax",%progbits\n.space ' + str(fill) + '\n'
+             '.section .aacout.text.after,"ax",%progbits\n.space ' + str(after) + '\n')
+    if impostor:
+        other += '.section .aacout.text.latereclaim_asg,"ax",%progbits\n.space ' + str(impostor) + '\n'
+    renderer = '.section .aacout.text.latereclaim_dlg,"ax",%progbits\n.space 824\n'
+    split = ('.section .aacout.text.latereclaim_asg,"ax",%progbits\n.space 268\n'
+             '.section .aacout.text.latereclaim_arena,"ax",%progbits\n.space 192\n')
+    paint = '.section .text_noticegate_late,"ax",%progbits\n.p2align 3\n.space 144\n'
+    gofps = '.section .text_gofps_late,"ax",%progbits\n.space 192\n'
+    return objects(tmp_path, other=other) + [assemble(tmp_path, 'ctr_renderer', renderer),
+                                              assemble(tmp_path, 'z_battlesplit', split),
+                                              assemble(tmp_path, 'z_bottompaint', paint),
+                                              assemble(tmp_path, 'z_gofps', gofps)]
+
+
+def reclaim_link(tmp_path, fill, after, impostor=0):
+    script = configure(tmp_path, devonly=False, aac_inputs=RECLAIM_INPUTS, extra=RECLAIM_EXTRA)
+    return link(tmp_path, script, reclaim_objects(tmp_path, fill, after, impostor))
+
+
+def test_release_reserve_leaves_out_exactly_the_latereclaim_block(tmp_path):
+    """The block and its phase pad (release only: dev links those inputs in late text) do not count against the
+    reserve; everything else does. With the reserve met exactly at dev's production end the link passes while the
+    used end alone is already inside the reserve (the 11-14 count would have failed it); 4 B more fails."""
+    first = tmp_path / 'probe'
+    first.mkdir()
+    result, output = reclaim_link(first, 64, 4)
+    assert result.returncode == 0, result.stderr
+    s = symbols(output)
+    pad = s['__latereclaim_start'] - s['__latereclaim_text_gap_start']
+    reclaim = s['__latereclaim_end'] - s['__latereclaim_text_gap_start']
+    assert s['__latereclaim_end'] - s['__latereclaim_start'] == 1624 and (s['__latereclaim_start'] & 4095) == 2344
+    assert reclaim == pad + 1624
+    room = s['__aacout_text_end'] - s['__aacout_text_used_end'] + reclaim - RESERVE  # the after tenant's bytes beyond 4
+    assert room > reclaim
+    for name, extra, ok in (('exact', 0, True), ('over', 4, False)):
+        sub = tmp_path / name
+        sub.mkdir()
+        result, output = reclaim_link(sub, 64, 4 + room + extra)
+        if ok:
+            assert result.returncode == 0, result.stderr
+            t = symbols(output)
+            assert t['__latereclaim_end'] - t['__latereclaim_text_gap_start'] == reclaim
+            assert t['__aacout_text_end'] - (t['__aacout_text_used_end'] - reclaim) == RESERVE
+            assert t['__aacout_text_end'] - t['__aacout_text_used_end'] == RESERVE - reclaim
+        else:
+            assert result.returncode != 0
+            assert RELEASE_RESERVE in result.stderr and 'latereclaim enters protected AAC text reserve' in result.stderr
+
+
+def test_release_reserve_red_control_a_production_input_in_the_block_fails(tmp_path):
+    """Red control: a production input the block would leave out of the count (another object's code under a receiving
+    name) moves the pinned offsets and sizes, so the link fails, even with the reserve met."""
+    result, _ = reclaim_link(tmp_path, 64, 4, impostor=4)
+    assert result.returncode != 0
+    assert 'latereclaim asg size' in result.stderr, result.stderr
+
+
+def test_release_reserve_script_names_the_block(tmp_path):
+    text = configure(tmp_path, devonly=False, aac_inputs=RECLAIM_INPUTS, extra=RECLAIM_EXTRA).read_text(encoding='utf-8')
+    line = ('        ASSERT(__aacout_text_start + 80260 - (__aacout_text_used_end - (__latereclaim_end - '
+            '__latereclaim_text_gap_start)) >= 12288, "' + RELEASE_RESERVE + '");\n')
+    assert text.count(line) == 1
+    assert ('ASSERT(__aacout_text_used_end - (__latereclaim_end - __latereclaim_text_gap_start) <= '
+            '__aacout_text_start + 80260 - 12288, "latereclaim enters protected AAC text reserve");') in text
+
+
+def test_dev_overflow_still_fails_at_dev_production_end(tmp_path):
+    """Red control: L1 changes only the release count. A dev link whose production lists reach 4 B into the reserve
+    fails at its own production end; at the reserve exactly it links and keeps the plain dev floor."""
+    script = configure(tmp_path, aac_inputs=['.aacout.text.fill'], extra='set(CTRPORT_AACOUT_FIXTURE_NO_FRAME_HOLES TRUE)\n')
+    for name, filler, ok in (('fits', 80260 - RESERVE, True), ('over', 80260 - RESERVE + 4, False)):
+        sub = tmp_path / name
+        sub.mkdir()
+        other = OTHER + '.section .aacout.text.fill,"ax",%progbits\n.space ' + str(filler) + '\n'
+        result, output = link(sub, script, objects(sub, other=other))
+        if ok:
+            assert result.returncode == 0, result.stderr
+            t = symbols(output)
+            assert t['__aacout_text_end'] - t['__aacout_text_production_end'] == RESERVE
+            assert t['__aacout_text_end'] - t['__aacout_text_devonly_end'] >= aac_capacity.OLD_PLAIN_FREE
+        else:
+            assert result.returncode != 0
+            assert 'Old production lists inside the 12,288 B protected reserve' in result.stderr
 
 
 SOURCE = ROOT / 'platform/3ds/source'

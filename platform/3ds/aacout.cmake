@@ -41,6 +41,23 @@
 # Split's flash on the bottom screen's empty rows; ctr_renderer.c's end) and bsg47 (Undyne's arena drawn higher in
 # Split, the HUD in place; z_battlesplit.c's and ctr_renderer.c's ends), c26rev8 GO, follow btomega in that order.
 # None has constants: their rodata inputs stay empty, after msglock's.
+# storyentry (change storyentry, 11-15; UNDERTALE Old, empty elsewhere: a New Home story battle's encounter scene and
+# its flight and room load, z_storyentry.c and z_btlentry.c's end) is the next new last text input, appended after
+# N12's last (bsg47; at compose, after whatever is last then: integrate sets the order). Its constants are
+# in its text input; its rodata input, after bsg47's, stays empty.
+# soulfly (change soulfly, 11-15: the Split battle entry's SOUL flight across the seam; z_battlesplit.c's end, called by
+# layoutup's chain18; c26rev6 GO at N11) follows storyentry (N13 compose order). Text only, no constants: no rodata input (as asgfuse).
+# samestart (audiomain #109, 11-15: two same-step plays of one sound start on one DSP frame; ctr_samestart.inc)
+# follows soulfly (N13 compose order; originally after bsg47) on UNDERTALE Old only, placed per model (ctr_place.h, late-order.json per_model); New links it as late
+# text. Text only: no rodata input (its constants are in its literal pools).
+# soulahead2 (audiomain soulahead r5, 11-15: the warning-only test of soulahead r4 as an append, so soulahead's
+# own input keeps its size) follows samestart; text only, on both models as soulahead's.
+# bshinge (battlesplit2, 11-15: the hinge rows table and settings.ini's hinge_rows; z_battlesplit.c's end)
+# follows soulahead2 (N13 compose order; originally after bsg47); no constants: its rodata input stays empty, after
+# bsg47's.
+# btchoice (change battletouch btchoice, maintainer 11-15: the two-button choice screens with the stylus, drag then tap;
+# z_battletouch.c's end) follows bshinge (N13 compose order; originally after bsg47), text and rodata alike. Per model (ctr_place.h, as asgfuse): its text input
+# links on UNDERTALE Old only (New: late text, .text_btchoice); its rodata input (24 B of names) on both.
 # S4 occupies part of the retired Frame hole. Its padding stays fixed, so
 # battlesplit14 and every existing tenant retain their dv8q addresses.
 set(aacout_text_hole_inputs
@@ -78,6 +95,12 @@ set(aacout_text_inputs
     .aacout.text.bsexend
     .aacout.text.bsgap
     .aacout.text.bsg47
+    .aacout.text.storyentry
+    .aacout.text.soulfly
+    .aacout.text.samestart
+    .aacout.text.soulahead2
+    .aacout.text.bshinge
+    .aacout.text.btchoice
 )
 set(aacout_rodata_inputs
     .aacout.rodata.bootahead
@@ -92,8 +115,6 @@ set(aacout_rodata_inputs
     .aacout.rodata.btgrey
     .aacout.rodata.bsflash
     .aacout.rodata.bsnap
-    .aacout.rodata.n8a_optmenu
-    .aacout.rodata.n8a_utfadea
     .aacout.rodata.btswitch
     .aacout.rodata.listfree
     .aacout.rodata.soulahead
@@ -101,6 +122,18 @@ set(aacout_rodata_inputs
     .aacout.rodata.bsexend
     .aacout.rodata.bsgap
     .aacout.rodata.bsg47
+    .aacout.rodata.storyentry
+    .aacout.rodata.bshinge
+    .aacout.rodata.btchoice
+)
+# Release-only reclaim inputs (review decision 11-16, N13 option A): N8a's two readonly inputs, linked into AAC rodata by
+# UNDERTALE Old's shipping release only (CTRPORT_N8A_RODATA below; dev and New keep them in late text/rodata). They
+# are emitted after every production rodata input, so a later production tenant keeps its release address in dev
+# (check_devonly_aac: release-only reclaim inputs must be release's last). New tenants append to
+# aacout_rodata_inputs above, never here.
+set(aacout_rodata_reclaim_inputs
+    .aacout.rodata.n8a_optmenu
+    .aacout.rodata.n8a_utfadea
 )
 # Intact final late suffix, UT Old shipping release only. N11's asgfuse precedes these inputs.
 # A later bschoice input (G100, 76 B) is consumed below without changing its source or other targets.
@@ -188,6 +221,11 @@ if(aacout_native_count GREATER 0)
         set(aacout_aot_id_${input} "aacslot_native_${id}")
     endforeach()
 endif()
+# UNDERTALE Old's protected AAC text reserve (lead 11-14, audit F3-1 T7; lead 11-15 N13 ruling L2): the plain dev-only
+# tail's 8,192 B cap plus plain Old dev's free floor, 4,096 B since 11-15 (was 8,192: nothing occupied it; it stays as
+# dev-probe and hotfix headroom). tools/analysis/aac_capacity.py is the tools' copy (test_aac_capacity.py).
+set(aacout_old_plain_free 4096)
+set(aacout_old_reserve 12288)
 set(aacout_toolchain_ld "${CTRPORT_DKA_BIN}/../arm-none-eabi/lib/3dsx.ld")
 file(READ "${aacout_toolchain_ld}" aacout_ld)
 foreach(kind text rodata)
@@ -271,7 +309,8 @@ foreach(kind text rodata)
     if(CTRPORT_BALLAST)
         set(aacout_ballast .aacout.${kind}.ballast)
     endif()
-    set(aacout_order ${aacout_${kind}_inputs} ${aacout_ballast} .aacout.${kind}.aacslot_test)
+    # Release-only reclaim inputs (rodata: N8a's pair) follow every production input; dev's production end precedes them.
+    set(aacout_order ${aacout_${kind}_inputs} ${aacout_${kind}_reclaim_inputs} ${aacout_ballast} .aacout.${kind}.aacslot_test)
     # battlesplit14 is the last release tenant (lead 11-09, dv8q), so the hole's neighbour is the first listed tenant:
     # assert that one sits right after the hole, whichever it is.
     set(aacout_first_tenant TRUE)
@@ -336,14 +375,14 @@ foreach(kind text rodata)
                 math(EXPR latereclaim_notice_offset "((2344 + 1284 + ${CTRPORT_LATERECLAIM_CHOICE_BYTES} + 7) & ~7) - 2344")
                 math(EXPR latereclaim_gofps_offset "${latereclaim_notice_offset} + 144")
                 string(APPEND aacout_inputs "        ASSERT(__latereclaim_notice_start - __latereclaim_start == ${latereclaim_notice_offset}, \"latereclaim notice offset\");\n        ASSERT(__latereclaim_notice_end - __latereclaim_notice_start == 144, \"latereclaim notice size\");\n        ASSERT(__latereclaim_gofps_start - __latereclaim_start == ${latereclaim_gofps_offset}, \"latereclaim gofps offset\");\n        ASSERT(__latereclaim_gofps_end - __latereclaim_gofps_start == 192, \"latereclaim gofps size\");\n")
-                string(APPEND aacout_inputs "        ASSERT(__latereclaim_choice_start - __latereclaim_start == 1284, \"latereclaim choice offset\");\n        ASSERT(__latereclaim_choice_end - __latereclaim_choice_start == ${CTRPORT_LATERECLAIM_CHOICE_BYTES}, \"latereclaim choice size\");\n        ASSERT((__latereclaim_start & 4095) == 2344, \"latereclaim source phase\");\n        ASSERT(__aacout_text_used_end <= __aacout_text_start + ${aacout_capacity} - 16384, \"latereclaim enters protected AAC text reserve\");\n")
+                string(APPEND aacout_inputs "        ASSERT(__latereclaim_choice_start - __latereclaim_start == 1284, \"latereclaim choice offset\");\n        ASSERT(__latereclaim_choice_end - __latereclaim_choice_start == ${CTRPORT_LATERECLAIM_CHOICE_BYTES}, \"latereclaim choice size\");\n        ASSERT((__latereclaim_start & 4095) == 2344, \"latereclaim source phase\");\n        ASSERT(__aacout_text_used_end - (__latereclaim_end - __latereclaim_text_gap_start) <= __aacout_text_start + ${aacout_capacity} - ${aacout_old_reserve}, \"latereclaim enters protected AAC text reserve\");\n")
             endif()
         endif()
     endforeach()
     if(CTRPORT_DEVONLY_AAC)
         # The dev-only tail and its budgets (c26rev2's contracts, 11-11): the plain dev tail, alignment included,
         # at most 8,192 B of text; build.sh's labcrash (LG_CRASHTEST's ~0.9 KB more) at most 9,216 B, its own budget.
-        # Old plain dev keeps at least 8,192 B of the text slot free, and Old's production lists leave the 16,384 B
+        # Old plain dev keeps at least 4,096 B of the text slot free, and Old's production lists leave the 12,288 B
         # protected reserve. Test vehicles (ballast, labcrash, the AAC test tenant) are held to the slot's capacity only.
         string(APPEND aacout_inputs "        __aacout_${kind}_devonly_start = ABSOLUTE(.);\n")
         # u0-tailalign (lead 11-15): the tail's first input starts at the largest tail-input alignment of its kind
@@ -372,21 +411,28 @@ foreach(kind text rodata)
             # production_end and devonly_start and are held to the slot's capacity, not to this cap (c26rev2 DDUNIT-1).
             string(APPEND aacout_inputs "        ASSERT(__aacout_text_devonly_end - __aacout_text_devonly_start <= ${aacout_devonly_budget}, \"AAC text: ${aacout_devonly_label} dev-only tail over ${aacout_devonly_budget} B\");\n")
             if(CTRPORT_TARGET STREQUAL "o3ds")
-                string(APPEND aacout_inputs "        ASSERT(__aacout_text_start + ${aacout_capacity} - __aacout_text_production_end >= 16384, \"AAC text: Old production lists inside the 16,384 B protected reserve\");\n")
+                string(APPEND aacout_inputs "        ASSERT(__aacout_text_start + ${aacout_capacity} - __aacout_text_production_end >= ${aacout_old_reserve}, \"AAC text: Old production lists inside the 12,288 B protected reserve\");\n")
                 if(NOT CTRPORT_LABCRASH AND NOT CTRPORT_BALLAST AND NOT CTRPORT_AACSLOT_TEST)
-                    string(APPEND aacout_inputs "        ASSERT(__aacout_text_start + ${aacout_capacity} - __aacout_text_devonly_end >= 8192, \"AAC text: Old plain dev under 8,192 B free\");\n")
+                    string(APPEND aacout_inputs "        ASSERT(__aacout_text_start + ${aacout_capacity} - __aacout_text_devonly_end >= ${aacout_old_plain_free}, \"AAC text: Old plain dev under 4,096 B free\");\n")
                 endif()
             endif()
         endif()
     endif()
-    # Old release keeps the same 16,384 B after its production lists that the dev link asserts above (lead 11-14,
-    # audit F3-1 T7). That room is dev's: the 8,192 B dev-only tail plus plain dev's 8,192 B free. A release-only
-    # compose fails here, not first at the next dev link. Test vehicles (ballast, the AAC test tenant) are held to
-    # the slot's capacity only, as in dev.
+    # Old release keeps the same 12,288 B after its production lists that the dev link asserts above (lead 11-14,
+    # audit F3-1 T7). That room is dev's: the 8,192 B dev-only tail plus plain dev's 4,096 B free. A release-only
+    # compose fails here, not first at the next dev link. It is measured at dev's production end (lead 11-15, N13
+    # ruling L1): the latereclaim block and its phase pad (__latereclaim_text_gap_start to __latereclaim_end, release
+    # only; dev links those inputs in late text and pays for them there) do not count against the dev reserve. Every
+    # byte of the block is pinned by the latereclaim ASSERTs above (offsets and sizes), so nothing else can be
+    # excluded. Test vehicles (ballast, the AAC test tenant) are held to the slot's capacity only, as in dev.
     set(aacout_release_reserve "")
     if(kind STREQUAL "text" AND CTRPORT_TARGET STREQUAL "o3ds" AND NOT CTRPORT_DEVONLY_AAC AND NOT CTRPORT_BALLAST
        AND NOT CTRPORT_AACSLOT_TEST)
-        set(aacout_release_reserve "        ASSERT(__aacout_text_start + ${aacout_capacity} - __aacout_text_used_end >= 16384, \"AAC text: Old release lists inside the 16,384 B dev reserve\");\n")
+        set(aacout_release_used "__aacout_text_used_end")
+        if(aacout_latereclaim)
+            set(aacout_release_used "(__aacout_text_used_end - (__latereclaim_end - __latereclaim_text_gap_start))")
+        endif()
+        set(aacout_release_reserve "        ASSERT(__aacout_text_start + ${aacout_capacity} - ${aacout_release_used} >= ${aacout_old_reserve}, \"AAC text: Old release lists inside the 12,288 B dev reserve\");\n")
     endif()
     set(aacout_region "${aacout_prefix}
         . = ALIGN(4);

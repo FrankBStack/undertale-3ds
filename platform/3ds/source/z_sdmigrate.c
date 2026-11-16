@@ -88,8 +88,15 @@ static struct {
 #else
 #define SM_CARVE_SOULAHEAD 0
 #endif
+#if defined(ENABLE_WAD16)
+// samestart's state (ctr_samestart.inc sameStart, .bss.samestart_late: 24 voices x 12 B + the publication count,
+// 4-aligned), the last tenant, after soulahead (which ends 8-aligned), so no pad.
+#define SM_CARVE_SAMESTART 292
+#else
+#define SM_CARVE_SAMESTART 0
+#endif
 #define SM_CARVE_BYTES (SM_CARVE_BONEGATE + SM_CARVE_BOXCACHE + SM_CARVE_BOTTOMPAINT + \
-                        SM_CARVE_MSGLOCK + SM_CARVE_SOULAHEAD)
+                        SM_CARVE_MSGLOCK + SM_CARVE_SOULAHEAD + SM_CARVE_SAMESTART)
 static unsigned char smSpare[SM_BSS_BYTES - sizeof(hf) - SM_CARVE_BYTES] __attribute__((used, section(".bss.sdmigrate_spare")));
 
 #ifdef ENABLE_WAD17

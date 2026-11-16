@@ -76,3 +76,7 @@ void CtrRenderer_bsPresentFlash(struct Renderer* renderer, int32_t band, int32_t
 // After it, the same notes on the bottom screen's rows that present drew nothing on (the lift's empty rows: change
 // battlesplit2, 11-15). z_battlesplit.c presents through this one.
 void CtrRenderer_bsPresentGap(struct Renderer* renderer, int32_t band, int32_t topDy, int32_t bottomDy, CtrBsFlash* flash);
+// The hinge rows (change battlesplit2, 11-15; z_battlesplit.c's end, UNDERTALE only): the rows of the screens' pitch between
+// the top screen's last row and the bottom screen's first on this console: settings.ini's hinge_rows (0 to 160) as read
+// at boot, else the model's (the hinge table; 0 for a model it does not know).
+int CtrBattlesplit_hingeRows(void);

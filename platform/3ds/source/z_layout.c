@@ -1311,8 +1311,8 @@ LY_CODE18 void CtrLayout_chain18(Renderer* renderer) {
         lyRoot2.up18 = (uint8_t) ((u & LY_UP_PICKED) != 0 ? u & ~(LY_UP_PICKED | LY_UP_PICK | LY_UP_WAIT) : u);
         if ((u & LY_UP_PICKED) != 0 && (u & (LY_UP_PICK | LY_UP_WAIT)) != 0) CtrBattlesplit_repick18(renderer);
     }
-    void CtrBattlesplit_entryNap(Renderer* renderer); // battlesplit's SOUL entry, the chain, Napstablook's way down (its end)
-    CtrBattlesplit_entryNap(renderer);
+    void CtrBattlesplit_entrySF(Renderer* renderer); // battlesplit's SOUL entry, the chain, Napstablook's way down, soulfly
+    CtrBattlesplit_entrySF(renderer);
 }
 
 // ===[ The held top target's lend (commit D; ctr_layout.h has the contract) ]===

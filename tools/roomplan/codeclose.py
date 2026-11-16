@@ -153,7 +153,16 @@ class CodeClosure:
         # Each entry's spawn targets and constant stores; the object that owns it.
         funcs = [f['name'] for f in dw.funcs]
         vars_ = [v['name'] for v in dw.vars]
-        self.background_store_codes = {i for i, c in enumerate(code) if c and c['length'] and
+        # flag_case_objects reads an entry's bytes again (its own fail-closed shape check, not walk's).
+        self._code_span = [(c['abs'], c['length']) if c is not None and c['length'] else None for c in code]
+        self._funcs, self._vars = funcs, vars_
+        # The VM's name -> id map (vm.c's varNameMap): each name's first VARI entry with an id, as (instance type, id);
+        # z_storyentry.c finds a global by it (global_var_id).
+        self._var_first = {}
+        for v in dw.vars:
+            if v['varID'] >= 0:
+                self._var_first.setdefault(v['name'], (v['instanceType'], v['varID']))
+        self.background_store_codes ={i for i, c in enumerate(code) if c and c['length'] and
                                        stores_background(d, c['abs'], c['length'], vars_)}
         self.spawns, self.var_spawns, self.stores, self.any_stores, self.draws = [], [], [], [], []
         self.sounds, self.var_sounds, self.cases, self.calls, self.script_ids, var_draws = [], [], [], [], [], []
@@ -222,6 +231,53 @@ class CodeClosure:
         codes = [c for c in self.object_codes(obj) if 0 <= c < len(kept)]
         names = set().union(*(kept[c] for c in codes)) if codes else set()
         return {s for c in codes for name in names for s in self.stores[c].get(name, ())}
+
+    def global_var_id(self, name):
+        """The id the global scope keeps name under, when the VM's name map (vm.c's varNameMap: a name's first VARI
+        entry with an id) gives a global's: what z_storyentry.c reads flag[450] by at run time. None when that
+        entry is another scope's (the runtime would read another slot) or there is none."""
+        first = getattr(self, '_var_first', {}).get(name)
+        return first[1] if first is not None and first[0] == GLOBAL_INSTANCE else None
+
+    def flag_case_objects(self, obj, name, index):
+        """{K: objects} for obj's own Create events (no parent's): what each `if global.name[index] == K` case creates
+        (flag_cases), the cases of all its Create entries joined. {} when an entry tests that element in any other
+        shape, or a K comes in two entries: the caller then adds nothing."""
+        out = {}
+        spans = getattr(self, '_code_span', ())
+        for c in self.events_by_obj[obj].get(EVENT_CREATE, []) if 0 <= obj < len(self.events_by_obj) else []:
+            span = spans[c] if 0 <= c < len(spans) else None
+            if span is None:
+                continue
+            got = flag_cases(self.d, span[0], span[1], self._funcs, self._vars, name, index)
+            if got is None:
+                return {}
+            for k, objs in got.items():
+                if k in out:
+                    return {}
+                out[k] = objs
+        return out
+
+    def create_chain_art(self, objs):
+        """The sprites objs and what chains of their Create events create (the creation walk of ordered, Create events
+        only, nothing followed out of a hub script) can draw: per object, its default sprite and each constant its events
+        and its parents' pass to a draw_sprite function or store in a variable named *sprite*. What exists at the first
+        frame of the room they are made in; an attack a Step or Alarm makes later is not here. Sprite numbers only; the
+        caller checks the range."""
+        objs = {o for o in objs if 0 <= o < len(self.events_by_obj)}
+        seeds = {c for o in objs for c in self.object_codes(o) if self.event_type.get(c) == EVENT_CREATE}
+        reached = objs | {self.owner[c] for c in self._reach(seeds, True) if c in self.owner}
+        out = set()
+        for o in sorted(reached):
+            if 0 <= o < len(self.sprite_by_obj):
+                out.add(self.sprite_by_obj[o])
+            for c in self.object_codes(o):
+                if 0 <= c < len(self.draws) and c not in self.hubs:
+                    out.update(self.draws[c])
+                    for key, values in self.any_stores[c].items():
+                        if 'sprite' in key:
+                            out.update(values)
+        return out
 
     def object_codes(self, obj, skip=(), parents=True):
         """Every event code entry of obj and its parents (event types in skip aside), in data.win order."""
@@ -684,6 +740,53 @@ def face_choices(d, base, length, funcs, vars_):
             raise ValueError('case %d creates an object number outside 0 to int32' % value)
         out[value] = got['spawns']
     return out
+
+
+GLOBAL_INSTANCE = -5   # pushi -5: the instance of a global.name[] read (vm.h's global scope)
+
+
+def flag_cases(d, base, length, funcs, vars_, name, index):
+    """One code entry's `if global.name[index] == K` cases as {K: objects created}, or None when the entry uses that
+    element in any shape but this one: pushi -5, pushi index, push name[] (an array element), pushi K >= 0, cmp ==, bf
+    forward. A case is the bytes from its bf to the bf's target; no branch inside it goes outside it, no two cases
+    overlap, and it creates only constant objects (walk: no variable or computed object). A K tested twice joins its
+    cases' objects. An entry that never tests the element gives {}. UNDERTALE: the story battle generator's Create picks a
+    New Home story battle's monsters by flag[450] (build_plan.story_encounters)."""
+    blob = bytes(d[base:base + length])
+    code, addr = [], 0
+    while addr < length:
+        try:
+            ins = g.Instr(blob, addr)
+        except g.Reject:
+            return None
+        code.append(ins)
+        addr = ins.next
+    tests = []
+    for i, ins in enumerate(code):
+        if not (ins.op == g.OP_PUSH and ins.t1 == g.T_VAR and ins.extra is not None and
+                ins.var_type() == VARTYPE_ARRAY and 0 <= ins.var_index() < len(vars_) and vars_[ins.var_index()] == name):
+            continue
+        before, after = code[max(0, i - 2):i], code[i + 1:i + 4]
+        if len(before) < 2 or before[1].op != g.OP_PUSHI or before[1].inst != index:
+            continue   # another element of the array
+        if (before[0].op != g.OP_PUSHI or before[0].inst != GLOBAL_INSTANCE or len(after) < 3 or
+                after[0].op != g.OP_PUSHI or after[0].inst < 0 or after[1].op != g.OP_CMP or
+                (after[1].word >> 8) & 0xFF != CMP_EQUAL or after[2].op != g.OP_BF or after[2].target() <= after[2].next):
+            return None
+        tests.append((after[2].next, after[2].target(), after[0].inst))
+    out, last = {}, -1
+    for start, end, value in sorted(tests):
+        if start < last or end > length:
+            return None
+        last = end
+        for ins in code:
+            if start <= ins.addr < end and ins.op in (g.OP_B, g.OP_BT, g.OP_BF) and not start <= ins.target() <= end:
+                return None
+        got = walk(d, base + start, end - start, funcs, vars_)
+        if got['var_spawns'] or got['computed_spawns'] or not all(0 <= o <= 0x7FFFFFFF for o in got['spawns']):
+            return None
+        out.setdefault(value, set()).update(got['spawns'])
+    return {k: frozenset(v) for k, v in out.items()}
 
 
 def passes_argument(d, base, length, vars_):

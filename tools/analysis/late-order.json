@@ -866,6 +866,9 @@
     "*(.text_gofps_late)",
     "*(.text_asgfuse)",
     "*(.text_bschoice)",
+    "*(.text_soulfly)",
+    "*(.text_samestart)",
+    "*(.text_btchoice)",
     "*(.repack_test)",
     "*(.repack_test_ro)"
   ],
@@ -963,7 +966,8 @@
     "*(.rodata.late.fpsghost)",
     "*(.rodata_sfxlate)",
     "*(.rodata_sfxboost)",
-    "*(.rodata_reclaim_menutime)"
+    "*(.rodata_reclaim_menutime)",
+    "*(.rodata_btchoice)"
   ],
   "data": [
     "*(.data.late.benchromfs)",
@@ -1125,6 +1129,7 @@
     "KEEP(*(.bss.late.paintchg_idle))",
     "KEEP(*(.bss.msglock_late))",
     "KEEP(*(.bss.soulahead_late))",
+    "KEEP(*(.bss.samestart_late))",
     "KEEP(*z_sdmigrate.o(.bss.sdmigrate_spare))",
     "*z_sdmigrate.o(.bss .bss.* COMMON)",
     "*(.bss.late.swkbd)",
@@ -1343,6 +1348,7 @@
     "*(.bss_fpsghost_hintpage)",
     "*(.bss_bsflash_late)",
     "*(.bss_bsnap_late)",
+    "*(.bss_bshinge_late)",
     "*(.bss.ballast_late)"
   ],
   "aac_text": [
@@ -1374,7 +1380,13 @@
     ".aacout.text.btomega",
     ".aacout.text.bsexend",
     ".aacout.text.bsgap",
-    ".aacout.text.bsg47"
+    ".aacout.text.bsg47",
+    ".aacout.text.storyentry",
+    ".aacout.text.soulfly",
+    ".aacout.text.samestart",
+    ".aacout.text.soulahead2",
+    ".aacout.text.bshinge",
+    ".aacout.text.btchoice"
   ],
   "aac_rodata": [
     ".aacout.rodata.dlgtop4",
@@ -1390,18 +1402,24 @@
     ".aacout.rodata.btgrey",
     ".aacout.rodata.bsflash",
     ".aacout.rodata.bsnap",
-    ".aacout.rodata.n8a_optmenu",
-    ".aacout.rodata.n8a_utfadea",
     ".aacout.rodata.btswitch",
     ".aacout.rodata.listfree",
     ".aacout.rodata.soulahead",
     ".aacout.rodata.msglock",
     ".aacout.rodata.bsexend",
     ".aacout.rodata.bsgap",
-    ".aacout.rodata.bsg47"
+    ".aacout.rodata.bsg47",
+    ".aacout.rodata.storyentry",
+    ".aacout.rodata.bshinge",
+    ".aacout.rodata.btchoice",
+    ".aacout.rodata.n8a_optmenu",
+    ".aacout.rodata.n8a_utfadea"
   ],
   "per_model": [
-    "asgfuse"
+    "asgfuse",
+    "soulfly",
+    "samestart",
+    "btchoice"
   ],
   "devonly": {
     "aac_text": [
