@@ -810,16 +810,21 @@ class CompilerPreflightReviewTests(unittest.TestCase):
     def setup_query(self, offered='16.1.0-1', failure=None, post='16.1.0-1', cold=False):
         calls = []
         def run(argv, timeout):
+            if 'pacman -Qu' in argv[-1]:   # N13.2: devkitPro's MSYS2 packages are current (toolchain.msys_state)
+                return 0, toolchain.msys_query_reply('', 1, 'msys cmake 4.4.4-1 [installed]\n')
             self.assertEqual(timeout, 5)
             calls.append(tuple(argv))
-            if argv[-1].startswith('https://') or argv[-1] == 'pacman -Si devkitarm-gcc':
-                if failure == 'timeout' or cold and calls.count(tuple(argv)) == 1:
+            if argv[-1].startswith('https://') or argv[-1] == toolchain.SYNC_COMPILER_QUERY:
+                # failure is the live repository check's. The local list after Windows' own pacman -Sy stays
+                # readable: an unreadable one stops the update before -Su (N13.2, tested in broken_tools).
+                live = argv[-1].startswith('https://')
+                if failure == 'timeout' and live or cold and calls.count(tuple(argv)) == 1:
                     raise subprocess.TimeoutExpired(argv, timeout)
-                if failure == 'failed':
+                if failure == 'failed' and live:
                     return 1, 'fixture query failure'
-                if failure == 'malformed':
+                if failure == 'malformed' and live:
                     return 0, '<html>not metadata</html>'
-                if argv[-1] == 'pacman -Si devkitarm-gcc':
+                if argv[-1] == toolchain.SYNC_COMPILER_QUERY:
                     return 0, 'Name : devkitarm-gcc\nVersion : %s\nDescription : fixture\n' % offered
                 return 0, 'profile message\nother-package 9.0-1\ndevkitarm-gcc %s\n' % offered
             return 0, {'-dumpversion': post.rsplit('-', 1)[0], '-dumpmachine': 'arm-none-eabi',
@@ -932,7 +937,7 @@ class CompilerPreflightReviewTests(unittest.TestCase):
                 with self.assertRaisesRegex(toolchain.Refused, '17.1.0'):
                     toolchain.run_step(step, mock.Mock(), False, toolchain.Actions(query=query, run=install),
                                        root=tmp, game='undertale', tested=self.tested, releases_url=self.url)
-                install.assert_called_once()
+                self.assertEqual(install.call_count, 2)  # Windows: one pass, pacman -Sy then -Su (N13.2)
 
     def test_windows_installer_without_3ds_component_explains_how_to_add_it(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -979,7 +984,7 @@ class CompilerPreflightReviewTests(unittest.TestCase):
                 self.assertTrue(toolchain.run_step(step, log, False,
                     toolchain.Actions(query=missing_compiler, run=install), root=tmp, stage=stage,
                     game='undertale', tested=self.tested, releases_url=self.url))
-                install.assert_called_once()
+                self.assertEqual(install.call_count, 2 if host == 'win32' else 1)  # Windows: one pass, pacman -Sy then -Su (N13.2)
                 notice = ("Update finished. The 3DS compiler isn't installed yet; "
                           "use Install beside the 3DS tools on the compiler page.")
                 log.assert_any_call(notice)
@@ -1056,7 +1061,7 @@ class CompilerPreflightReviewTests(unittest.TestCase):
             with self.assertRaises(toolchain.Refused) as caught:
                 toolchain.run_step(step, mock.Mock(), False, toolchain.Actions(query=query, run=install),
                                    root=tmp, game='undertale', tested=self.tested, releases_url=self.url)
-            install.assert_called_once()
+            self.assertEqual(install.call_count, 2)  # Windows: one pass, pacman -Sy then -Su (N13.2)
             self.assertIn('17.1.0', str(caught.exception))
 
     def test_windows_packages_checks_local_sync_version_without_partial_upgrade(self):
@@ -1064,7 +1069,7 @@ class CompilerPreflightReviewTests(unittest.TestCase):
                          'Name : devkitarm-gcc\nVersion : 16.1.0-1\n'), '16.1.0-1')
         query, calls = self.setup_query()
         def run(argv, timeout):
-            if argv[-1] == 'pacman -Si devkitarm-gcc':
+            if argv[-1] == toolchain.SYNC_COMPILER_QUERY:
                 return 0, 'Name : devkitarm-gcc\nVersion : 17.1.0-1\n'
             return query(argv, timeout)
         step = next(s for s in toolchain.full_plan('/fixture/tools', '/fixture/downloads', platform='win32')
@@ -1080,7 +1085,7 @@ class CompilerPreflightReviewTests(unittest.TestCase):
     def test_windows_stale_sync_list_says_update_not_get_another_builder(self):
         query, _ = self.setup_query()
         def run(argv, timeout):
-            if argv[-1] == 'pacman -Si devkitarm-gcc':
+            if argv[-1] == toolchain.SYNC_COMPILER_QUERY:
                 return 0, 'Name : devkitarm-gcc\nVersion : 15.2.0-1\n'
             return query(argv, timeout)
         step = toolchain.Step('packages', 'fixture', 'fixture', [], [['fixture-install']], platform='win32')
@@ -1096,7 +1101,7 @@ class CompilerPreflightReviewTests(unittest.TestCase):
     def test_windows_unreadable_local_sync_list_allows_setup_and_checks_installed_compiler(self):
         query, calls = self.setup_query()
         def run(argv, timeout):
-            if argv[-1] == 'pacman -Si devkitarm-gcc':
+            if argv[-1] == toolchain.SYNC_COMPILER_QUERY:
                 return 1, 'fixture local database error'
             return query(argv, timeout)
         step = toolchain.Step('packages', 'fixture', 'fixture', [], [['fixture-install']], platform='win32')

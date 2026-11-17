@@ -578,6 +578,28 @@ class LibraryPinsTests(unittest.TestCase):
         self.assertFalse(self.work.exists())
 
 
+class UnpackToolFailureTests(LibraryPinsTests):
+    """N13.2: a CMake that can't start (msys-jsoncpp-27.dll missing) is named with its exit code, never the generic
+    unpack text, and the command and output reach the build log through Refused.details."""
+    def test_unpack_tool_that_cannot_start_is_named_with_its_code(self):
+        def broken(argv, cwd=None):
+            return libraries.command(argv, cwd, run=lambda argv, timeout, cwd: (0xC0000135, ''))
+        with self.assertRaises(toolchain.Refused) as caught:
+            self.select(run=broken)
+        text = str(caught.exception)
+        self.assertTrue(text.startswith(libraries.REFUSAL + '\n'), text)
+        self.assertNotIn('The library archive could not be unpacked.', text)
+        if sys.platform == 'win32':
+            self.assertIn("can't start: a file it needs is missing (exit code 0xC0000135).", text)
+            self.assertIn('Click Update devkitPro on the compiler page', text)
+        self.assertIn('Command: ', caught.exception.details)
+        self.assertIn(' -E tar tf ', caught.exception.details)
+
+
+for _name in [n for n in vars(LibraryPinsTests) if n.startswith('test_')]:
+    setattr(UnpackToolFailureTests, _name, None)   # run only the test above with the shared fixture
+
+
 class StackAndTlsTests(unittest.TestCase):
     def test_package_and_rule_changes_refuse_before_a_download_or_work_write(self):
         with tempfile.TemporaryDirectory() as tmp:

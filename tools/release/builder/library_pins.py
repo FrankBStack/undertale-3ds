@@ -18,7 +18,6 @@ import urllib.request
 if __name__ == '__main__':
     sys.path.insert(0, str(Path(__file__).resolve().parent))
 import toolchain
-from processes import hidden_options
 
 PACKAGES = (
     dict(package='libctru', version='2.7.0-1', extension='zst', size=1751778,
@@ -208,13 +207,30 @@ def native_path(path, platform):
     return path.replace('\\', '/')
 
 
-def command(argv, cwd=None):
-    result = subprocess.run(list(map(str, argv)), cwd=cwd, stdin=subprocess.DEVNULL,
-        stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, encoding='utf-8', errors='replace',
-        timeout=90, **hidden_options())
-    if result.returncode:
-        raise ValueError(result.stdout.strip()[-1500:] or 'The library archive could not be unpacked.')
-    return result.stdout
+class ToolFailed(ValueError):
+    """A tool that unpacks the libraries failed: the message says which tool and why; details go to the log."""
+    def __init__(self, message, details=''):
+        super().__init__(message)
+        self.details = details
+
+
+def command(argv, cwd=None, run=None):
+    argv = list(map(str, argv))
+    try:
+        code, output = (run or toolchain.run_tool)(argv, timeout=90, cwd=cwd)
+    except OSError as error:
+        code, output = None, str(error)
+    if code == 0:
+        return output
+    summary, details = toolchain.tool_failure(argv, code, output)
+    if code is None or toolchain.exit_cause(code):
+        # It never ran: the same fix as the compiler page's check of CMake and make.
+        message = (summary + ' ' + toolchain.PARTLY_UPDATED +
+                   ' Click Update devkitPro on the compiler page, then try the build again.')
+    else:
+        tail = (output or '').strip()[-1500:]
+        message = 'The library archive could not be unpacked. ' + summary + ('\n' + tail if tail else '')
+    raise ToolFailed(message, details)
 
 
 def inventory(root):
@@ -405,7 +421,9 @@ def select(tc, work, notify=lambda text: None, *, packages=PACKAGES, run=command
                 record = dict(identity=identity, files=inventory(sdk))
                 (saved/'receipt.json').write_text(json.dumps(record,sort_keys=True)+'\n',encoding='utf-8')
             except (OSError,ValueError,subprocess.SubprocessError) as error:
-                raise toolchain.Refused(REFUSAL+'\n'+str(error)) from error
+                refused = toolchain.Refused(REFUSAL+'\n'+str(error))
+                refused.details = getattr(error, 'details', '')
+                raise refused from error
         sdk = saved/'sdk'
         for pin in changed:
             notify('Using tested %s %s from the work folder. Your devkitPro is unchanged.' %

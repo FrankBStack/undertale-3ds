@@ -406,7 +406,7 @@ class ToolchainTest(unittest.TestCase):
         self.assertIn("SHA-256 038a99dc84f1ca0b52e9e0e074a94a3b0672e6d7bf0988563f0ab0812dcbb38d", rep)
         self.assertIn("size 196304 bytes", rep)
         self.assertIn("needs administrator permission", rep)
-        self.assertIn("tick 3DS Development", rep)
+        self.assertIn("untick everything except 3DS Development", rep)
         self.assertIn("nothing was downloaded, installed or changed", rep)
         self.assertIn("github.com/3DSGuy/Project_CTR", rep)
 
@@ -483,7 +483,8 @@ class ToolchainTest(unittest.TestCase):
     def test_package_failure_message_and_admin_path(self):
         steps = {s.key: s for s in toolchain.full_plan("t", "d", platform="win32")}
         with self.assertRaises(toolchain.Refused) as e:
-            toolchain.run_step(steps["packages"], lambda s: None, False, toolchain.Actions(run=lambda argv, log: 1))
+            toolchain.run_step(steps["packages"], lambda s: None, False,
+                               toolchain.Actions(run=lambda argv, log: 1, query=MSYS_CURRENT))
         self.assertIn("The 3DS tools could not be installed", str(e.exception))
         elevated = []
         acts = toolchain.Actions(download=lambda *a, **kw: None, elevated=lambda p: elevated.append(p) or 0, run=Boom())
@@ -495,15 +496,21 @@ class ToolchainTest(unittest.TestCase):
             with self.subTest(platform=platform):
                 step = toolchain.update_step('fixture-devkitpro', platform=platform)
                 run = mock.Mock(return_value=1)
-                actions = toolchain.Actions(run=run, download=Boom(), elevated=Boom())
+                actions = toolchain.Actions(run=run, download=Boom(), elevated=Boom(), query=MSYS_CURRENT)
                 with self.assertRaises(toolchain.Refused) as caught:
                     toolchain.run_step(step, lambda line: None, False, actions)
                 self.assertEqual(str(caught.exception), 'The devkitPro update did not finish. '
                     'Check the error details, then try this step again.')
-                run.assert_called_once()
+                # Windows runs separate passes, the restart an MSYS2 core update needs (N13.2), at most three.
+                self.assertEqual(run.call_count, toolchain.MSYS_UPDATE_PASSES if platform == 'win32' else 1)
 
 
 # ---------------------------------------------------------------------------------------------------------------------
+
+def MSYS_CURRENT(argv, timeout=60):
+    """toolchain.msys_state's query on a devkitPro whose MSYS2 packages are all current (N13.2)."""
+    return 0, toolchain.msys_query_reply('', 1, 'msys cmake 4.4.4-1 [installed]\n')
+
 
 class Clock:
     def __init__(self):
@@ -2575,7 +2582,8 @@ class LicenceTest(unittest.TestCase):
         self.assertEqual(heard, [("download", "Downloading devkitProUpdater-3.0.3.exe..."),
                                  ("run", "Waiting for the installer...")])
         heard.clear()
-        toolchain.run_step(steps["packages"], lambda s: None, False, toolchain.Actions(run=lambda argv, log: 0),
+        toolchain.run_step(steps["packages"], lambda s: None, False,
+                           toolchain.Actions(run=lambda argv, log: 0, query=MSYS_CURRENT),
                            stage=lambda kind, text: heard.append((kind, text)))
         self.assertEqual(heard, [("run", "Installing...")])
         heard.clear()
@@ -2806,18 +2814,22 @@ class BuilderUiTest(unittest.TestCase):
                 ran.clear()
                 step = toolchain.update_step(tc.root, platform=platform)
                 with mock.patch.object(self.gui.toolchain, "update_step", return_value=step), \
+                        mock.patch.object(self.gui.toolchain, "msys_state", return_value=([], [])), \
                         mock.patch.object(self.gui, "stream", side_effect=lambda argv, log: ran.append(argv) or 0):
                     page.update()
                 title = "Update devkitPro"
                 self.assertEqual(asked, [title])
-                self.assertEqual(ran, step.commands)
-                self.assertEqual(len(ran), 1)
                 if platform == "win32":
-                    self.assertEqual(ran[0][-1], "pacman -Syu --noconfirm")
-                elif platform == "linux":
+                    # N13.2: one pass is pacman -Sy, then -Su from that same list (toolchain.update_msys).
+                    self.assertEqual(step.commands[0][-1], "pacman -Syu --noconfirm")
+                    self.assertEqual([argv[-1] for argv in ran], ["pacman -Sy --noconfirm", "pacman -Su --noconfirm"])
+                    self.assertEqual([argv[:-1] for argv in ran], [step.commands[0][:-1]] * 2)
+                else:
+                    self.assertEqual(ran, step.commands)
+                if platform == "linux":
                     self.assertEqual(ran[0][0], "pkexec")
                     self.assertEqual(ran[0][-2:], ["-Syu", "--noconfirm"])
-                else:
+                elif platform == "darwin":
                     self.assertEqual(ran[0][0], "/usr/bin/osascript")
                     self.assertIn("with administrator privileges", ran[0][2])
                     self.assertTrue(ran[0][-1].endswith(" -Syu --noconfirm"))

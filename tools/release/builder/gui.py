@@ -2300,6 +2300,7 @@ class ToolchainPage(Page):
         def job():
             tc = toolchain.detect(opts.tools_dir, roots=roots)
             tc.compiler_info = toolchain.compiler_details(tc)
+            toolchain.check_build_tools(tc)
             return tc
         self.app.work(job, self.detected)
 
@@ -2344,6 +2345,14 @@ class ToolchainPage(Page):
             guidance = ('Choose Install beside "%s". Next stays grey until the required tools are installed.'
                         % next_step.title if next_step else
                         'Next stays grey until the required tools are installed. Check the steps below.')
+        broken = toolchain.broken_tools_text(tc.checks, tc.root) if isinstance(tc.checks, list) else ''
+        if broken:
+            # Installed but unable to start: no Install box covers it, so say what is wrong and the fix.
+            guidance = broken
+            for check in tc.checks:
+                if check.technical:
+                    self.write(check.technical)
+            self.show_log()
         self.compiler_status.config(text=guidance)
         for i, (step, needed, waiting) in enumerate(inventory):
             missing = 'Not installed' if step.key in ('devkitpro', 'makerom', 'bannertool') else 'Needs setup'

@@ -237,6 +237,11 @@ CLI_WORDING = (
     ("choose Check again", "run the same command again"),
     ("or Skip.", "or skip save import."),
     ("Click Check again on the compiler page", "Run the same command again"),
+    ("Click Update devkitPro. It brings all of devkitPro's packages up to date and then checks again.\nIf it can't "
+     "finish, ", "To fix it, "),
+    ("Click Update devkitPro to try again. If it still stops, ", "To fix it, "),
+    ("untick everything except 3DS Development.", "leave only 3DS Development selected."),
+    ("Click Check again to test it.", "Run the same command again to test it."),
     ("click Check again on the compiler page", "run the same command again"),
     ("Use Install beside the 3DS tools on the compiler page. "
      "Or click Try again and tick 3DS Development in the installer.",
@@ -333,10 +338,14 @@ def _build_and_deliver(o, out, game, product, work, probes, folder, v, parts):
     if source.get('kind') == 'source':
         out(pipeline.source_build_text(source))
     tc = toolchain.detect(os.path.join(work, "tools", "bin"), roots=[o["devkitpro"]] if o["devkitpro"] else None)
+    toolchain.check_build_tools(tc)
     for c in tc.checks:
         out("  [%s] %s: %s" % ("ok" if c.ok else "--", c.name, c.detail))
+        if c.technical:
+            out(c.technical)
     if not tc.can_build:
-        out("The build needs the missing items above. Run the wizard (or --dry-run) to see the setup steps.")
+        broken = toolchain.broken_tools_text(tc.checks, tc.root, window=False)
+        out(broken or "The build needs the missing items above. Run the wizard (or --dry-run) to see the setup steps.")
         return 1
     outputs = ["3dsx"] + (["cia"] if o["cia"] else [])
     targets = ["n3ds", "o3ds"] if o["target"] == "both" else [o["target"]]

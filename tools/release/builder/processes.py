@@ -1,4 +1,5 @@
 """Console-free Windows children; callers keep piping output to their log."""
+import contextlib
 import os
 import signal
 import subprocess
@@ -14,6 +15,36 @@ def hidden_options(*, group=False):
     if group:
         flags |= subprocess.CREATE_NEW_PROCESS_GROUP
     return {'creationflags': flags}
+
+
+# SEM_FAILCRITICALERRORS: a child inherits its parent's error mode. With it, a program that cannot start (a missing
+# DLL such as msys-jsoncpp-27.dll) exits at once with its status (0xC0000135) instead of showing a Windows "System
+# Error" box and waiting for a click, and the builder explains the status itself.
+_QUIET_MODE = 0x0001
+_quiet_lock = threading.Lock()
+_quiet_users = [0, 0]   # active blocks, the error mode to restore after the last one
+
+
+@contextlib.contextmanager
+def quiet_errors():
+    """Children started inside this block show no Windows system error box. Elsewhere it does nothing."""
+    if sys.platform != 'win32':
+        yield
+        return
+    import ctypes
+    kernel = ctypes.windll.kernel32
+    with _quiet_lock:
+        if not _quiet_users[0]:
+            _quiet_users[1] = kernel.SetErrorMode(_QUIET_MODE)
+            kernel.SetErrorMode(_quiet_users[1] | _QUIET_MODE)
+        _quiet_users[0] += 1
+    try:
+        yield
+    finally:
+        with _quiet_lock:
+            _quiet_users[0] -= 1
+            if not _quiet_users[0]:
+                kernel.SetErrorMode(_quiet_users[1])
 
 
 CREATE_SUSPENDED = 0x00000004

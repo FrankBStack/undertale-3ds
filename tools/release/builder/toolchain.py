@@ -95,6 +95,8 @@ class Check:
     ok: bool
     detail: str
     need: str            # "build", "cia", "speed" (optional but recommended), "wifi"
+    technical: str = ""  # a failed tool start: command, exit code and output, for the log
+    checked: bool = True  # False: the check couldn't run (a tool start timed out), so ok proves nothing
 
 
 @dataclasses.dataclass
@@ -298,6 +300,10 @@ def repository_command(platform, arch=None):
     return [sys.executable, '-X', 'utf8', '-I', '-B', '-c', code, os.path.dirname(os.path.abspath(__file__)), url]
 
 
+# pacman translates -Si's field labels (French prints Nom, not Name); sync_package_version reads the English ones.
+SYNC_COMPILER_QUERY = 'LC_ALL=C pacman -Si devkitarm-gcc'
+
+
 def sync_package_version(text):
     name, values = None, []
     for line in text.splitlines():
@@ -321,7 +327,7 @@ def require_safe_setup(step, game, tested, releases_url, run=run_capture, root=N
     # must agree too. Update and Unix setup refresh the database themselves.
     if offered == tested['package_version'] and step.platform == 'win32' and step.key == 'packages':
         bash = os.path.join(root or 'C:/devkitPro', 'msys2', 'usr', 'bin', 'bash.exe')
-        command = [bash, '--login', '-c', 'pacman -Si devkitarm-gcc']
+        command = [bash, '--login', '-c', SYNC_COMPILER_QUERY]
         local, reason = bounded_query(command, sync_package_version, run)
         if local is not None and local != offered:
             raise Refused('Your devkitPro package list is out of date. Click Update devkitPro to refresh it, '
@@ -343,6 +349,287 @@ def require_safe_setup(step, game, tested, releases_url, run=run_capture, root=N
                       (tested['version'], tested['package_version'], 'a newer' if newer else 'a different',
                        offered, releases_url))
     return True
+
+
+# Windows status codes for a program that could not start, in plain words. The code itself goes beside them.
+WINDOWS_EXIT_CAUSES = {
+    0xC0000135: 'a file it needs is missing',                     # STATUS_DLL_NOT_FOUND
+    0xC000007B: 'a file it needs is damaged or the wrong kind',   # STATUS_INVALID_IMAGE_FORMAT
+    0xC0000139: 'a file it needs is the wrong version',           # STATUS_ENTRYPOINT_NOT_FOUND
+    0xC0000142: 'a file it needs could not start',                # STATUS_DLL_INIT_FAILED
+}
+TOOL_NAMES = {'cmake': 'CMake', 'make': 'make'}
+# The fix for a tool that can't start, on the compiler page and in a build refusal.
+PARTLY_UPDATED = 'This usually means devkitPro was only partly updated.'
+
+
+def exit_code_text(code, platform=sys.platform):
+    """Windows status codes in hex (0xC0000135), anything else as the number."""
+    if platform == 'win32' and isinstance(code, int) and (code & 0xFFFFFFFF) >= 0x80000000:
+        return '0x%08X' % (code & 0xFFFFFFFF)
+    return str(code)
+
+
+def exit_cause(code, platform=sys.platform):
+    return WINDOWS_EXIT_CAUSES.get(code & 0xFFFFFFFF) if platform == 'win32' and isinstance(code, int) else None
+
+
+def tool_name(path):
+    base = os.path.basename(str(path))
+    name = TOOL_NAMES.get(re.sub(r'\.exe$', '', base, flags=re.I).lower())
+    return '%s (%s)' % (name, base) if name else base
+
+
+def run_tool(argv, timeout=60, cwd=None):
+    """Run a build tool directly: no console window, and on Windows no system error box if it can't start."""
+    import processes
+    with processes.quiet_errors():
+        p = subprocess.run(list(map(str, argv)), cwd=cwd, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+                           stderr=subprocess.STDOUT, text=True, encoding='utf-8', errors='replace',
+                           timeout=timeout, **hidden_options())
+    return p.returncode, p.stdout
+
+
+def tool_failure(argv, code, output, name=None, platform=sys.platform):
+    """(summary, log details) for a tool that exited nonzero (code) or could not be started (code None)."""
+    name = name or tool_name(argv[0])
+    cause = exit_cause(code, platform)
+    if cause:
+        summary = "%s can't start: %s (exit code %s)." % (name, cause, exit_code_text(code, platform))
+    elif code is None:
+        summary = "%s can't start." % name
+    else:
+        summary = '%s stopped with exit code %s.' % (name, exit_code_text(code, platform))
+    command = subprocess.list2cmdline(list(map(str, argv))) if platform == 'win32' else shlex.join(map(str, argv))
+    details = 'Command: %s\nExit code: %s%s\nOutput:\n%s' % (
+        command, 'none (did not start)' if code is None else exit_code_text(code, platform),
+        ' (%s)' % cause if cause else '', (output or '').strip() or '(none)')
+    return summary, details
+
+
+# The build runs these, from devkitPro's MSYS2 on Windows, and each must print its version line.
+BUILD_TOOLS = (('CMake', 'cmake', r'cmake version [0-9]'), ('make', 'make', r'GNU Make [0-9]'))
+
+
+def check_build_tools(tc, run=run_tool, isfile=os.path.isfile):
+    """Start CMake and make exactly as the build will and read their version line (Windows).
+
+    A tool that can't start, such as a newer cmake beside an older msys-jsoncpp DLL after a partial MSYS2 upgrade,
+    becomes a failed build check whose detail says what is wrong; technical holds the command, exit code and output.
+    The checks are added to tc.checks; the failed ones are returned."""
+    if tc.platform != 'win32' or not tc.bash:
+        return []
+    failed = []
+    for label, tool, pattern in BUILD_TOOLS:
+        path = os.path.join(os.path.dirname(tc.bash), tool + '.exe')
+        if not isfile(path):
+            continue   # A missing tool is a missing package; the package check reports it.
+        argv = [path, '--version']
+        try:
+            code, out = run(argv, timeout=30)
+        except subprocess.TimeoutExpired:
+            tc.checks.append(Check(label, True, "didn't answer within 30 seconds, so it wasn't checked", 'build',
+                                   checked=False))
+            continue
+        except OSError as error:
+            code, out = None, str(error)
+        if code == 0 and re.search(pattern, out or ''):
+            tc.checks.append(Check(label, True, (out or '').strip().splitlines()[0], 'build'))
+            continue
+        summary, details = tool_failure(argv, code, out, name="%s in devkitPro's MSYS2" % label,
+                                        platform=tc.platform)
+        if code == 0:
+            summary = "%s in devkitPro's MSYS2 started but didn't report its version." % label
+        check = Check(label, False, summary, 'build', technical=summary + '\n' + details)
+        tc.checks.append(check)
+        failed.append(check)
+    return failed
+
+
+def manual_update_text(root):
+    """What to type in devkitPro's own MSYS2 window when the builder's update can't finish."""
+    shell = os.path.normpath(os.path.join(root or 'C:/devkitPro', 'msys2', 'msys2.exe'))
+    return ('open %s, type this and press Enter:\npacman -Syu --noconfirm\n'
+            'If the window closes, open it and type the same line again.' % shell)
+
+
+def broken_tools_text(checks, root, window=True):
+    """What is broken and the one fix, or '' when every build tool starts."""
+    broken = [c for c in checks if not c.ok and c.technical]
+    if not broken:
+        return ''
+    if window:
+        fix = ("Click Update devkitPro. It brings all of devkitPro's packages up to date and then checks again.\n"
+               "If it can't finish, %s Then click Check again." % manual_update_text(root))
+    else:
+        fix = 'To fix it, %s Then run the same command again.' % manual_update_text(root)
+    return '\n'.join(c.detail for c in broken) + '\n' + PARTLY_UPDATED + ' ' + fix
+
+
+MSYS_QUERY_MARKS = ('--- builder pacman -Qu', '--- builder pacman -Qu status', '--- builder pacman -Sl status')
+
+
+def msys_query_reply(upgrades, upgrades_status, repositories, repositories_status=0):
+    """The reply msys_state reads, as its bash command prints it. Used by tests."""
+    first, qu_end, sl_end = MSYS_QUERY_MARKS
+    return '%s\n%s%s %d\n%s%s %d\n' % (first, upgrades, qu_end, upgrades_status, repositories, sl_end,
+                                       repositories_status)
+
+
+def msys_state(root, run=run_capture):
+    """(older, ignored): installed MSYS2 packages older than the local package list, as "name old -> new", or
+    None when pacman's answer can't be trusted.
+
+    Only the MSYS2 repositories (not devkitPro's dkp-*) carry DLLs whose names change between versions. pacman -S
+    upgrades a named package (cmake) but keeps an installed unversioned dependency (jsoncpp), so with these
+    packages behind the list it can leave a tool that can't start (msys-jsoncpp-27.dll not found). Each pacman
+    keeps its own exit status: -Qu exits 1 with no output when nothing is older, and anything else it prints that
+    isn't an upgrade line (an error) makes the answer unknown, never "up to date"."""
+    bash = os.path.join(root or 'C:/devkitPro', 'msys2', 'usr', 'bin', 'bash.exe')
+    first, qu_end, sl_end = MSYS_QUERY_MARKS
+    command = [bash, '--login', '-c', 'echo "%s"; LC_ALL=C pacman -Qu; echo "%s $?"; LC_ALL=C pacman -Sl; '
+               'echo "%s $?"' % (first, qu_end, sl_end)]
+    for _attempt in range(2):
+        try:
+            _rc, out = run(command, timeout=30)
+        except (OSError, subprocess.SubprocessError):
+            continue
+        state = parse_msys_state(out)
+        if state is not None:
+            return state
+    return None
+
+
+def parse_msys_state(out):
+    first, qu_end, sl_end = MSYS_QUERY_MARKS
+    lines = (out or '').splitlines()
+    try:
+        start = lines.index(first)
+        qu = next(i for i in range(start + 1, len(lines)) if lines[i].startswith(qu_end + ' '))
+        sl = next(i for i in range(qu + 1, len(lines)) if lines[i].startswith(sl_end + ' '))
+        qu_status, sl_status = int(lines[qu].split()[-1]), int(lines[sl].split()[-1])
+    except (ValueError, StopIteration):
+        return None
+    upgrades = [line.strip() for line in lines[start + 1:qu] if line.strip()]
+    if sl_status != 0 or qu_status not in (0, 1) or (qu_status == 1 and upgrades):
+        return None
+    msys = {parts[1] for parts in (line.split() for line in lines[qu + 1:sl])
+            if len(parts) >= 3 and not parts[0].startswith('dkp-')}
+    if not msys:
+        return None
+    older, ignored = [], []
+    for line in upgrades:
+        match = re.fullmatch(r'(\S+) (\S+) -> (\S+)( \[ignored\])?', line)
+        if not match:
+            return None
+        if match.group(1) in msys:
+            (ignored if match.group(4) else older).append('%s %s -> %s' % match.groups()[:3])
+    return older, ignored
+
+
+def package_names(packages):
+    return ', '.join(p.split()[0] for p in packages[:8]) + (', ...' if len(packages) > 8 else '')
+
+
+MSYS_UPDATE_PASSES = 3
+
+
+def refuse_ignored(state, step, root, upgraded=False):
+    """An older MSYS2 package that pacman.conf tells pacman to skip: an update would upgrade what depends on it
+    (cmake) and keep it (jsoncpp), the same break as a partial update, and Update devkitPro can't repair it.
+    upgraded: a pacman -Su already ran in this step, so packages may have changed before this stop."""
+    if state is None or not state[1]:
+        return
+    conf = os.path.normpath(os.path.join(root or 'C:/devkitPro', 'msys2', 'etc', 'pacman.conf'))
+    raise Refused("devkitPro's MSYS2 is set to skip updates for: %s (IgnorePkg or IgnoreGroup in %s). Updating the "
+                  'other packages could leave CMake unable to start, so the builder stopped before %s.%s\n'
+                  'Remove them from IgnorePkg and IgnoreGroup in that file, then try this step again.' %
+                  (package_names(state[1]), conf,
+                   'the next update; the update it already ran may have changed some packages' if upgraded else
+                   'updating',
+                   ' The 3DS tools were not installed.' if step.key == 'packages' else ''))
+
+
+def qualify_sync_compiler(game, tested, releases_url, run, root):
+    """After pacman -Sy, before -Su installs from that list: the compiler it offers must be the tested one."""
+    if game != 'undertale' or not tested:
+        return
+    bash = os.path.join(root or 'C:/devkitPro', 'msys2', 'usr', 'bin', 'bash.exe')
+    local, reason = bounded_query([bash, '--login', '-c', SYNC_COMPILER_QUERY], sync_package_version, run)
+    if local is None:
+        raise Refused("The builder couldn't read which compiler devkitPro's updated package list offers (%s), so it "
+                      'stopped before installing anything from that list. Check the error details, then try this '
+                      'step again.' % reason)
+    if local != tested['package_version']:
+        newer = (tuple(map(int, re.split(r'[.-]', local))) >
+                 tuple(map(int, re.split(r'[.-]', tested['package_version']))))
+        raise Refused('This UNDERTALE builder supports GCC %s (devkitarm-gcc %s).\n'
+                      'devkitPro now offers %s compiler: devkitarm-gcc %s. The builder stopped before installing it.\n'
+                      "Get a builder that supports it from the project's releases page:\n%s" %
+                      (tested['version'], tested['package_version'], 'a newer' if newer else 'a different', local,
+                       releases_url))
+
+
+def update_msys(step, actions, root, log, stage, always, qualify=lambda: None):
+    """Windows: bring devkitPro's MSYS2 up to date before pacman -S, and for Update devkitPro.
+
+    devkitPro's installer runs pacman -Syu once and carries on. On its 2025 MSYS2 bundle that pass stops after the
+    core packages (msys2-runtime, pacman), leaving cmake 4.0.2 and jsoncpp 1.9.6 behind a current package list; a
+    plain -S cmake then upgrades cmake alone and it can't start. Each pass is pacman -Sy, then qualify() on that
+    refreshed list, then pacman -Su from it without refreshing again, so what installs is what was checked. Each
+    is a new process, which is the restart MSYS2 needs after a core pass. -Su runs only from a refreshed list that
+    reads cleanly with nothing ignored, and the step is done only when pacman then confirms nothing MSYS2 is older
+    or ignored; at most three passes, then this refuses with the last lines pacman printed. Install runs no
+    pass when nothing is older; Update always runs one."""
+    bash = os.path.join(root or 'C:/devkitPro', 'msys2', 'usr', 'bin', 'bash.exe')
+    state = msys_state(root, actions.query)
+    refuse_ignored(state, step, root)
+    if not always:
+        if state is not None and not state[0]:
+            return
+        log("devkitPro's MSYS2 packages older than its package list:\n" + '\n'.join(state[0]) if state else
+            "Couldn't read whether devkitPro's MSYS2 packages are up to date, so it is updated first.")
+    code, last, upgraded = 0, [], False
+    for number in range(1, MSYS_UPDATE_PASSES + 1):
+        stage('run', 'Updating devkitPro...' if number == 1 else
+              'Updating devkitPro again (pass %d of %d)...' % (number, MSYS_UPDATE_PASSES))
+        last = []
+        out = lambda line, last=last: (last.append(line), log(line))  # noqa: E731
+        code = actions.run([bash, '--login', '-c', 'pacman -Sy --noconfirm'], out)
+        state = msys_state(root, actions.query)
+        if code == 0 and state is not None:   # an unread list could hide an ignored jsoncpp: no -Su from it
+            refuse_ignored(state, step, root, upgraded)
+            qualify()
+            upgraded = True
+            code = actions.run([bash, '--login', '-c', 'pacman -Su --noconfirm'], out)
+            state = msys_state(root, actions.query)
+            refuse_ignored(state, step, root, upgraded)
+            if code == 0 and state is not None and state[0] == []:
+                return
+        if number < MSYS_UPDATE_PASSES:
+            log('devkitPro is not fully updated yet (exit code %s; %s). Running the update again.' % (
+                exit_code_text(code, step.platform),
+                "pacman's package list couldn't be read" if state is None else
+                'still older: ' + package_names(state[0]) if state[0] else 'nothing older'))
+    tail = '\n'.join('\n'.join(str(line).rstrip('\n') for line in last).splitlines()[-12:]).strip()
+    tail = '\nLast lines from pacman:\n' + tail if tail else ''
+    if code != 0:   # pacman itself failed (a download, a lock): its own words say more than the package list
+        if step.key == 'update':
+            raise Refused('The devkitPro update did not finish. Check the error details, then try this step again.' +
+                          tail)
+        raise Refused("devkitPro's MSYS2 update did not finish, so the 3DS tools were not installed. "
+                      'Check the error details, then try this step again.' + tail)
+    if state is None:
+        what = ("The builder couldn't confirm that devkitPro's MSYS2 is fully updated: pacman's package list "
+                "couldn't be read after %d update passes." % MSYS_UPDATE_PASSES)
+        older = ''
+    else:
+        what = "devkitPro's MSYS2 is still only partly updated after %d update passes." % MSYS_UPDATE_PASSES
+        older = '\nStill older: ' + package_names(state[0])
+    if step.key == 'packages':
+        what += ' The 3DS tools were not installed: installing them now could leave CMake unable to start.'
+    raise Refused('%s\nClick Update devkitPro to try again. If it still stops, %s Then click Check again.%s%s' %
+                  (what, manual_update_text(root), older, tail))
 
 
 def complete_windows_exe(path):
@@ -537,14 +824,17 @@ def full_plan(tools_dir, downloads_dir, root=None, want_cia=True, packages=None,
         Step("devkitpro", "Install devkitPro %s with its official installer" % DEVKITPRO_INSTALLER["version"],
              "The 3DS compiler (devkitPro) isn't installed. The builder can download devkitPro's official installer "
              "(%s) from github.com/devkitPro. Windows will ask for administrator permission; on its Components page, "
-             "tick 3DS Development." % ("%d KB" % round(DEVKITPRO_INSTALLER["size"] / 1000)
+             "untick everything except 3DS Development. The others are for other consoles: the builder doesn't need "
+             "them, and they add about 510 MB." % ("%d KB" % round(DEVKITPRO_INSTALLER["size"] / 1000)
                                          if DEVKITPRO_INSTALLER["size"] else "size not measured"),
              [dict(DEVKITPRO_INSTALLER, dest=inst)], [[inst]], admin=True,
              note="the installer itself downloads MSYS2 and packages from downloads.devkitpro.org; it has no silent "
                   "mode, so the user clicks through it"),
         Step("packages", "Install devkitPro's 3DS tools",
              "Downloads and installs the 3DS compiler, sound libraries and build tools from downloads.devkitpro.org "
-             "(about 460 MB installed). No administrator permission is needed.",
+             "(about 460 MB installed). If devkitPro's own MSYS2 tools are out of date, as they are right after "
+             "devkitPro's installer, it updates them first (about 180 MB), because a partial update can stop CMake "
+             "from starting. No administrator permission is needed.",
              [], [[bash, "--login", "-c", "pacman -S --needed --noconfirm " + " ".join(packages)]]),
     ]
     if want_cia:
@@ -622,8 +912,9 @@ def update_step(root, platform=sys.platform):
                     admin=True, platform=platform)
     bash = os.path.normpath(os.path.join(root or "C:/devkitPro", "msys2", "usr", "bin", "bash.exe"))
     return Step("update", "Update devkitPro",
-                "Updates every devkitPro package from downloads.devkitpro.org. If MSYS2 itself updates, close the "
-                "builder, then run the update again.", [], [[bash, "--login", "-c", "pacman -Syu --noconfirm"]],
+                "Updates every devkitPro package from downloads.devkitpro.org. If MSYS2 updates its own core first, "
+                "the update runs again by itself (up to 3 times). Then it checks that CMake and make start.", [],
+                [[bash, "--login", "-c", "pacman -Syu --noconfirm"]],
                 platform=platform)
 
 
@@ -973,6 +1264,7 @@ class Actions:
     elevated: object = run_elevated
     run: object = None           # callable(argv, log) -> exit code
     query: object = run_capture  # read-only queries; five-second timeout, tests inject this too
+    tool: object = run_tool      # starts cmake/make --version after an update; tests inject this too
 
 
 def run_step(step: Step, log, dry_run, actions: Actions | None = None, stage=None, work=None, root=None,
@@ -991,15 +1283,22 @@ def run_step(step: Step, log, dry_run, actions: Actions | None = None, stage=Non
     if work is not None:
         import cleanup
         paths = installed_paths(step, work, root)
-        cleanup.record_before(work, paths)
-        cleanup.record_before(work, [d['dest'] for d in step.downloads], 'downloads')
+        cleanup.record_before(work, paths, changes=True)
+        cleanup.record_before(work, [d['dest'] for d in step.downloads], 'downloads', changes=True)
     for d in step.downloads:
         stage("download", "Downloading %s..." % os.path.basename(d["dest"]))
         actions.download(d["url"], d["dest"], d["sha256"], size=d.get("size"))
         if work is not None:
             cleanup.record_after(work, [d['dest']])
         log("downloaded %s (SHA-256 checked)" % d["url"])
-    for argv in step.commands:
+    commands = step.commands
+    if step.platform == "win32" and step.key in ("packages", "update"):
+        # pacman -S on a partly updated MSYS2 is a partial upgrade (see update_msys). Update's own command is the
+        # same -Syu, so its passes replace it.
+        update_msys(step, actions, root, log, stage, always=step.key == "update",
+                    qualify=lambda: qualify_sync_compiler(game, tested, releases_url, actions.query, root))
+        commands = [] if step.key == "update" else commands
+    for argv in commands:
         stage("run", "Waiting for the installer..." if step.admin else "Installing...")
         if argv[0] == "apt-config":
             with open(argv[1], "w", encoding="utf-8", newline="\n") as f:
@@ -1032,6 +1331,28 @@ def run_step(step: Step, log, dry_run, actions: Actions | None = None, stage=Non
             raise Refused("%s exited with code %s." % (os.path.basename(argv[0]), code))
     if work is not None:
         cleanup.record_after(work, paths)
+    if step.key == 'update' and step.platform == 'win32':
+        stage('run', 'Checking CMake and make...')
+        updated_root = root or 'C:/devkitPro'
+        tools = Toolchain(updated_root, os.path.join(updated_root, 'msys2', 'usr', 'bin', 'bash.exe'), [], [], [],
+                          None, None, None, step.platform)
+        broken = check_build_tools(tools, run=actions.tool)
+        for check in broken:
+            log(check.technical)
+        if broken:
+            raise Refused("The devkitPro update finished, but a build tool still can't start.\n" +
+                          broken_tools_text(tools.checks, updated_root))
+        unchecked = [c.name for c in tools.checks if not c.checked]
+        if unchecked:
+            notice = ("Update finished. %s didn't answer within 30 seconds, so the builder couldn't confirm that it "
+                      'starts. Click Check again to test it.' % ' and '.join(unchecked))
+        elif len(tools.checks) == len(BUILD_TOOLS) and all(c.ok for c in tools.checks):
+            notice = 'Update finished. CMake and make start correctly.'
+        else:
+            notice = None
+        if notice:
+            log(notice)
+            stage('notice', notice)
     if protected:
         stage('run', 'Checking the installed compiler...')
         installed_root = root or ('C:/devkitPro' if step.platform == 'win32' else '/opt/devkitpro')
@@ -1074,7 +1395,7 @@ def run_step(step: Step, log, dry_run, actions: Actions | None = None, stage=Non
 
 def installed_paths(step, work, root=None):
     """Only explicit installer destinations. OS package managers stay outside cleanup."""
-    if step.key in ('devkitpro', 'packages'):
+    if step.key in ('devkitpro', 'packages', 'update'):
         return [root or ('C:/devkitPro' if step.platform == 'win32' else '/opt/devkitpro')]
     paths = []
     for argv in step.commands:

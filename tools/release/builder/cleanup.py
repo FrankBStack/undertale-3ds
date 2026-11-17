@@ -117,8 +117,21 @@ def write_journal(work, value):
             os.unlink(temporary)
 
 
-def record_before(work, paths, category='tools'):
-    """Persist BEFORE any installer action. Existing roots are permanently excluded."""
+def changed_since_record(path, recorded):
+    """A recorded file whose bytes changed. A new size or modification time answers early; equal ones prove
+    nothing (a copy or restore can keep the time), so the SHA-256 decides."""
+    info = path.stat()
+    if info.st_size != recorded['bytes'] or info.st_mtime_ns != recorded.get('mtime_ns', info.st_mtime_ns):
+        return True
+    return digest(path) != recorded['sha256']
+
+
+def record_before(work, paths, category='tools', changes=False):
+    """Persist BEFORE any installer action. Existing roots are permanently excluded.
+
+    changes (an installer step is about to run): recorded files changed since the last record were changed by the
+    player or another installer, so they are kept too. record_after then adopts what this step itself changes,
+    such as files replaced by the builder's own Update devkitPro."""
     if category not in CATEGORIES:
         raise ValueError(category)
     journal = read_journal(work)
@@ -133,8 +146,11 @@ def record_before(work, paths, category='tools'):
         elif found.get('complete') and not found['preexisting'] and found['category'] != 'build':
             # Another visit to a root this builder made. What is there now without a record was added by the
             # player or another installer since, and stays theirs whatever this step goes on to write.
-            recorded = {f['path'] for f in found['files']}
-            added = {str(p) for p in files_under(path)} - recorded
+            recorded = {f['path']: f for f in found['files']}
+            present = list(files_under(path))
+            added = {str(p) for p in present} - set(recorded)
+            if changes:
+                added |= {str(p) for p in present if str(p) in recorded and changed_since_record(p, recorded[str(p)])}
             if added - set(found.get('kept', [])):
                 found['kept'] = sorted(added | set(found.get('kept', [])))
     write_journal(work, journal)
@@ -171,14 +187,22 @@ def record_after(work, paths):
             continue  # Never adopt later player additions to an already recorded build area.
         previous = {f['path']: f for f in entry['files']}
         kept = set(entry.get('kept', []))  # a set: a player's own packages can be tens of thousands of files
+        # A revisit of a finished tools root: record_before(changes=True) already kept what others changed since
+        # the last record, so a change found now was made by this step and stays the builder's.
+        adopt = entry.get('complete') and entry['category'] != 'build'
         for path in files_under(root):
             key = str(path)
-            if key in previous and previous[key]['sha256'] != digest(path):
+            if key in kept:
+                previous.pop(key, None)
+                continue
+            sha = digest(path)
+            if key in previous and previous[key]['sha256'] != sha and not adopt:
                 # Changed since our earlier install: a later user/other installer owns this file now.
                 previous.pop(key)
                 kept.add(key)
-            elif key not in kept:
-                previous[key] = {'path': key, 'bytes': path.stat().st_size, 'sha256': digest(path)}
+                continue
+            info = path.stat()
+            previous[key] = {'path': key, 'bytes': info.st_size, 'sha256': sha, 'mtime_ns': info.st_mtime_ns}
         if kept:
             entry['kept'] = sorted(kept)
         entry['files'] = list(previous.values())
