@@ -149,6 +149,7 @@ class PolishGuiTests(unittest.TestCase):
     def test_folder_export_asks_for_a_destination_and_cancel_does_nothing(self):
         app = self.wizard()
         page = app.pages[6]
+        page.check_files()  # The fixture runs workers synchronously before the picker assertions.
         selected = Path(self.tmp) / 'chosen-output'
         with mock.patch.object(gui.filedialog, 'askdirectory', return_value='') as pick, \
              mock.patch.object(app, 'work') as worker:

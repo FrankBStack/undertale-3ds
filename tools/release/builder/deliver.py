@@ -60,6 +60,11 @@ def _drive_type(root):
     return ctypes.windll.kernel32.GetDriveTypeW(root)
 
 
+def _logical_drives():
+    import ctypes
+    return ctypes.windll.kernel32.GetLogicalDrives()
+
+
 def _drive_label(root):
     import ctypes
     buf = ctypes.create_unicode_buffer(261)
@@ -108,8 +113,11 @@ def list_sd_cards(platform=sys.platform, drive_type=None, roots=None, mounts=Non
     out = []
     if platform == "win32":
         drive_type = drive_type or _drive_type
-        cands = roots if roots is not None else ["%s:\\" % c for c in string.ascii_uppercase
-                                                  if os.path.exists("%s:\\" % c)]
+        # The bitmask and type query do not open the media. Never stat network, optical or fixed drives:
+        # an existence check can wait seconds for a disconnected share or a sleeping disk.
+        mask = _logical_drives() if roots is None else 0
+        cands = roots if roots is not None else ["%s:\\" % c for i, c in enumerate(string.ascii_uppercase)
+                                               if mask & (1 << i)]
         for r in cands:
             try:
                 if drive_type(r) != 2:            # DRIVE_REMOVABLE

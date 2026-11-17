@@ -174,6 +174,8 @@ class DeliveryTextureGuiTests(unittest.TestCase):
         tree = Fixture(str(self.base/'payload'))
         app.state.folder = tree.game
         page.how.set('sd')
+        page.manual = tree.sd
+        page.card.set(tree.sd)
         with mock.patch.object(products, 'read_music_manifest', return_value={'releases': {}}), \
                 mock.patch.object(texcache, '_run', side_effect=fake_run):
             items = deliver.plan_sd_copy(tree.sd, app.state.product, [], tree.game)
@@ -260,6 +262,8 @@ class DeliveryTextureGuiTests(unittest.TestCase):
                     return (1, 0, 1, result) if method == 'sd' else saved
                 page.how.set(method)
                 if method == 'sd':
+                    page.manual = str(card)
+                    page.card.set(str(card))
                     with mock.patch.object(gui.deliver, 'copy_with_textures', side_effect=transfer):
                         page._copy_approved(str(card), [], None)
                 elif method == 'wifi':

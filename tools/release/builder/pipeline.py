@@ -1456,6 +1456,7 @@ class Build:
     def finish_ownership(self):
         snapshot = self.__dict__.pop('_cleanup_snapshot', None)
         if snapshot is not None:
+            self.progress.activity = 'Recording work files'
             try:
                 cleanup.finish_build(self.work, snapshot)
             except (OSError, ValueError) as exc:
@@ -1629,15 +1630,18 @@ class Build:
         except BuildFailed as e:
             raise BuildFailed(str(e), self.log_path)
         linked = []
+        self.progress.activity = 'Checking built files'
         if getattr(self, 'libraries', {}).get('sdk'):
             try:
                 linked = library_pins.confirm_linked(Path(self.work)/'src/build'/
                     ('3ds-%s-%s' % (self.product.key, self.target)), self.tc.platform)
             except (OSError, ValueError) as error:
                 raise BuildFailed('The built game did not pass the library check. '+str(error), self.log_path) from error
+        self.progress.activity = 'Saving built files'
         arts = self.collect()
         # Only the Old model runtime reads the pack. Building both models invokes this once.
         if self.product.key == 'undertale' and self.target == 'o3ds':
+            self.progress.activity = 'Preparing sound pack'
             try:
                 pack = self.sfx_builder(self, data_dir)
             except BuildNotStopped:
@@ -1661,6 +1665,7 @@ class Build:
                 pack = None
             if pack is not None:
                 arts.append(pack)
+        self.progress.activity = 'Recording build results'
         with open(self.log_path, 'a', encoding='utf-8') as log:
             log.write('linked archive SHA-256: ' + json.dumps(linked, sort_keys=True) + '\n')
         record = {"game": self.product.key, "target": self.target, "version": version, "build_id": bid,

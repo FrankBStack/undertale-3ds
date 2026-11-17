@@ -19,6 +19,7 @@ import struct
 import subprocess
 import sys
 import threading
+import time
 import types
 import tkinter as tk
 import tkinter.font as tkfont
@@ -2718,8 +2719,9 @@ class BuildPage(Page):
                 b = pipeline.Build(self.st.product, self.st.tc, self.app.opts.work, target, self.st.folder,
                                    store=self.st.verdict.result.store,
                                    outputs=self.st.outputs, openh264=self.st.openh264, parts=self.st.parts,
-                                   on_line=lambda s: self.app.call(self.line, s),
-                                   on_progress=lambda p: self.app.call(self.progress, p))
+                                   on_line=lambda s: self.app.call(self.line, s))
+                # App.poll samples this build's current progress once per tick. Queuing a redraw for every
+                # compiler line lets a busy window accumulate thousands of redundant Tk callbacks.
                 self.build = b
                 self.log_path = b.log_path
                 # Checked after self.build is set: a Cancel either sees this build or is seen here.
@@ -2904,6 +2906,13 @@ class DeliverPage(Page):
     # completion still current may grant a receipt: one that finishes after a Refresh, a folder choice or a new
     # visit reports where it went but doesn't enable Next (R175b F4).
     sd_visit = wifi_visit = files_visit = 0
+    scanning = False
+    scan_visit = 0
+    checking_files = False
+    file_visit = 0
+    manifest_context = None
+    file_manifest = None
+    next_checked = None
 
     def __init__(self, app):
         super().__init__(app)
@@ -2961,6 +2970,12 @@ class DeliverPage(Page):
         self.manual = None
         self.saved_key = None
         self.saved_textures = None
+        self.scanning = False
+        self.scan_visit = 0
+        self.file_status = label(self.frame, '')
+        self.checking_files = False
+        self.file_visit = 0
+        self.manifest_context = self.file_manifest = self.next_checked = None
 
     def on_show(self):
         # A copy or send counts only on the visit it was made in: the card or console may be another one now (R175 F4).
@@ -2971,6 +2986,12 @@ class DeliverPage(Page):
     def forget(self, how=None):
         """Drop the finished copy or send (of one mode, or any), and any still running: it must be done again
         before Next."""
+        self.file_visit += 1
+        self.checking_files = False
+        self.next_checked = None
+        status = getattr(self, 'file_status', None)
+        if status is not None:
+            status.config(text='')
         for mode in (how,) if how else ('sd', 'wifi', 'files'):
             setattr(self, mode + '_visit', getattr(self, mode + '_visit') + 1)
         if how in (None, 'files'):
@@ -3037,16 +3058,22 @@ class DeliverPage(Page):
             self._show_status()
 
     def mode(self):
-        for f in self.panels.values():
-            f.pack_forget()
+        self.check_files()
+
+    def show_mode(self):
         how = self.how.get()
-        if how != self.st.deliver_how or self.st.delivered_key != self.delivery_key():
+        for name, panel in self.panels.items():
+            if name != how and panel.winfo_manager():
+                panel.pack_forget()
+        key = self.files_key()
+        if how != self.st.deliver_how or (key is not None and self.st.delivered_key != self.delivery_key()):
             self.st.delivered = False  # Another mode, build, game, chapter set or destination: copy again.
             self.st.new_delivery()
         self.st.deliver_how = how
-        self.panels[how].pack(anchor="w", fill="x")
+        if not self.panels[how].winfo_manager():
+            self.panels[how].pack(anchor="w", fill="x")
         if how == "files":
-            ready = self.saved_key == self.files_key() and bool(self.st.files_root)
+            ready = key is not None and self.saved_key == key and bool(self.st.files_root)
             self.steps.config(text=("Output: %s\nRead READ-ME-FIRST.txt before copying. Use Copy to SD card for a safe merge." % self.st.files_root
                                     if ready else "Save the build, game files and prepared textures in one folder."))
             self.open_files.state(["!disabled"] if ready else ["disabled"])
@@ -3057,12 +3084,47 @@ class DeliverPage(Page):
         self._show_status()
         self.app.update_nav()
 
-    def files_key(self):
-        """The build, the game files and the choices a copy or saved folder was made from. inputs counts builds,
-        so a rebuild with the same outputs still counts; the manifest catches game files changed in place."""
+    def file_context(self):
+        """Only in-memory build choices; disk checks belong to check_files' worker."""
         return (self.st.game, self.st.folder, tuple(self.st.parts or ()),
-                tuple((a.path, a.sha256) for a in self.st.artifacts), self.st.inputs,
-                source_manifest(self.st.folder, self.st.product, self.st.parts))
+                tuple((a.path, a.sha256) for a in self.st.artifacts), self.st.inputs)
+
+    def files_key(self):
+        context = self.file_context()
+        return context + (self.file_manifest,) if context == self.manifest_context else None
+
+    def check_files(self, done=None):
+        """A sleeping game disk must not block Tk. A new visit, mode or input supersedes this result."""
+        self.file_visit += 1
+        visit, context, how = self.file_visit, self.file_context(), self.how.get()
+        index = getattr(self.app, 'index', None)
+        destination = self.destination()
+        folder, product, parts = self.st.folder, self.st.product, tuple(self.st.parts) if self.st.parts else None
+        self.checking_files = True
+        status = getattr(self, 'file_status', None)
+        if status is not None:
+            status.config(text='Checking game files...')
+        self.show_mode()
+
+        def after(manifest):
+            if visit != self.file_visit:
+                return
+            self.checking_files = False
+            if (context != self.file_context() or how != self.how.get() or
+                    index != getattr(self.app, 'index', None)):
+                return
+            if isinstance(manifest, Exception):
+                self.manifest_context = self.file_manifest = None
+                if status is not None:
+                    status.config(text='Could not check game files. Choose the delivery method again to retry.')
+            else:
+                self.manifest_context, self.file_manifest = context, manifest
+                if status is not None:
+                    status.config(text='')
+            self.show_mode()
+            if done is not None and not isinstance(manifest, Exception) and destination == self.destination():
+                done()
+        self.app.work(lambda: source_manifest(folder, product, parts), after, errors=True)
 
     def destination(self):
         how = self.how.get()
@@ -3082,6 +3144,9 @@ class DeliverPage(Page):
 
     def save_files(self):
         if self.copying:
+            return
+        if self.files_key() is None:
+            self.check_files(self.save_files)
             return
         output_parent = None
         if self.app.opts.autopilot is None:
@@ -3125,10 +3190,26 @@ class DeliverPage(Page):
 
     def refresh(self):
         self.forget('sd')  # A card may have been swapped at the same drive or mount point (R175 F4).
-        try:
-            self.cards = deliver.list_sd_cards()
-        except OSError:
-            self.cards = []
+        self.scan_visit += 1
+        visit = self.scan_visit
+        self.scanning = True
+        self.cards, self.card_roots = [], {}
+        self.card.config(values=[])
+        self.card.set('')
+        self.go.state(['disabled'])
+        self.set_status('sd', 'Looking for a 3DS SD card...')
+        self.app.update_nav()
+
+        def after(cards):
+            if visit != self.scan_visit:
+                return  # A newer Refresh or folder choice owns the list now.
+            self.scanning = False
+            self.cards = [] if isinstance(cards, Exception) else cards
+            self.show_cards()
+            self.app.update_nav()
+        self.app.work(deliver.list_sd_cards, after, errors=True)
+
+    def show_cards(self):
         vals = ["%s  %s (%d MB free)" % (c.root, c.label, c.free // 10**6) for c in self.cards]
         # The root is looked up, never parsed back out of the text: a card's name may hold two spaces (SCOURS1-003).
         self.card_roots = dict(zip(vals, (c.root for c in self.cards)))
@@ -3141,7 +3222,11 @@ class DeliverPage(Page):
         else:
             self.card.set("")
             self.set_status("sd", "No 3DS SD card found.\nInsert your SD card and click Refresh, or Choose folder...")
-        self.go.state(["!disabled"] if vals and not self.copying else ["disabled"])
+        self.copy_button()
+
+    def copy_button(self):
+        self.go.state(['!disabled'] if not self.copying and not self.scanning and self.target_root()
+                      else ['disabled'])
 
     def choose(self):
         d = filedialog.askdirectory(title="Select 3DS SD card")
@@ -3161,7 +3246,10 @@ class DeliverPage(Page):
         return self.card_roots.get(v) or v.split("  ")[0]
 
     def copy(self):
-        if self.copying:
+        if self.copying or self.scanning:
+            return
+        if self.files_key() is None:
+            self.check_files(self.copy)
             return
         root = self.target_root()
         if not root:
@@ -3176,7 +3264,7 @@ class DeliverPage(Page):
         def prepared(result):
             if isinstance(result, Exception):
                 self.copying = False
-                self.go.state(['!disabled'])
+                self.copy_button()
                 self.set_status('sd', str(result))
                 self.app.update_nav()
                 return
@@ -3187,7 +3275,7 @@ class DeliverPage(Page):
                 return
             def dismiss():
                 self.copying = False
-                self.go.state(['!disabled'])
+                self.copy_button()
                 self.set_status('sd', 'Copy cancelled. Nothing was copied.')
                 self.app.update_nav()
             changed = [item for item in items if not getattr(item, 'skip', False)]
@@ -3206,6 +3294,9 @@ class DeliverPage(Page):
                       self.st.folder, self.app.opts.work, self.st.parts, log=self.log_delivery), prepared, errors=True)
 
     def _copy_approved(self, root, items, tool, visit=None):
+        if self.files_key() is None:
+            self.check_files(lambda: self._copy_approved(root, items, tool, visit))
+            return
         self.st.new_delivery()
         self.set_status("sd", "Copying...")
         self.show_progress("sd", 0)
@@ -3216,7 +3307,7 @@ class DeliverPage(Page):
 
         def after(res):
             self.copying = False
-            self.go.state(["!disabled"])
+            self.copy_button()
             if isinstance(res, Exception):
                 self.set_status("sd", str(res))
             else:
@@ -3235,13 +3326,16 @@ class DeliverPage(Page):
                     self.st.deliver_how = "sd"
                     self.st.delivered = True
                     self.st.delivered_key = ('sd', os.path.normcase(os.path.normpath(root)), key)
-            self.app.update_nav()
+            self.check_files()
         self.app.work(lambda: deliver.copy_with_textures(root, items, self.st.product, self.st.folder,
                                                          self.app.opts.work, self.st.parts, prog, tool=tool,
                                                          log=self.log_delivery), after, errors=True)
 
     def send(self):
         if self.copying:
+            return
+        if self.files_key() is None:
+            self.check_files(self.send)
             return
         try:
             host, port = ftp_delivery.endpoint(self.addr.get())
@@ -3278,7 +3372,7 @@ class DeliverPage(Page):
                 self.st.delivered = True
                 self.st.delivered_key = ('wifi', addr, key)
                 preferences.save(self.app.opts.work, self.app.boring.get(), console=addr)
-            self.app.update_nav()
+            self.check_files()
         self.app.work(job, after, errors=True)
 
     def wifi_busy(self, busy):
@@ -3339,14 +3433,28 @@ class DeliverPage(Page):
         self.app.root.after_idle(lambda: self.app.work(job, after, errors=True))
 
     def can_next(self):
-        return self.st.delivered and self.st.delivered_key == self.delivery_key() and not self.copying
+        return (not self.checking_files and self.files_key() is not None and self.st.delivered
+                and self.st.delivered_key == self.delivery_key() and not self.copying)
+
+    def on_next(self):
+        key = self.delivery_key()
+        if self.next_checked == (self.file_visit, key):
+            self.next_checked = None
+            return True
+
+        def checked():
+            if self.can_next() and self.delivery_key() == key:
+                self.next_checked = (self.file_visit, key)
+                self.app.next()
+        self.check_files(checked)
+        return False
 
     def busy(self):
         return self.copying
 
     def auto(self):
         ap = self.app.opts.autopilot or {}
-        if self.copying:
+        if self.copying or self.scanning or self.checking_files:
             return "wait"
         if self.can_next():
             return "next"
@@ -3361,6 +3469,7 @@ class DeliverPage(Page):
         if ap.get("sd"):
             if self.target_root() != os.path.normpath(ap["sd"]):
                 self.set_manual(ap["sd"])
+                return "wait"
             if not getattr(self, "_auto_started", False):
                 self._auto_started = True
                 self.copy()
@@ -4243,18 +4352,25 @@ class App:
         self.keys.hand(None if before is self.next_btn else before)
 
     def update_nav(self):
+        def enable(widget, enabled):
+            # Setting an unchanged UtButton state regenerates its bitmap and forces another Tk layout.
+            if widget.instate(['disabled']) == enabled:
+                widget.state(['!disabled'] if enabled else ['disabled'])
+
         if self.overlay is not None:
             for control in (self.back_btn, self.next_btn, self.about_btn):
-                control.state(["disabled"])
+                enable(control, False)
             return
-        self.about_btn.state(["!disabled"])
+        enable(self.about_btn, True)
         last = self.index == len(self.pages) - 1
-        self.next_btn.config(text=self.page.finish_label() if last else "Next >")
+        text = self.page.finish_label() if last else 'Next >'
+        if self.next_btn.cget('text') != text:
+            self.next_btn.config(text=text)
         ok = self.page.can_next() and not self.page.busy()
         if last:
             ok = self.page.can_finish()
-        self.next_btn.state(["!disabled"] if ok else ["disabled"])
-        self.back_btn.state(["!disabled"] if self.index > 0 and not self.page.busy() else ["disabled"])
+        enable(self.next_btn, ok)
+        enable(self.back_btn, self.index > 0 and not self.page.busy())
 
     def next(self):
         if isinstance(getattr(self, "overlay", None), Prompt):   # Next waits while a prompt is open.
@@ -4324,6 +4440,8 @@ class App:
         if b.running:
             self.ask("Quit", "Stop the build and quit?", lambda: self.quit_build(b))
             return
+        # An outstanding SD scan is a daemon reader: closing abandons its queued result. The worker calls
+        # only App.call (queue.put), and no poll runs after destroy, so it never touches a destroyed widget.
         self.root.destroy()
 
     def quit_build(self, page):
@@ -4366,20 +4484,25 @@ class App:
         threading.Thread(target=run, daemon=True).start()
 
     def poll(self):
+        # A compiler/transfer can outrun Tk while this PC is busy. Always hand control back to the event
+        # loop, including while a producer is still filling the queue, so Windows can pump its messages.
+        deadline = time.monotonic() + 0.020
         try:
-            while True:
+            for _ in range(100):
                 fn, args = self.q.get_nowait()
                 if len(args) == 1 and isinstance(args[0], dict) and getattr(fn, "__name__", "") in ("config",
                                                                                                      "configure"):
                     fn(**args[0])
                 else:
                     fn(*args)
+                if time.monotonic() >= deadline:
+                    break
         except queue.Empty:
             pass
         if isinstance(self.page, BuildPage) and self.page.running and self.page.build is not None:
             self.page.progress(self.page.build.progress)
         (self.overlay or self.page).fit()
-        self.root.after(100, self.poll)
+        self.root.after(1 if not self.q.empty() else 50, self.poll)
 
     # Autopilot: drives the real pages with a plan and prints what each page shows.
     def summary(self):
@@ -4405,6 +4528,9 @@ class App:
             before = self.index
             self.next()
             if self.index == before:
+                if isinstance(self.page, DeliverPage) and self.page.checking_files:
+                    self.root.after(500, self.auto_tick)
+                    return  # The checked Next callback will advance when its worker returns.
                 status = getattr(self.page, "status", None)
                 why = status.cget("text") if status is not None else "could not advance"
                 print("\nAUTOPILOT: FAILED on %s: %s" % (self.page.title, why), flush=True)

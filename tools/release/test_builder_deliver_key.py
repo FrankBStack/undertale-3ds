@@ -49,14 +49,22 @@ class DeliveryKeyTests(unittest.TestCase):
         page.wifi_busy = lambda busy: setattr(page, 'copying', busy)
         page.cancelled = __import__('threading').Event()
         self.page, self.state = page, state
+        self.checked_files()
+
+    def checked_files(self):
+        # Receipt-callback fixtures start after the worker's file check; actual threading has its own watchdog.
+        self.page.manifest_context = self.page.file_context()
+        self.page.file_manifest = gui.source_manifest(self.state.folder, self.state.product, self.state.parts)
 
     def copy_sd(self, result=(1, 0, 10, SimpleNamespace(message='')), error=None):
+        self.checked_files()
         with mock.patch.object(deliver, 'copy_with_textures', return_value=result, side_effect=error), \
                 mock.patch.object(deliver, 'dsp_missing', return_value=False):
             self.page.copying = True
             self.page._copy_approved('E:/', [], None)
 
     def send(self, error=None):
+        self.checked_files()
         with mock.patch.object(gui.ftp_delivery, 'send_product', return_value=SimpleNamespace(root='/x'),
                                side_effect=error), mock.patch.object(gui.preferences, 'save'):
             self.page.send()
@@ -123,6 +131,7 @@ class ReceiptIdentityTests(DeliveryKeyTests):
         music = mock.patch.object(gui.products, 'read_music_manifest', return_value=manifest)
         music.start()
         self.addCleanup(music.stop)
+        self.checked_files()
 
     def test_game_files_changed_at_the_same_path_must_be_copied_again(self):
         for name, data in (('data.win', b'changed bytes'), ('song_fixture.ogg', b'changed music'),
@@ -141,6 +150,7 @@ class ReceiptIdentityTests(DeliveryKeyTests):
         self.copy_sd()
         self.assertTrue(self.page.can_next())
         (self.game / 'song_fixture.ogg').unlink()
+        self.page.check_files()
         self.assertFalse(self.page.can_next())
 
     def test_ignored_files_changed_at_the_same_path_do_not_require_another_copy(self):
@@ -285,6 +295,7 @@ class ReceiptIdentityTests(DeliveryKeyTests):
             self.assertTrue(self.page.can_next())
 
     def save(self, work=None, error=None):
+        self.checked_files()
         result = SimpleNamespace(folder='/fixture-out', root='/fixture-out', files=1, bytes=1,
                                  textures=SimpleNamespace(message=''))
         self.page.how.set('files')
